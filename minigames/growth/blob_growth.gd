@@ -1,40 +1,44 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# Eat orbs to grow. Biggest blob at the end wins.
+# Eat orbs to grow. Biggest blob at the end wins.  (3D)
 
 const ORB_COUNT := 18
-const ORB_R := 11.0
+const ORB_R := 0.45
 
-var _orbs: Array = []
+var _orbs: Array = []     # { pos: Vector3, node: MeshInstance3D }
+var _rad := {}
 
 func _setup_round() -> void:
 	win_condition = WinType.HIGH_SCORE
-	draw_background()
-	add_child(WallArena.build(arena_rect))
-	spawn_avatars(corner_spawns(arena_rect))
+	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	spawn_avatars(corner_spawns(2.0))
+	for p in players:
+		_rad[p.id] = 0.7
+		avatars[p.id].speed = 6.5
 	for _i in ORB_COUNT:
-		_orbs.append(_rand_point())
-	make_label("Eat orbs to grow the biggest!", Vector2(425, 116), 24)
+		var node := spawn_ball(ORB_R, Palette.SAFE, true)
+		var o := {"pos": _rand_point(), "node": node}
+		node.position = o["pos"]
+		_orbs.append(o)
+	make_label("Eat orbs to grow the biggest!", Vector2(425, 96), 24)
 
-func _rand_point() -> Vector2:
-	return Vector2(
-		randf_range(arena_rect.position.x + 40, arena_rect.position.x + arena_rect.size.x - 40),
-		randf_range(arena_rect.position.y + 40, arena_rect.position.y + arena_rect.size.y - 40))
+func _rand_point() -> Vector3:
+	return Vector3(
+		randf_range(-ARENA_HX + 1.5, ARENA_HX - 1.5),
+		ORB_R,
+		randf_range(-ARENA_HZ + 1.5, ARENA_HZ - 1.5))
 
 func _game_process(_delta: float) -> void:
 	for p in players:
 		var av = avatars[p.id]
-		for i in _orbs.size():
-			if av.position.distance_to(_orbs[i]) < av.radius + ORB_R:
+		for o in _orbs:
+			var d := av.global_position.distance_to(o["pos"])
+			if d < _rad[p.id] + ORB_R:
 				p.round_value += 1.0
-				av.radius = minf(64.0, 26.0 + p.round_value * 0.9)
-				av.figure.set_radius(av.radius)
-				_orbs[i] = _rand_point()
-	queue_redraw()
-
-func _draw() -> void:
-	for o in _orbs:
-		draw_circle(o, ORB_R, Palette.SAFE)
+				_rad[p.id] = minf(2.2, 0.7 + p.round_value * 0.05)
+				av.set_body_scale(_rad[p.id] / 0.7)
+				o["pos"] = _rand_point()
+				o["node"].position = o["pos"]
 
 func _compute_results() -> Dictionary:
 	var vals := {}

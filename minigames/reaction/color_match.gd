@@ -1,20 +1,23 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# A box flashes a player color. Tap only when it's YOUR color. Right = +1,
-# wrong = -1. Highest score wins.
+# A box flashes a player color. Tap only when it's YOUR color. Right +1, wrong -1.
+# Highest score wins. (UI on the 2D overlay)
 
 var _cur: int = 0
 var _t := 1.2
+var _box: ColorRect
 
 func _setup_round() -> void:
 	win_condition = WinType.HIGH_SCORE
-	draw_background()
-	make_label("Tap ONLY when the box is YOUR color!", Vector2(390, 116), 22)
+	make_label("Tap ONLY when the box is YOUR color!", Vector2(390, 96), 22)
+	_box = make_bar(Vector2(440, 250), Vector2(400, 200), Color.WHITE)
 	_pick()
 
 func _pick() -> void:
 	_cur = players[randi() % players.size()].id
 	_t = randf_range(0.8, 1.5)
+	if _box:
+		_box.color = Palette.player_color(_cur)
 
 func _game_process(delta: float) -> void:
 	_t -= delta
@@ -26,10 +29,6 @@ func _game_process(delta: float) -> void:
 				p.round_value += 1.0
 			else:
 				p.round_value = maxf(0.0, p.round_value - 1.0)
-	queue_redraw()
-
-func _draw() -> void:
-	draw_rect(Rect2(440, 250, 400, 200), Palette.player_color(_cur))
 
 func _compute_results() -> Dictionary:
 	var vals := {}

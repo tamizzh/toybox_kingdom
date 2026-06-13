@@ -1,7 +1,7 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
 # Watch the arrow sequence, then repeat it with your stick. First to finish the
-# current sequence scores; the sequence grows. Highest score wins.
+# current sequence scores; the sequence grows. (UI on the 2D overlay)
 
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 
@@ -15,8 +15,7 @@ var _msg: Label
 
 func _setup_round() -> void:
 	win_condition = WinType.HIGH_SCORE
-	draw_background()
-	make_label("Watch the arrows, then repeat with your stick!", Vector2(355, 116), 22)
+	make_label("Watch the arrows, then repeat with your stick!", Vector2(355, 96), 22)
 	_msg = make_label("", Vector2(600, 280), 120, Palette.ACCENT)
 	_grow_and_show()
 

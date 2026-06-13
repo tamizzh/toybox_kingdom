@@ -1,29 +1,27 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# Auto-run forward; tap (or push up/down) to switch lane and dodge red blocks.
-# Crossing the right edge scores a lap. Hit a block = out. Most laps wins.
+# Auto-run forward (+X); tap (or push up/down) to switch lane and dodge red blocks.
+# Crossing the right edge scores a lap. Hit a block = out. Most laps wins.  (3D)
 
-const SUBLANE := [-52.0, 0.0, 52.0]
-const RUN := 250.0
-const OBS := 330.0
+const SUBLANE := [-1.0, 0.0, 1.0]      # Z offsets within a player's strip
+const RUN := 5.0
+const OBS := 6.5
 
 var _rows := {}
 
 func _setup_round() -> void:
 	win_condition = WinType.HIGH_SCORE
-	draw_background()
+	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
 	var n := players.size()
-	var spts := []
+	var start_x := -ARENA_HX + 1.5
 	for i in n:
 		var p: PlayerData = players[i]
-		var y: float = arena_rect.position.y + arena_rect.size.y * (i + 0.5) / n
-		make_rect(Rect2(arena_rect.position.x, y - 72, arena_rect.size.x, 144), Palette.ARENA_FLOOR, -30)
-		_rows[p.id] = {"y": y, "x": arena_rect.position.x + 60.0, "lane": 1, "t": 0.0, "obs": []}
-		spts.append(Vector2(arena_rect.position.x + 60.0, y))
-	spawn_avatars(spts)
-	for av in avatars.values():
-		av.auto_input = false
-	make_label("Tap to switch lane — dodge red!", Vector2(420, 116), 24)
+		var z := -ARENA_HZ + 2.0 * ARENA_HZ * (i + 0.5) / n
+		_rows[p.id] = {"z": z, "x": start_x, "lane": 1, "t": 0.0, "obs": []}
+		avatars[p.id].global_position = Vector3(start_x, 0, z)
+		avatars[p.id].auto_input = false
+		avatars[p.id].face(Vector2(1, 0))
+	make_label("Tap to switch lane — dodge red!", Vector2(420, 96), 24)
 
 func _game_process(delta: float) -> void:
 	for p in players:
@@ -38,22 +36,22 @@ func _game_process(delta: float) -> void:
 		elif mv.y > 0.6:
 			r["lane"] = mini(2, r["lane"] + 1)
 		r["x"] += RUN * delta
-		if r["x"] > arena_rect.position.x + arena_rect.size.x - 40:
-			r["x"] = arena_rect.position.x + 60.0
+		if r["x"] > ARENA_HX - 1.0:
+			r["x"] = -ARENA_HX + 1.5
 			p.round_value += 1.0
-		avatars[p.id].position = Vector2(r["x"], r["y"] + SUBLANE[r["lane"]])
+		avatars[p.id].global_position = Vector3(r["x"], 0, r["z"] + SUBLANE[r["lane"]])
 		r["t"] -= delta
 		if r["t"] <= 0.0:
 			r["t"] = randf_range(0.6, 1.2)
-			var block := make_rect(Rect2(0, 0, 30, 30), Palette.DANGER, -5)
-			r["obs"].append({"x": arena_rect.position.x + arena_rect.size.x - 30.0, "lane": randi() % 3, "node": block})
+			var block := spawn_marker(Vector3.ZERO, Vector3(0.6, 0.8, 0.6), Palette.DANGER, true)
+			r["obs"].append({"x": ARENA_HX - 1.0, "lane": randi() % 3, "node": block})
 		var keep := []
 		for o in r["obs"]:
 			o["x"] -= OBS * delta
-			o["node"].position = Vector2(o["x"], r["y"] + SUBLANE[o["lane"]] - 15)
-			if o["lane"] == r["lane"] and absf(o["x"] - r["x"]) < 34.0:
+			o["node"].position = Vector3(o["x"], 0.4, r["z"] + SUBLANE[o["lane"]])
+			if o["lane"] == r["lane"] and absf(o["x"] - r["x"]) < 0.7:
 				eliminate(p.id)
-			if o["x"] < arena_rect.position.x - 40:
+			if o["x"] < -ARENA_HX - 1.0:
 				o["node"].queue_free()
 			else:
 				keep.append(o)

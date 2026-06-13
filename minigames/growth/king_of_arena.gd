@@ -1,29 +1,24 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# Hold the central zone to earn points. Most time as king wins.
+# Hold the central zone to earn points. Most time as king wins.  (3D)
 
-var _zone: Rect2
+const ZONE_HX := 4.0
+const ZONE_HZ := 3.0
 
 func _setup_round() -> void:
 	win_condition = WinType.HIGH_SCORE
-	draw_background()
-	add_child(WallArena.build(arena_rect))
-	var c := arena_rect.position + arena_rect.size * 0.5
-	_zone = Rect2(c - Vector2(150, 115), Vector2(300, 230))
-	spawn_avatars(corner_spawns(arena_rect))
+	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	spawn_marker(Vector3(0, 0.06, 0), Vector3(ZONE_HX * 2, 0.12, ZONE_HZ * 2), Color(Palette.WARN, 0.25))
+	spawn_avatars(corner_spawns(2.0))
 	for p in players:
-		avatars[p.id].speed = 290.0
-	make_label("Stand in the zone to score!", Vector2(440, 116), 24)
+		avatars[p.id].speed = 6.6
+	make_label("Stand in the zone to score!", Vector2(440, 96), 24)
 
 func _game_process(delta: float) -> void:
 	for p in players:
-		if _zone.has_point(avatars[p.id].position):
+		var fp := avatars[p.id].global_position
+		if absf(fp.x) < ZONE_HX and absf(fp.z) < ZONE_HZ:
 			p.round_value += delta
-	queue_redraw()
-
-func _draw() -> void:
-	draw_rect(_zone, Color(Palette.WARN, 0.15))
-	draw_rect(_zone, Palette.WARN, false, 4.0)
 
 func _compute_results() -> Dictionary:
 	var vals := {}

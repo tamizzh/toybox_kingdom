@@ -1,6 +1,6 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# Hold to accelerate uphill; gravity pulls you back. First to the top wins.
+# Hold to accelerate uphill; gravity pulls you back. First to the top (+X) wins. (3D)
 
 const GRAVITY := 0.16
 const PUSH := 0.55
@@ -10,24 +10,22 @@ var _order: Array = []
 
 func _setup_round() -> void:
 	win_condition = WinType.FAST_TIME
-	draw_background()
+	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
 	var n := players.size()
-	var spts := []
+	var left := -ARENA_HX + 1.5
 	for i in n:
 		var p: PlayerData = players[i]
-		var y: float = arena_rect.position.y + arena_rect.size.y * (i + 0.5) / n
-		make_rect(Rect2(arena_rect.position.x, y + 34, arena_rect.size.x, 6), Palette.WALL, -30)
-		make_rect(Rect2(arena_rect.position.x + arena_rect.size.x - 80, y - 40, 8, 80), Palette.SAFE, -20)
-		_rows[p.id] = {"y": y, "prog": 0.0, "vel": 0.0}
-		spts.append(Vector2(arena_rect.position.x + 60.0, y))
-	spawn_avatars(spts)
-	for av in avatars.values():
-		av.auto_input = false
-	make_label("HOLD to climb — don't roll back!", Vector2(430, 116), 24)
+		var z := -ARENA_HZ + 2.0 * ARENA_HZ * (i + 0.5) / n
+		spawn_marker(Vector3(ARENA_HX - 1.2, 0.4, z), Vector3(0.3, 1.2, 1.0), Palette.SAFE)
+		_rows[p.id] = {"z": z, "prog": 0.0, "vel": 0.0}
+		avatars[p.id].global_position = Vector3(left, 0, z)
+		avatars[p.id].auto_input = false
+		avatars[p.id].face(Vector2(1, 0))
+	make_label("HOLD to climb — don't roll back!", Vector2(430, 96), 24)
 
 func _game_process(delta: float) -> void:
-	var left := arena_rect.position.x + 60.0
-	var span := arena_rect.size.x - 140.0
+	var left := -ARENA_HX + 1.5
+	var span := (ARENA_HX - 1.2) - left
 	for p in players:
 		if p.finished:
 			continue
@@ -38,7 +36,7 @@ func _game_process(delta: float) -> void:
 		r["prog"] = clampf(r["prog"] + r["vel"] * delta, 0.0, 1.0)
 		if r["prog"] <= 0.0:
 			r["vel"] = 0.0
-		avatars[p.id].position = Vector2(left + span * r["prog"], r["y"])
+		avatars[p.id].global_position = Vector3(left + span * r["prog"], 0, r["z"])
 		if r["prog"] >= 1.0:
 			p.finished = true
 			_order.append(p.id)

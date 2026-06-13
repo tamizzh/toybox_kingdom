@@ -1,42 +1,40 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# Dodge the bouncing blocks. One touch and you're out. Last alive wins.
+# Dodge the bouncing blocks. One touch and you're out. Last alive wins. (3D)
 
 var _blocks: Array = []
 
 func _setup_round() -> void:
 	win_condition = WinType.LAST_ALIVE
-	draw_background()
-	add_child(WallArena.build(arena_rect))
-	spawn_avatars(corner_spawns(arena_rect))
+	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	spawn_avatars(corner_spawns(2.0))
 	for p in players:
-		avatars[p.id].speed = 310.0
+		avatars[p.id].speed = 6.8
 	var count := 3 + players.size()
 	for i in count:
-		var sz := randf_range(40.0, 70.0)
-		var node := make_rect(Rect2(0, 0, sz, sz), Palette.DANGER, -4)
+		var sz := randf_range(0.9, 1.6)
+		var node := spawn_marker(Vector3.ZERO, Vector3(sz, sz, sz), Palette.DANGER, true)
 		_blocks.append({
-			"pos": arena_rect.position + Vector2(randf_range(120, arena_rect.size.x - 120), randf_range(120, arena_rect.size.y - 120)),
-			"vel": Vector2(randf_range(-1, 1), randf_range(-1, 1)).normalized() * randf_range(140, 240),
+			"pos": Vector3(randf_range(-ARENA_HX + 2, ARENA_HX - 2), 0.5, randf_range(-ARENA_HZ + 2, ARENA_HZ - 2)),
+			"vel": Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)).normalized() * randf_range(3.0, 5.0),
 			"r": sz * 0.5,
 			"node": node,
 		})
-	make_label("Dodge the red blocks — survive!", Vector2(430, 116), 24)
+	make_label("Dodge the red blocks — survive!", Vector2(430, 96), 24)
 
 func _game_process(delta: float) -> void:
-	var lo := arena_rect.position
-	var hi := arena_rect.position + arena_rect.size
 	for b in _blocks:
 		b["pos"] += b["vel"] * delta
-		if b["pos"].x - b["r"] < lo.x or b["pos"].x + b["r"] > hi.x:
+		var r: float = b["r"]
+		if b["pos"].x - r < -ARENA_HX or b["pos"].x + r > ARENA_HX:
 			b["vel"].x = -b["vel"].x
-		if b["pos"].y - b["r"] < lo.y or b["pos"].y + b["r"] > hi.y:
-			b["vel"].y = -b["vel"].y
-		b["pos"].x = clampf(b["pos"].x, lo.x + b["r"], hi.x - b["r"])
-		b["pos"].y = clampf(b["pos"].y, lo.y + b["r"], hi.y - b["r"])
-		b["node"].position = b["pos"] - Vector2(b["r"], b["r"])
+		if b["pos"].z - r < -ARENA_HZ or b["pos"].z + r > ARENA_HZ:
+			b["vel"].z = -b["vel"].z
+		b["pos"].x = clampf(b["pos"].x, -ARENA_HX + r, ARENA_HX - r)
+		b["pos"].z = clampf(b["pos"].z, -ARENA_HZ + r, ARENA_HZ - r)
+		b["node"].position = b["pos"]
 		for p in players:
-			if p.alive and avatars[p.id].position.distance_to(b["pos"]) < b["r"] + 24.0:
+			if p.alive and avatars[p.id].global_position.distance_to(b["pos"]) < b["r"] + 0.7:
 				eliminate(p.id)
 
 func _compute_results() -> Dictionary:

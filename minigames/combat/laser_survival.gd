@@ -1,46 +1,55 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# Rotating laser beams sweep the arena from the center. Dodge to survive.
-# Last alive wins.
+# Rotating laser beams sweep the arena from the centre. Dodge to survive.
+# Last alive wins.  (3D)
 
 const SPIN := 0.85
-const BEAM_HALF := 16.0
+const BEAM_HALF := 0.8
 
 var _angle := 0.0
-var _center: Vector2
+var _pivot: Node3D
 
 func _setup_round() -> void:
 	win_condition = WinType.LAST_ALIVE
-	draw_background()
-	add_child(WallArena.build(arena_rect))
-	_center = arena_rect.position + arena_rect.size * 0.5
-	spawn_avatars(corner_spawns(arena_rect, 60.0))
+	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	spawn_avatars(corner_spawns(2.5))
 	for p in players:
-		avatars[p.id].speed = 300.0
-	make_label("Dodge the lasers — survive!", Vector2(440, 116), 24)
+		avatars[p.id].speed = 7.0
+
+	# a rotating "plus" of beams (two crossed bars = 4 arms)
+	_pivot = Node3D.new()
+	add_child(_pivot)
+	var length := ARENA_HX * 2.4
+	var bmat := StandardMaterial3D.new()
+	bmat.albedo_color = Color(1, 0.25, 0.3)
+	bmat.emission_enabled = true
+	bmat.emission = Color(1, 0.25, 0.3)
+	for bar_rot in [0.0, PI * 0.5]:
+		var bar := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(length, 0.3, BEAM_HALF * 2.0)
+		bar.mesh = bm
+		bar.material_override = bmat
+		bar.rotation.y = bar_rot
+		bar.position = Vector3(0, 0.4, 0)
+		_pivot.add_child(bar)
+	make_label("Dodge the lasers — survive!", Vector2(440, 96), 24)
 
 func _game_process(delta: float) -> void:
 	_angle += SPIN * delta
-	queue_redraw()
+	_pivot.rotation.y = -_angle   # match the detection convention below
 	for p in players:
 		if not p.alive:
 			continue
-		var rel: Vector2 = avatars[p.id].position - _center
+		var rel := avatars[p.id].global_position
+		rel.y = 0.0
 		for a in [_angle, _angle + PI, _angle + PI * 0.5, _angle + PI * 1.5]:
-			var dir := Vector2(cos(a), sin(a))
+			var dir := Vector3(cos(a), 0, sin(a))
 			var along := rel.dot(dir)
-			var perp := absf(rel.dot(Vector2(-dir.y, dir.x)))
+			var perp := absf(rel.dot(Vector3(-dir.z, 0, dir.x)))
 			if along > 0.0 and perp < BEAM_HALF:
 				eliminate(p.id)
 				break
-
-func _draw() -> void:
-	if _finished:
-		return
-	var r := arena_rect.size.length()
-	for a in [_angle, _angle + PI, _angle + PI * 0.5, _angle + PI * 1.5]:
-		var dir := Vector2(cos(a), sin(a))
-		draw_line(_center, _center + dir * r, Color(1, 0.25, 0.3, 0.8), BEAM_HALF * 2.0)
 
 func _compute_results() -> Dictionary:
 	return survivor_results(3)

@@ -1,27 +1,31 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# Top-down tanks. Move + shoot. Last tank alive wins.
+# Top-down tanks in REAL 3D. Move + shoot. Last tank alive wins.
+# Each player drives the actual tank.glb model; the joystick turns it in 3D and
+# fires 3D bullets in the facing direction.
 
-const BULLET := preload("res://shared/bullet.tscn")
+const TANK := preload("res://tank.glb")
+const BULLET := preload("res://shared/bullet3d.gd")
 
-var _facing := {}
+const TANK_SCALE := 0.45
+const TANK_SPEED := 6.5
+const BULLET_SPEED := 18.0
+const FIRE_COOLDOWN := 0.5
+
+var _facing := {}     # id -> Vector3 (XZ)
 var _cool := {}
 
 func _setup_round() -> void:
 	win_condition = WinType.LAST_ALIVE
-	draw_background()
-	add_child(WallArena.build(arena_rect))
-	spawn_avatars(corner_spawns(arena_rect))
+	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	spawn_avatars(corner_spawns(2.0))
 	for p in players:
-		_facing[p.id] = Vector2.RIGHT
+		_facing[p.id] = Vector3(1, 0, 0)
 		_cool[p.id] = 0.0
-		avatars[p.id].speed = 235.0
-		# tank body stays neutral white; player colour shown as a bar beneath it
-		var fig = avatars[p.id].figure
-		if fig:
-			fig.body_color_as_line = true
-			fig.queue_redraw()
-	make_label("Move + shoot — last tank alive wins!", Vector2(410, 116), 24)
+		var av = avatars[p.id]
+		av.speed = TANK_SPEED
+		av.set_model(TANK, TANK_SCALE, 0.0)
+	make_label("Move + shoot — last tank alive wins!", Vector2(360, 96), 26)
 
 func _game_process(delta: float) -> void:
 	for p in players:
@@ -29,22 +33,20 @@ func _game_process(delta: float) -> void:
 			continue
 		var mv := InputManager.get_move(p.id)
 		if mv.length() > 0.2:
-			_facing[p.id] = mv.normalized()
-			var fig = avatars[p.id].figure   # turn the tank toward the joystick
-			if fig:
-				fig.set_face_angle(_facing[p.id].angle())
+			_facing[p.id] = Vector3(mv.x, 0, mv.y).normalized()
 		_cool[p.id] = maxf(0.0, _cool[p.id] - delta)
 		if InputManager.get_action(p.id) and _cool[p.id] <= 0.0:
-			_cool[p.id] = 0.5
+			_cool[p.id] = FIRE_COOLDOWN
 			_shoot(p)
 
 func _shoot(p: PlayerData) -> void:
-	var b := BULLET.instantiate()
+	var av = avatars[p.id]
+	var b := BULLET.new()
 	add_child(b)
-	b.position = avatars[p.id].position + _facing[p.id] * 38.0
-	b.setup(p.id, _facing[p.id], p.color, 560.0)
+	b.global_position = av.global_position + _facing[p.id] * 1.8 + Vector3(0, 0.9, 0)
+	b.setup(p.id, _facing[p.id], p.color, BULLET_SPEED)
 	b.hit_player.connect(func(target, _owner): eliminate(target))
-	avatars[p.id].pop()
+	av.pop()
 
 func _compute_results() -> Dictionary:
 	return survivor_results(3)

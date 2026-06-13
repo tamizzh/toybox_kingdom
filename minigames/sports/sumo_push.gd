@@ -1,23 +1,21 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# Shove rivals out of the ring. Off the edge = out. Last sumo standing wins.
+# Shove rivals out of the ring. Off the edge = out. Last sumo standing wins. (3D)
 
-var _center: Vector2
 var _ring: float
 
 func _setup_round() -> void:
 	win_condition = WinType.LAST_ALIVE
-	draw_background()
-	_center = arena_rect.position + arena_rect.size * 0.5
-	_ring = minf(arena_rect.size.x, arena_rect.size.y) * 0.5 - 16.0
+	_ring = ARENA_HZ - 0.5
+	spawn_disc(_ring, Color(0.30, 0.32, 0.40, 0.6))
 	var spts := []
 	for i in players.size():
 		var ang := TAU * i / players.size()
-		spts.append(_center + Vector2(cos(ang), sin(ang)) * 110.0)
+		spts.append(Vector3(cos(ang), 0, sin(ang)) * (_ring * 0.55))
 	spawn_avatars(spts)
 	for p in players:
-		avatars[p.id].speed = 330.0
-	make_label("Push rivals out of the ring!", Vector2(440, 116), 24)
+		avatars[p.id].speed = 7.2
+	make_label("Push rivals out of the ring!", Vector2(440, 96), 24)
 
 func _game_process(delta: float) -> void:
 	var ids := []
@@ -28,24 +26,22 @@ func _game_process(delta: float) -> void:
 		for j in range(i + 1, ids.size()):
 			var a = avatars[ids[i]]
 			var b = avatars[ids[j]]
-			var diff: Vector2 = b.position - a.position
+			var diff: Vector3 = b.global_position - a.global_position
+			diff.y = 0
 			var dist := diff.length()
-			if dist < 56.0 and dist > 0.1:
+			if dist < 1.5 and dist > 0.05:
 				var dir := diff / dist
 				var closing := maxf(0.0, (a.velocity - b.velocity).dot(dir))
-				var force := closing * delta * 1.6 + (56.0 - dist) * 0.5
-				b.position += dir * force
-				a.position -= dir * force
+				var force := closing * delta * 0.6 + (1.5 - dist) * 0.5
+				b.global_position += dir * force
+				a.global_position -= dir * force
 	for p in players:
-		if p.alive and avatars[p.id].position.distance_to(_center) > _ring:
+		if not p.alive:
+			continue
+		var fp := avatars[p.id].global_position
+		fp.y = 0
+		if fp.length() > _ring:
 			eliminate(p.id)
-	queue_redraw()
-
-func _draw() -> void:
-	if _finished:
-		return
-	draw_circle(_center, _ring, Color(Palette.WALL, 0.30))
-	draw_arc(_center, _ring, 0, TAU, 64, Palette.ACCENT, 5.0)
 
 func _compute_results() -> Dictionary:
 	return survivor_results(3)

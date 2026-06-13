@@ -1,29 +1,32 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# Grid snakes. Steer with the stick, grow a trail, don't crash into walls or
-# any trail. Last snake alive (or longest) wins.
+# Grid snakes in 3D. Steer with the stick, grow a trail of blocks, don't crash
+# into walls or any trail. Last snake alive (or longest) wins.
 
-const CELL := 28.0
+const CELL := 1.0
 const STEP := 0.12
 
 var _cols := 0
 var _rows := 0
-var _origin: Vector2
+var _origin: Vector3
 var _snakes := {}
 var _acc := 0.0
+var _grid: Node3D
 
 func _setup_round() -> void:
 	win_condition = WinType.LAST_ALIVE
-	draw_background()
-	add_child(WallArena.build(arena_rect))
-	_cols = int(arena_rect.size.x / CELL)
-	_rows = int(arena_rect.size.y / CELL)
-	_origin = arena_rect.position
+	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	_cols = int(ARENA_HX * 2 / CELL)
+	_rows = int(ARENA_HZ * 2 / CELL)
+	_origin = Vector3(-ARENA_HX, 0, -ARENA_HZ)
+	_grid = Node3D.new()
+	add_child(_grid)
 	var starts := [Vector2i(3, 3), Vector2i(_cols - 4, _rows - 4), Vector2i(_cols - 4, 3), Vector2i(3, _rows - 4)]
 	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(-1, 0), Vector2i(1, 0)]
 	for i in players.size():
 		_snakes[players[i].id] = {"cells": [starts[i]], "dir": dirs[i], "ndir": dirs[i], "grow": 4}
-	make_label("Grow & survive — don't crash!", Vector2(430, 116), 24)
+	make_label("Grow & survive — don't crash!", Vector2(430, 96), 24)
+	_render_grid()
 
 func _game_process(delta: float) -> void:
 	for p in players:
@@ -45,7 +48,7 @@ func _game_process(delta: float) -> void:
 	if _acc >= STEP:
 		_acc = 0.0
 		_step_snakes()
-	queue_redraw()
+		_render_grid()
 
 func _step_snakes() -> void:
 	var occ := {}
@@ -78,13 +81,23 @@ func _step_snakes() -> void:
 			else:
 				s["cells"].pop_front()
 
-func _draw() -> void:
+func _render_grid() -> void:
+	for c in _grid.get_children():
+		c.queue_free()
 	for p in players:
 		if not _snakes.has(p.id):
 			continue
-		var col: Color = p.color if p.alive else Color(p.color, 0.3)
+		var col: Color = p.color if p.alive else Color(p.color, 0.35)
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = col
 		for c in _snakes[p.id]["cells"]:
-			draw_rect(Rect2(_origin + Vector2(c.x, c.y) * CELL + Vector2(2, 2), Vector2(CELL - 4, CELL - 4)), col)
+			var box := MeshInstance3D.new()
+			var bm := BoxMesh.new()
+			bm.size = Vector3(CELL * 0.85, CELL * 0.85, CELL * 0.85)
+			box.mesh = bm
+			box.material_override = mat
+			box.position = _origin + Vector3((c.x + 0.5) * CELL, 0.45, (c.y + 0.5) * CELL)
+			_grid.add_child(box)
 
 func _compute_results() -> Dictionary:
 	var vals := {}

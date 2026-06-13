@@ -1,39 +1,45 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# Lava rises from the bottom. Stay above it. Last one above the lava wins.
+# Lava creeps in from the far (+Z) edge. Stay ahead of it (-Z). Last one safe wins.
+# (3D: the 2D "rising" axis maps to Z.)
 
-var _lava_y: float
-var _rate := 14.0
+var _lava_z: float
+var _rate := 1.0
+var _lava: MeshInstance3D
 
 func _setup_round() -> void:
 	win_condition = WinType.LAST_ALIVE
-	draw_background()
-	add_child(WallArena.build(arena_rect))
-	_lava_y = arena_rect.position.y + arena_rect.size.y
+	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	_lava_z = ARENA_HZ
+	_lava = MeshInstance3D.new()
+	_lava.mesh = BoxMesh.new()
+	var lm := StandardMaterial3D.new()
+	lm.albedo_color = Color(0.9, 0.25, 0.15)
+	lm.emission_enabled = true
+	lm.emission = Color(0.9, 0.3, 0.1)
+	_lava.material_override = lm
+	add_child(_lava)
 	var spts := []
 	for i in players.size():
-		var x := arena_rect.position.x + arena_rect.size.x * (i + 1.0) / (players.size() + 1.0)
-		spts.append(Vector2(x, arena_rect.position.y + arena_rect.size.y - 60.0))
+		var x := -ARENA_HX + 2.0 * ARENA_HX * (i + 1.0) / (players.size() + 1.0)
+		spts.append(Vector3(x, 0, ARENA_HZ - 1.5))
 	spawn_avatars(spts)
 	for p in players:
-		avatars[p.id].speed = 300.0
-	make_label("Climb! Don't touch the lava!", Vector2(440, 116), 24)
+		avatars[p.id].speed = 6.8
+	make_label("Flee the lava — don't get caught!", Vector2(430, 96), 24)
 
 func _game_process(delta: float) -> void:
-	_rate += delta * 1.5
-	_lava_y = maxf(arena_rect.position.y, _lava_y - _rate * delta)
+	_rate += delta * 0.18
+	_lava_z = maxf(-ARENA_HZ, _lava_z - _rate * delta)
+	var depth := ARENA_HZ - _lava_z
+	(_lava.mesh as BoxMesh).size = Vector3(ARENA_HX * 2, 0.3, maxf(0.1, depth))
+	_lava.position = Vector3(0, 0.2, _lava_z + depth * 0.5)
 	for p in players:
-		if p.alive:
-			clamp_avatar(avatars[p.id])
-			if avatars[p.id].position.y > _lava_y:
-				eliminate(p.id)
-	queue_redraw()
-
-func _draw() -> void:
-	if _finished:
-		return
-	var h := arena_rect.position.y + arena_rect.size.y - _lava_y
-	draw_rect(Rect2(arena_rect.position.x, _lava_y, arena_rect.size.x, h), Color(0.9, 0.25, 0.15, 0.85))
+		if not p.alive:
+			continue
+		clamp_avatar(avatars[p.id])
+		if avatars[p.id].global_position.z > _lava_z:
+			eliminate(p.id)
 
 func _compute_results() -> Dictionary:
 	return survivor_results(3)

@@ -1,9 +1,8 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# One player starts infected. Touch spreads it. Stay clean as long as possible —
-# players clean at the end (most clean time) win.
+# One player starts infected. Touch spreads it. Stay clean as long as possible. (3D)
 
-const TOUCH := 54.0
+const TOUCH := 1.4
 const IMMUNE := 1.0
 
 var _infected := {}
@@ -11,21 +10,20 @@ var _imm := {}
 
 func _setup_round() -> void:
 	win_condition = WinType.HIGH_SCORE
-	draw_background()
-	add_child(WallArena.build(arena_rect))
-	spawn_avatars(corner_spawns(arena_rect))
+	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	spawn_avatars(corner_spawns(2.0))
 	for p in players:
-		avatars[p.id].speed = 300.0
+		avatars[p.id].speed = 6.8
 		_infected[p.id] = false
 		_imm[p.id] = 0.0
 	var first: int = players[randi() % players.size()].id
 	_set_infected(first)
-	make_label("Avoid the infected — stay clean!", Vector2(420, 116), 24)
+	make_label("Avoid the infected — stay clean!", Vector2(420, 96), 24)
 
 func _set_infected(id: int) -> void:
 	_infected[id] = true
 	_imm[id] = IMMUNE
-	avatars[id].figure.set_color(Palette.DANGER)
+	avatars[id].set_body_color(Palette.DANGER)
 
 func _game_process(delta: float) -> void:
 	for p in players:
@@ -38,7 +36,7 @@ func _game_process(delta: float) -> void:
 		for b in players:
 			if _infected[b.id] or _imm[b.id] > 0.0:
 				continue
-			if avatars[a.id].position.distance_to(avatars[b.id].position) < TOUCH:
+			if avatars[a.id].global_position.distance_to(avatars[b.id].global_position) < TOUCH:
 				_set_infected(b.id)
 	var clean := 0
 	for p in players:

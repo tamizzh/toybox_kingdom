@@ -1,45 +1,37 @@
-extends MiniGameBase
+extends MiniGameBase3D
 
-# A spinning disc flings you outward. Steer back to the center. Fall off = out.
-# Last one on the disc wins.
+# A spinning disc flings you outward. Steer back to the centre. Fall off = out.
+# Last one on the disc wins. (3D)
 
-var _center: Vector2
 var _radius: float
 
 func _setup_round() -> void:
 	win_condition = WinType.LAST_ALIVE
-	draw_background()
-	_center = arena_rect.position + arena_rect.size * 0.5
-	_radius = minf(arena_rect.size.x, arena_rect.size.y) * 0.5 - 20.0
+	_radius = ARENA_HZ - 0.5
+	spawn_disc(_radius, Color(0.30, 0.32, 0.40, 0.9))
+	spawn_ball(0.5, Palette.NEUTRAL)   # centre hub marker
 	var spts := []
 	for i in players.size():
 		var ang := TAU * i / players.size()
-		spts.append(_center + Vector2(cos(ang), sin(ang)) * 70.0)
+		spts.append(Vector3(cos(ang), 0, sin(ang)) * (_radius * 0.45))
 	spawn_avatars(spts)
 	for p in players:
-		avatars[p.id].speed = 320.0
-	make_label("Stay on the spinning disc!", Vector2(445, 116), 24)
+		avatars[p.id].speed = 7.0
+	make_label("Stay on the spinning disc!", Vector2(445, 96), 24)
 
 func _game_process(delta: float) -> void:
-	var drift := 60.0 + elapsed * 6.0
+	var drift := 1.2 + elapsed * 0.12
 	var spin := 0.9 + elapsed * 0.03
 	for p in players:
 		if not p.alive:
 			continue
-		var rel: Vector2 = avatars[p.id].position - _center
-		var radial := rel.normalized() if rel.length() > 1.0 else Vector2.RIGHT
-		var tangent := Vector2(-radial.y, radial.x)
-		avatars[p.id].position += radial * drift * delta + tangent * spin * rel.length() * delta
-		if avatars[p.id].position.distance_to(_center) > _radius:
+		var rel: Vector3 = avatars[p.id].global_position
+		rel.y = 0
+		var radial := rel.normalized() if rel.length() > 0.05 else Vector3.RIGHT
+		var tangent := Vector3(-radial.z, 0, radial.x)
+		avatars[p.id].global_position += radial * drift * delta + tangent * spin * rel.length() * delta
+		if avatars[p.id].global_position.length() > _radius:
 			eliminate(p.id)
-	queue_redraw()
-
-func _draw() -> void:
-	if _finished:
-		return
-	draw_circle(_center, _radius, Color(Palette.WALL, 0.30))
-	draw_arc(_center, _radius, 0, TAU, 64, Palette.ACCENT, 5.0)
-	draw_circle(_center, 14, Palette.NEUTRAL)
 
 func _compute_results() -> Dictionary:
 	return survivor_results(3)

@@ -51,10 +51,13 @@ func _on_show_game_grid() -> void:
 
 func _on_round_started(game: Node) -> void:
 	_clear_host()
-	game.modulate.a = 0.0
 	screen_host.add_child(game)
-	var tw := create_tween()
-	tw.tween_property(game, "modulate:a", 1.0, 0.18)
+	# 2D games fade in via modulate; 3D games (Node3D) have no modulate and just
+	# appear (their Camera3D becomes current once added to the tree).
+	if game is CanvasItem:
+		game.modulate.a = 0.0
+		var tw := create_tween()
+		tw.tween_property(game, "modulate:a", 1.0, 0.18)
 	game.time_changed.connect(hud.set_time)
 	game.status_changed.connect(hud.set_status)
 	hud.set_status(game.game_title)

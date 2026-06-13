@@ -14,7 +14,7 @@ const ROUND_GAP := 2.5
 
 var player_count: int = 2
 var players: Array = []            # Array[PlayerData]
-var current_game: MiniGameBase = null
+var current_game: Node = null   # MiniGameBase (2D) or MiniGameBase3D
 var _match_over: bool = false
 
 func _ready() -> void:
@@ -38,7 +38,7 @@ func pick_game(index: int) -> void:
 		return
 	InputManager.reset()
 	var entry: Dictionary = MiniGameRegistry.GAMES[index]
-	var game: MiniGameBase = load(entry.script).new()
+	var game: Node = load(entry.script).new()   # 2D MiniGameBase or 3D MiniGameBase3D
 	game.game_title = entry.title
 	game.round_duration = float(entry.get("duration", 30.0))
 	game.category = entry.get("category", "")
