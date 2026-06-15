@@ -4,7 +4,8 @@ extends Node
 # menu -> random round -> score -> (repeat until first-to-target) -> results.
 
 signal match_started
-signal show_game_grid              # show the game-picker grid
+signal show_game_grid              # show the game-picker grid (manual "Pick Games" mode)
+signal show_next_game(index, is_first)  # party mode: reveal the next auto-picked game
 signal round_started(game)        # game: MiniGameBase node (main mounts it)
 signal round_result(results, title)
 signal match_finished(winner_id)
@@ -16,6 +17,11 @@ const MATCH_COINS := 50    # earned for finishing a match
 
 var last_match_coins: int = 0   # coins earned across the just-finished match (results screen)
 var _match_coins: int = 0
+
+# Party mode (default): games auto-advance in a random rotation with a quick
+# reveal between rounds — no picking. Turn off for the manual game-grid picker.
+var party_mode: bool = true
+var _last_index: int = -1          # last game played (avoid back-to-back repeats)
 
 var player_count: int = 2          # total players (humans + CPUs)
 var players: Array = []            # Array[PlayerData]
@@ -55,9 +61,31 @@ func replay_last() -> void:
 func start_match() -> void:
 	_match_over = false
 	_match_coins = 0
+	_last_index = -1
 	SaveManager.bump_stat("matches_played")
 	match_started.emit()
-	show_game_grid.emit()
+	_advance_round(true)
+
+# Route to the next round: party mode reveals an auto-picked game; manual mode
+# shows the picker grid.
+func _advance_round(is_first: bool = false) -> void:
+	if _match_over:
+		return
+	if party_mode:
+		show_next_game.emit(_pick_next_index(), is_first)
+	else:
+		show_game_grid.emit()
+
+# Random launch game, avoiding an immediate repeat when more than one is available.
+func _pick_next_index() -> int:
+	var idxs: Array = MiniGameRegistry.launch_indices()
+	if idxs.is_empty():
+		return 0
+	var choice: int = idxs[randi() % idxs.size()]
+	if idxs.size() > 1:
+		while choice == _last_index:
+			choice = idxs[randi() % idxs.size()]
+	return choice
 
 func _is_human(id: int) -> bool:
 	for p in players:
@@ -77,6 +105,7 @@ func _top_scorer(results: Dictionary) -> int:
 func pick_game(index: int) -> void:
 	if _match_over:
 		return
+	_last_index = index
 	InputManager.reset()
 	MiniGameRegistry.record_play(index)
 	var entry: Dictionary = MiniGameRegistry.GAMES[index]
@@ -113,7 +142,7 @@ func _on_round_finished(results: Dictionary, title: String) -> void:
 	if _match_over:
 		return
 	MonetizationManager.maybe_show_interstitial()
-	show_game_grid.emit()
+	_advance_round()
 
 func _on_match_won(winner_id: int) -> void:
 	_match_over = true

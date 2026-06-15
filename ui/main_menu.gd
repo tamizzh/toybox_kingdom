@@ -9,6 +9,8 @@ const MascotFace := preload("res://ui/mascot_face.gd")
 var _humans: int = 2
 var _cpus: int = 0
 var _difficulty: int = 1
+var _party_mode: bool = true
+var _mode_btns: Array = []
 var _human_btns: Array = []
 var _cpu_btns: Array = []
 var _diff_btn: _DiffButton
@@ -40,6 +42,7 @@ func _ready() -> void:
 	col.add_child(_mascot_row())
 	col.add_child(_human_row())
 	col.add_child(_cpu_row())
+	col.add_child(_mode_row())
 	col.add_child(_play_row())
 
 	_update_visual()
@@ -242,6 +245,35 @@ func _cpu_row() -> Control:
 	return row
 
 
+# ── Mode: PARTY (auto-rotate) vs PICK GAMES (manual grid) ─────────────────────────
+func _mode_row() -> Control:
+	var row := _selector_row()
+	row.add_child(_row_label("MODE"))
+	var party := _ModeButton.new()
+	party.title = "PARTY"
+	party.subtitle = "auto-rotate"
+	party.accent = Palette.WARN
+	party.custom_minimum_size = Vector2(196, 70)
+	party.pressed.connect(_on_mode.bind(true))
+	row.add_child(party)
+	_mode_btns.append(party)
+	var pick := _ModeButton.new()
+	pick.title = "PICK GAMES"
+	pick.subtitle = "choose each round"
+	pick.accent = Color("aa60ff")
+	pick.custom_minimum_size = Vector2(196, 70)
+	pick.pressed.connect(_on_mode.bind(false))
+	row.add_child(pick)
+	_mode_btns.append(pick)
+	return row
+
+
+func _on_mode(party: bool) -> void:
+	AudioManager.play("tap", randf_range(0.96, 1.06))
+	_party_mode = party
+	_update_visual()
+
+
 # ── PLAY ─────────────────────────────────────────────────────────────────────────
 func _play_row() -> Control:
 	var wrap := VBoxContainer.new()
@@ -326,6 +358,9 @@ func _update_visual() -> void:
 		_diff_btn.level = _difficulty
 		_diff_btn.usable = _cpus > 0
 		_diff_btn.queue_redraw()
+	for i in _mode_btns.size():
+		_mode_btns[i].selected = (i == 0) == _party_mode
+		_mode_btns[i].queue_redraw()
 	_refresh_hook()
 
 func _refresh_hook() -> void:
@@ -345,6 +380,7 @@ func _refresh_hook() -> void:
 
 func _on_play() -> void:
 	AudioManager.play("tap")
+	GameManager.party_mode = _party_mode
 	GameManager.setup_match(_humans, _cpus, _difficulty)
 	GameManager.start_match()
 
@@ -443,6 +479,30 @@ class _DiffButton extends Button:
 		var tw := ArcadeTheme.font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
 		draw_string(ArcadeTheme.font, Vector2((size.x - tw) * 0.5, 64), s,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 22, txt_col)
+
+
+class _ModeButton extends Button:
+	var title: String = ""
+	var subtitle: String = ""
+	var accent: Color = Color.WHITE
+	var selected: bool = false
+
+	func _ready() -> void:
+		focus_mode = Control.FOCUS_NONE
+		flat = true
+
+	func _draw() -> void:
+		var fill := Color("2a3a5e") if selected else Color("1b2740")
+		DrawKit.card(self, Rect2(Vector2.ZERO, size), 18.0, fill, 3.0, true)
+		if selected:
+			draw_rect(Rect2(5, 5, size.x - 10, 6), Color(accent, 0.95))
+		var tcol := Color.WHITE if selected else Color(1, 1, 1, 0.6)
+		var tw := ArcadeTheme.font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
+		draw_string(ArcadeTheme.font, Vector2((size.x - tw) * 0.5, 38), title,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 22, tcol)
+		var sw := ArcadeTheme.font.get_string_size(subtitle, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		draw_string(ArcadeTheme.font, Vector2((size.x - sw) * 0.5, 58), subtitle,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(accent, 0.85 if selected else 0.5))
 
 
 class _PlayButton extends Button:

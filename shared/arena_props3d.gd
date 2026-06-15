@@ -40,14 +40,14 @@ static func scatter(half_x: float, half_z: float, seed_val: int = 1337) -> Node3
 	var hi := 5.5
 
 	# North / South borders (props spread along X, just beyond ±oz)
-	var nx := 10
+	var nx := 14
 	for s in [-1.0, 1.0]:
 		for i in nx:
 			var x := lerpf(-ox - 3.0, ox + 3.0, (float(i) + rng.randf_range(0.15, 0.85)) / nx)
 			var z: float = s * (oz + rng.randf_range(lo, hi))
 			_place(root, rng, Vector3(x, 0, z))
 	# East / West borders (props spread along Z, just beyond ±ox)
-	var nz := 7
+	var nz := 10
 	for s in [-1.0, 1.0]:
 		for i in nz:
 			var z := lerpf(-oz - 3.0, oz + 3.0, (float(i) + rng.randf_range(0.15, 0.85)) / nz)
@@ -58,14 +58,18 @@ static func scatter(half_x: float, half_z: float, seed_val: int = 1337) -> Node3
 static func _place(root: Node3D, rng: RandomNumberGenerator, pos: Vector3) -> void:
 	var pick := rng.randf()
 	var node: Node3D
-	if pick < 0.46:
+	if pick < 0.34:
 		node = _bush(rng)
-	elif pick < 0.74:
+	elif pick < 0.58:
 		node = _flower(rng)
-	elif pick < 0.90:
+	elif pick < 0.72:
+		node = _tree(rng)
+	elif pick < 0.84:
 		node = _rock(rng)
-	else:
+	elif pick < 0.94:
 		node = _barrel(rng)
+	else:
+		node = _banner(rng)
 	node.position = pos
 	node.rotation.y = rng.randf_range(0.0, TAU)
 	var sc := rng.randf_range(0.85, 1.35)
@@ -127,6 +131,45 @@ static func _barrel(rng: RandomNumberGenerator) -> Node3D:
 		band.material_override = _mat(_WOOD_BAND, 0.4, false, 0.0)
 		band.position = Vector3(0, h * frac, 0)
 		n.add_child(band)
+	return n
+
+static func _tree(rng: RandomNumberGenerator) -> Node3D:
+	var n := Node3D.new()
+	var h := rng.randf_range(1.6, 2.6)
+	# trunk
+	var trunk := MeshInstance3D.new()
+	trunk.mesh = _cylinder_mesh(0.16, 0.22, h)
+	trunk.material_override = _mat(_WOOD, 0.7)
+	trunk.position = Vector3(0, h * 0.5, 0)
+	n.add_child(trunk)
+	# canopy: 1-2 chunky green spheres stacked
+	var canopies := rng.randi_range(1, 2)
+	for i in canopies:
+		var leaf := MeshInstance3D.new()
+		var r := rng.randf_range(0.95, 1.35) * (1.0 - 0.18 * i)
+		leaf.mesh = _sphere_mesh(r, r * 2.0)
+		leaf.material_override = _mat(_GREENS[rng.randi() % _GREENS.size()], 0.6)
+		leaf.position = Vector3(rng.randf_range(-0.25, 0.25), h + r * 0.6 + i * 0.7,
+			rng.randf_range(-0.25, 0.25))
+		n.add_child(leaf)
+	return n
+
+static func _banner(rng: RandomNumberGenerator) -> Node3D:
+	# Two posts with a colorful cloth strung between — a festive party banner.
+	var n := Node3D.new()
+	var h := rng.randf_range(1.6, 2.0)
+	var span := rng.randf_range(1.8, 2.6)
+	for sx in [-1.0, 1.0]:
+		var post := MeshInstance3D.new()
+		post.mesh = _cylinder_mesh(0.08, 0.09, h)
+		post.material_override = _mat(_WOOD, 0.7)
+		post.position = Vector3(sx * span * 0.5, h * 0.5, 0)
+		n.add_child(post)
+	var cloth := MeshInstance3D.new()
+	cloth.mesh = _box_mesh(Vector3(span, 0.55, 0.06))
+	cloth.material_override = _mat(_FLOWERS[rng.randi() % _FLOWERS.size()], 0.5, true, 0.2)
+	cloth.position = Vector3(0, h - 0.4, 0)
+	n.add_child(cloth)
 	return n
 
 static func _rock(rng: RandomNumberGenerator) -> Node3D:

@@ -9,11 +9,13 @@ extends Node
 
 const MAIN_MENU := preload("res://ui/main_menu.tscn")
 const GAME_GRID := preload("res://ui/game_grid.tscn")
+const NEXT_GAME := preload("res://ui/next_game_screen.gd")
 const RESULTS  := preload("res://ui/results_screen.tscn")
 
 func _ready() -> void:
 	GameManager.match_started.connect(_on_match_started)
 	GameManager.show_game_grid.connect(_on_show_game_grid)
+	GameManager.show_next_game.connect(_on_show_next_game)
 	GameManager.round_started.connect(_on_round_started)
 	GameManager.round_result.connect(_on_round_result)
 	GameManager.match_finished.connect(_on_match_finished)
@@ -139,6 +141,15 @@ func _on_show_game_grid() -> void:
 	hud.visible = false
 	touch.visible = false
 	_swap(GAME_GRID.instantiate())
+
+# Party mode: auto-reveal the next game, then it launches itself.
+func _on_show_next_game(index: int, is_first: bool) -> void:
+	hud.visible = false
+	touch.visible = false
+	var screen := NEXT_GAME.new()
+	screen.target_index = index
+	screen.is_first = is_first
+	_swap(screen)
 
 func _on_round_started(game: Node) -> void:
 	_clear_host()
