@@ -12,7 +12,7 @@ var _puck_node: MeshInstance3D
 
 func _setup_round() -> void:
 	win_condition = WinType.HIGH_SCORE
-	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	add_child(build_arena())
 	_puck_node = spawn_ball(PUCK_R, Palette.ACCENT)
 	spawn_marker(Vector3(ARENA_HX - 0.3, 0.5, 0), Vector3(0.4, 1.0, GOAL_HALF_Z * 2), Palette.SAFE)
 	_reset_puck()

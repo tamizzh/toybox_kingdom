@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://b8jtw65tnppvq"]
+
+[ext_resource type="Script" path="res://tools/shot_menu.gd" id="1_menu"]
+
+[node name="ShotMenu" type="Node"]
+script = ExtResource("1_menu")

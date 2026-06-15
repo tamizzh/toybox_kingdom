@@ -8,6 +8,7 @@ const MAX_PLAYERS := 4
 
 var _touch_move := [Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO]
 var _touch_action := [false, false, false, false]
+var _move_now := [Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO]
 
 var _action_now := [false, false, false, false]
 var _action_prev := [false, false, false, false]
@@ -39,6 +40,10 @@ func _add_key(action: String, keycode: Key) -> void:
 
 func _process(_delta: float) -> void:
 	for id in MAX_PLAYERS:
+		var v: Vector2 = _touch_move[id] + _kbd_move(id)
+		if v.length() > 1.0:
+			v = v.normalized()
+		_move_now[id] = v
 		var a := _raw_action(id)
 		_action_just[id] = a and not _action_prev[id]
 		_action_released[id] = (not a) and _action_prev[id]
@@ -75,10 +80,7 @@ func set_action(id: int, down: bool) -> void:
 
 # ---- Mini-games read here ----
 func get_move(id: int) -> Vector2:
-	var v: Vector2 = _touch_move[id] + _kbd_move(id)
-	if v.length() > 1.0:
-		v = v.normalized()
-	return v
+	return _move_now[id]
 
 func get_action(id: int) -> bool:
 	return _action_now[id]
@@ -92,4 +94,5 @@ func get_action_released(id: int) -> bool:
 func reset() -> void:
 	for i in MAX_PLAYERS:
 		_touch_move[i] = Vector2.ZERO
+		_move_now[i] = Vector2.ZERO
 		_touch_action[i] = false

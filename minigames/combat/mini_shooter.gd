@@ -11,7 +11,7 @@ var _hp := {}
 
 func _setup_round() -> void:
 	win_condition = WinType.LAST_ALIVE
-	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	add_child(build_arena())
 	spawn_avatars(corner_spawns(2.0))
 	for p in players:
 		_facing[p.id] = Vector3(1, 0, 0)

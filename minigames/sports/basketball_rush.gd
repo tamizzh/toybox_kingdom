@@ -16,7 +16,7 @@ var _ball_node: MeshInstance3D
 
 func _setup_round() -> void:
 	win_condition = WinType.HIGH_SCORE
-	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	add_child(build_arena())
 	_hoop = Vector3(ARENA_HX - 1.6, 1.8, 0)
 	# hoop marker (ring approximated by a torus mesh)
 	var ring := MeshInstance3D.new()

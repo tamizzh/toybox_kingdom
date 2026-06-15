@@ -8,6 +8,11 @@ var display_name: String = "P1"
 var color: Color = Color.WHITE
 var score: int = 0
 
+# Solo "vs CPU" support. Human players are driven by touch/keyboard; AI players
+# are driven by AIController, which writes into InputManager for this id.
+var is_ai: bool = false
+var ai_difficulty: int = 1   # 0=easy, 1=normal, 2=hard
+
 # Per-round transient state (reset each round by MiniGameBase).
 var alive: bool = true
 var finished: bool = false

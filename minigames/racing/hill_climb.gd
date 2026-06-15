@@ -10,9 +10,11 @@ var _order: Array = []
 
 func _setup_round() -> void:
 	win_condition = WinType.FAST_TIME
-	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	# No interior crates — keep the climb lanes clear.
+	add_child(build_arena(ARENA_HX, ARENA_HZ, 1.6, 0.95, true, false))
 	var n := players.size()
 	var left := -ARENA_HX + 1.5
+	spawn_avatars(lane_spawns(left))
 	for i in n:
 		var p: PlayerData = players[i]
 		var z := -ARENA_HZ + 2.0 * ARENA_HZ * (i + 0.5) / n

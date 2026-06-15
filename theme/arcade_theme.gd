@@ -1,25 +1,50 @@
 extends Node
 
-# Autoload. Builds and applies a StyleBoxFlat-based dark arcade theme to the
-# entire window so every Button, Label, ScrollContainer picks it up automatically.
+# Autoload. Builds and applies a StyleBoxFlat-based arcade theme to the entire
+# window so every Button, Label, ScrollContainer picks it up automatically.
+# Also loads the chunky rounded display font (Fredoka) and exposes it as `font`
+# for code that draws text directly (draw_string) and so bypasses the theme.
+
+const FONT_PATH := "res://assets/fonts/Fredoka-Variable.ttf"
+
+# Shared display font. Loaded once; used everywhere via the theme default plus
+# direct draw_string callers (DrawKit, action buttons, menu, results, etc.).
+var font: Font
 
 func _ready() -> void:
+	font = _load_font()
 	var theme := _build()
 	get_tree().root.theme = theme
+
+# Load the variable Fredoka TTF straight from disk (no import step needed) and
+# pin it to a bold-ish weight so headings read with confident, rounded strokes.
+func _load_font() -> Font:
+	var base := FontFile.new()
+	base.load_dynamic_font(FONT_PATH)
+	base.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+	var fv := FontVariation.new()
+	fv.base_font = base
+	fv.variation_opentype = {"wght": 600}   # SemiBold — friendly but solid
+	return fv
 
 func _build() -> Theme:
 	var theme := Theme.new()
 
-	# ---- Button ----
-	var RADIUS := 10
-	theme.set_stylebox("normal",   "Button", _btn(Palette.ARENA_FLOOR,  Palette.WALL,    RADIUS, 1.5))
-	theme.set_stylebox("hover",    "Button", _btn(Color(Palette.WALL, 0.6), Palette.ACCENT,  RADIUS, 2.0))
-	theme.set_stylebox("pressed",  "Button", _btn(Color("0d1018"),       Palette.NEUTRAL, RADIUS, 2.0))
+	# Make every Label / Button / Control use the rounded display font by default.
+	if font:
+		theme.set_default_font(font)
+		theme.set_default_font_size(22)
+
+	# ---- Button ---- (rounded, brighter to match the toy-box menu)
+	var RADIUS := 16
+	theme.set_stylebox("normal",   "Button", _btn(Color("26324a"),       Color(Palette.WALL, 0.85), RADIUS, 2.0))
+	theme.set_stylebox("hover",    "Button", _btn(Color("33446a"),       Palette.ACCENT,            RADIUS, 2.5))
+	theme.set_stylebox("pressed",  "Button", _btn(Color("1b2740"),       Palette.NEUTRAL,           RADIUS, 2.5))
 	theme.set_stylebox("disabled", "Button", _btn(Color(Palette.ARENA_BG, 0.8), Color(Palette.WALL, 0.3), RADIUS, 1.0))
 	theme.set_stylebox("focus",    "Button", _btn_empty())
-	theme.set_color("font_color",          "Button", Palette.ACCENT)
+	theme.set_color("font_color",          "Button", Color.WHITE)
 	theme.set_color("font_hover_color",    "Button", Color.WHITE)
-	theme.set_color("font_pressed_color",  "Button", Palette.NEUTRAL)
+	theme.set_color("font_pressed_color",  "Button", Color(Palette.ACCENT, 0.85))
 	theme.set_color("font_disabled_color", "Button", Color(Palette.NEUTRAL, 0.4))
 	theme.set_constant("h_separation", "Button", 8)
 

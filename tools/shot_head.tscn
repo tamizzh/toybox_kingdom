@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://b3jgf65tnppvq"]
+
+[ext_resource type="Script" path="res://tools/shot_head.gd" id="1_head"]
+
+[node name="ShotHead" type="Node"]
+script = ExtResource("1_head")

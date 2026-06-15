@@ -6,7 +6,7 @@ var _blocks: Array = []
 
 func _setup_round() -> void:
 	win_condition = WinType.LAST_ALIVE
-	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	add_child(build_arena())
 	spawn_avatars(corner_spawns(2.0))
 	for p in players:
 		avatars[p.id].speed = 6.8

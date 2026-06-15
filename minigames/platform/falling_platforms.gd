@@ -37,7 +37,7 @@ func _setup_round() -> void:
 	spawn_avatars(spts)
 	for p in players:
 		avatars[p.id].speed = 7.0
-	make_label("Tiles are falling — keep off the gaps!", Vector2(400, 96), 24)
+	# Instruction shown by the HUD tagline banner.
 
 func _paint(k: Vector2i) -> void:
 	var t: MeshInstance3D = _tiles[k]

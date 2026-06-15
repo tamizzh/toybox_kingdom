@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cmy1fvxwdnhh3"]
+
+[ext_resource type="Script" path="res://tools/shot_avatar.gd" id="1_av"]
+
+[node name="ShotAvatar" type="Node"]
+script = ExtResource("1_av")

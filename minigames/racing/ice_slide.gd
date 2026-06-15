@@ -7,7 +7,7 @@ var _order: Array = []
 
 func _setup_round() -> void:
 	win_condition = WinType.FAST_TIME
-	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	add_child(build_arena())
 	_finish_x = ARENA_HX - 1.2
 	spawn_marker(Vector3(_finish_x, 0.3, 0), Vector3(0.3, 0.6, ARENA_HZ * 2), Palette.SAFE)
 	spawn_avatars(lane_spawns(-ARENA_HX + 1.5))

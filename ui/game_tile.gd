@@ -42,6 +42,19 @@ func _ready() -> void:
 	cat_l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(cat_l)
 
+	# Session play-count badge (top-right corner) — only shown if played this session
+	var plays := MiniGameRegistry.get_play_count(idx)
+	if plays > 0:
+		var badge := Label.new()
+		badge.text = "▶ ×%d" % plays
+		badge.add_theme_font_size_override("font_size", 10)
+		badge.add_theme_color_override("font_color", Color(1, 1, 1, 0.80))
+		badge.position = Vector2(TILE_W - 46, 6)
+		badge.size = Vector2(42, 14)
+		badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(badge)
+
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		_down = event.pressed

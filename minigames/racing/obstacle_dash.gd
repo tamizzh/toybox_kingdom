@@ -11,9 +11,12 @@ var _rows := {}
 
 func _setup_round() -> void:
 	win_condition = WinType.HIGH_SCORE
-	add_child(WallArena3D.build(ARENA_HX, ARENA_HZ))
+	action_label = "JUMP"
+	# No interior crates — the moving red barriers are the only obstacles.
+	add_child(build_arena(ARENA_HX, ARENA_HZ, 1.6, 0.95, true, false))
 	var n := players.size()
 	var start_x := -ARENA_HX + 1.5
+	spawn_avatars(lane_spawns(start_x))
 	for i in n:
 		var p: PlayerData = players[i]
 		var z := -ARENA_HZ + 2.0 * ARENA_HZ * (i + 0.5) / n
@@ -21,7 +24,7 @@ func _setup_round() -> void:
 		avatars[p.id].global_position = Vector3(start_x, 0, z)
 		avatars[p.id].auto_input = false
 		avatars[p.id].face(Vector2(1, 0))
-	make_label("Tap to JUMP the barriers!", Vector2(440, 96), 24)
+	# Instruction shown by the HUD tagline banner.
 
 func _game_process(delta: float) -> void:
 	for p in players:

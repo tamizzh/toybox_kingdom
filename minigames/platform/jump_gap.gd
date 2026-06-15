@@ -12,6 +12,7 @@ var _rows := {}
 func _setup_round() -> void:
 	win_condition = WinType.LAST_ALIVE
 	var n := players.size()
+	spawn_avatars(lane_spawns(-ARENA_HX * 0.4))
 	for i in n:
 		var p: PlayerData = players[i]
 		var z := -ARENA_HZ + 2.0 * ARENA_HZ * (i + 0.5) / n
