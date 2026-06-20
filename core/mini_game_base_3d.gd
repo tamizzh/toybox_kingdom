@@ -24,14 +24,10 @@ var arena_color: Color = Palette.ARENA_BG  # warm tabletop — override per-game
 
 # Illustrated floor texture paths per game category.
 # build_arena() loads and passes these automatically.
-const _FLOOR_TEX := {
-	"Racing":   "res://assets/arenas/racing.png",
-	"Combat":   "res://assets/arenas/combat.png",
-	"Growth":   "res://assets/arenas/growth.png",
-	"Sports":   "res://assets/arenas/sports.png",
-	"Platform": "res://assets/arenas/platform.jpg",
-	"Reaction": "res://assets/arenas/reaction.png",
-}
+# Floor textures disabled: the toy-box reference art uses a clean blue
+# checkerboard floor for every game (decorations are drawn per-game as markers),
+# so we let WallArena3D fall back to its procedural checkerboard everywhere.
+const _FLOOR_TEX := {}
 
 # Drop-in replacement for `add_child(WallArena3D.build(...))` that automatically
 # applies the illustrated category floor texture.
@@ -44,6 +40,11 @@ func build_arena(half_x: float = ARENA_HX, half_z: float = ARENA_HZ,
 	return WallArena3D.build(half_x, half_z, wall_h, t, props, crates, tex)
 
 const AVATAR := preload("res://players/avatar3d.gd")
+
+# Painted floor-marking textures (projected via Decal so they stay crisp at any
+# camera angle, independent of the tile grid).
+const ARROW_DECAL := preload("res://assets/arrow_decal.png")
+const STAR_DECAL  := preload("res://assets/star_decal.png")
 
 # world-space play area (centred on origin, XZ plane)
 const ARENA_HX := 12.0
@@ -64,9 +65,9 @@ var _cam_rest_pos: Vector3        # saved resting position for screen-shake rest
 # solved per-frame-size so the arena fits the screen. FRAME_MARGIN=1.0 fills the
 # frame edge-to-edge (arena takes full width/height); >1.0 pulls back to show the
 # garden border, <1.0 crops in.
-const CAM_DIR := Vector3(0, 17, 12)
+const CAM_DIR := Vector3(0, 19, 11)
 const CAM_FOV := 50.0
-const FRAME_MARGIN := 1.14
+const FRAME_MARGIN := 1.03
 
 # ------------------------------------------------------------------ lifecycle
 func start_game(player_list: Array) -> void:
@@ -90,27 +91,47 @@ func _build_world() -> void:
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = arena_color          # warm tabletop seen outside arena
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color  = Color("d8e8f8")  # cool sky tint
-	env.ambient_light_energy = 0.65             # keep dark floor dark, characters still lit
-	# Gentle bloom — makes bright walls, player discs and collectibles glow softly
-	# for the glossy toy-box feel (supported on the mobile renderer).
+	env.ambient_light_color  = Color("e6eef8")  # cool sky tint
+	env.ambient_light_energy = 0.42             # lower so colours stay saturated, not washed
+	# Bloom only on genuinely bright things (player discs, emissive pickups) — a high
+	# threshold stops normally-lit surfaces from blooming into a pale wash.
 	env.glow_enabled = true
-	env.glow_intensity = 0.35
-	env.glow_strength = 0.95
-	env.glow_bloom = 0.10
+	env.glow_intensity = 0.22
+	env.glow_strength = 1.0
+	env.glow_bloom = 0.05
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
-	env.glow_hdr_threshold = 1.05
+	env.glow_hdr_threshold = 1.35
+	# Filmic tonemap holds candy saturation better than ACES; a saturation/contrast
+	# push gives the vivid toy-box pop from the reference art.
+	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.tonemap_exposure = 1.0
+	env.tonemap_white = 1.6
+	env.adjustment_enabled = true
+	env.adjustment_brightness = 1.0
+	env.adjustment_contrast = 1.10
+	env.adjustment_saturation = 1.22
+	# NOTE: renderer is "mobile" → SSAO/SSIL are ignored. Soft contact shadows come
+	# from blob-shadow decals (see _add_blob_shadow). Switch to Forward+ to use real
+	# SSAO instead (env.ssao_enabled = true).
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
 
-	# Key light — warm sun, soft shadow
+	# Key light — warm sun with soft, PCF-blurred shadows. Tight max_distance packs
+	# shadow texels onto the small arena so blur reads soft, not chunky.
 	var key := DirectionalLight3D.new()
-	key.rotation_degrees = Vector3(-52, -35, 0)
-	key.light_color    = Color("fff4e0")
-	key.light_energy   = 1.6
+	key.rotation_degrees = Vector3(-55, -38, 0)
+	key.light_color    = Color("fff3da")
+	key.light_energy   = 1.5
 	key.shadow_enabled = true
-	key.shadow_opacity = 0.35
+	key.shadow_opacity = 0.42
+	key.shadow_blur    = 1.6        # main soft-edge dial
+	key.shadow_bias    = 0.04
+	key.shadow_normal_bias = 1.2
+	key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	key.directional_shadow_blend_splits = true
+	key.directional_shadow_max_distance = 60.0
+	key.directional_shadow_split_1 = 0.18
 	add_child(key)
 
 	# Fill light — cool blue opposite side
@@ -125,7 +146,7 @@ func _build_world() -> void:
 	var dome := OmniLight3D.new()
 	dome.position = Vector3(0, 10, 0)
 	dome.light_color = Color("fff8f0")
-	dome.light_energy = 0.9
+	dome.light_energy = 0.5
 	dome.omni_range = 28.0
 	dome.shadow_enabled = false
 	add_child(dome)
@@ -442,6 +463,30 @@ func spawn_marker(center: Vector3, size: Vector3, color: Color, emissive: bool =
 
 func xz(v: Vector2, y: float = 0.0) -> Vector3:
 	return Vector3(v.x, y, v.y)
+
+# Project a painted floor marking (arrow / star / custom) onto the slate. Stays
+# crisp at grazing angles because it's a mipmapped Decal, not baked into a tile.
+# `size` may be a float (= world WIDTH; the Z depth is derived from the texture's
+# own aspect ratio so the art is never stretched, whatever the source pixel dims)
+# or a Vector2 to force an explicit (x, z) world footprint.
+func paint_decal(tex: Texture2D, pos: Vector3, size,
+				 color: Color = Color.WHITE, rot_y: float = 0.0) -> Decal:
+	var sz: Vector2
+	if size is Vector2:
+		sz = size
+	else:
+		var w := float(size)
+		var ts := tex.get_size()
+		var aspect: float = ts.y / ts.x if ts.x > 0.0 else 1.0
+		sz = Vector2(w, w * aspect)
+	var d := Decal.new()
+	d.texture_albedo = tex
+	d.modulate = color
+	d.size = Vector3(sz.x, 0.8, sz.y)
+	d.position = pos + Vector3(0, 0.04, 0)
+	d.rotation.y = rot_y
+	add_child(d)
+	return d
 
 func spawn_ball(radius: float, color: Color, emissive: bool = false) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()

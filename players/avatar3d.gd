@@ -15,7 +15,10 @@ var dead: bool = false
 
 var _visual: Node3D
 var _last_dir: Vector2 = Vector2.RIGHT
-var _body_mats: Array[StandardMaterial3D] = []
+var _body_mats: Array[ShaderMaterial] = []
+
+# Glossy designer-vinyl body shader (half-lambert + fake SSS + rim).
+const _VINYL_SHADER := preload("res://shaders/vinyl_toy.gdshader")
 
 var _bob_t: float = 0.0
 var _dust_t: float = 0.0
@@ -78,10 +81,12 @@ func _recolor_mascot(node: Node, c: Color) -> void:
 							 or "iris" in n or "shine" in n or "highlight" in n \
 							 or "white" in n or "cheek" in n
 			if not is_detail:
-				var mat := StandardMaterial3D.new()
-				mat.albedo_color = c
-				mat.roughness = 0.50
-				mat.metallic = 0.04
+				var mat := ShaderMaterial.new()
+				mat.shader = _VINYL_SHADER
+				mat.set_shader_parameter("base_color", c)
+				mat.set_shader_parameter("roughness", 0.20)
+				mat.set_shader_parameter("wrap", 0.45)
+				mat.set_shader_parameter("sss_strength", 0.30)
 				child.material_override = mat
 				_body_mats.append(mat)
 		_recolor_mascot(child, c)
@@ -176,7 +181,7 @@ func _spawn_dust() -> void:
 # ──────────────────────────────────────────────────── API ──
 func set_body_color(c: Color) -> void:
 	for mat in _body_mats:
-		mat.albedo_color = c
+		mat.set_shader_parameter("base_color", c)
 
 func set_body_scale(s: float) -> void:
 	if _visual:

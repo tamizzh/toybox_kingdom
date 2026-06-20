@@ -1,15 +1,15 @@
 """
 gen_floor_tile.py — generates assets/models/floor_tile.glb
 
-A single 4×4 floor tile (matching ts=4.0 in wall_arena3d.gd) with a beveled
-top edge so each tile reads as a distinct 3D slab — same depth effect as
-the reference art.
+A single 4×4 floor tile (matching ts=4.0 in wall_arena3d.gd) with a heavily
+rounded top so each tile reads as a soft "pillow/cushion" — matching the
+plush, rounded checkerboard tiles in the reference art.
 
 Tile dimensions in Godot:
-  X = 4.0, Y = 0.35 (slab height), Z = 4.0
+  X = 4.0, Y = 0.45 (slab height), Z = 4.0
 
 In Blender (Z-up, Y-up export):
-  X = 4.0, Y = 4.0, Z = 0.35  →  scale = (2.0, 2.0, 0.175)
+  X = 4.0, Y = 4.0, Z = 0.45  →  scale = (2.0, 2.0, 0.225)
 
 Run:
   blender --background --python tools/gen_floor_tile.py
@@ -28,15 +28,18 @@ for col in [bpy.data.meshes, bpy.data.materials, bpy.data.cameras, bpy.data.ligh
 bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))
 tile = bpy.context.active_object
 tile.name = "floor_tile"
-tile.scale = (2.0, 2.0, 0.175)          # → 4.0 × 4.0 × 0.35 world dims
+tile.scale = (2.0, 2.0, 0.225)          # → 4.0 × 4.0 × 0.45 world dims
 bpy.ops.object.transform_apply(scale=True)
 
-# Bevel top edges only — gives a recessed grout-line look between tiles
+# Heavy rounded bevel — turns each tile into a soft plush "pillow" with a
+# generous rounded edge and corners, matching the cushiony tiles in the
+# reference art. Smooth shading + SSAO (set in Godot) then give the soft
+# top highlight and the dark contact shadow in the grout seams.
 bev = tile.modifiers.new("Bevel", "BEVEL")
-bev.width            = 0.08
-bev.segments         = 3
+bev.width            = 0.30
+bev.segments         = 6
 bev.limit_method     = "ANGLE"
-bev.angle_limit      = 0.70   # ~40° — only the top-face perimeter edges
+bev.angle_limit      = 0.70   # ~40° — perimeter edges (top + vertical corners)
 bpy.ops.object.modifier_apply(modifier="Bevel")
 bpy.ops.object.shade_smooth()
 

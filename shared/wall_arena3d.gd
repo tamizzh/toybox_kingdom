@@ -14,6 +14,13 @@ const BRICK_SCENE := preload("res://assets/models/brick.glb")
 const TILE_SCENE  := preload("res://assets/models/floor_tile.glb")
 const CRATE_SCENE := preload("res://assets/models/crate.glb")
 
+# Toy-box surface shaders (see shaders/).
+const _BLOCK_SHADER := preload("res://shaders/toy_block.gdshader")
+const _FLOOR_SHADER := preload("res://shaders/slate_floor.gdshader")
+const _STAR_TEX     := preload("res://assets/star_overlay.png")
+const _SLATE_NOISE  := preload("res://assets/slate_noise.png")
+const _BLOB_TEX     := preload("res://assets/blob_shadow.png")
+
 const _BRICK_COLORS := [
 	Color("e83030"),  # red
 	Color("f5c020"),  # yellow
@@ -25,6 +32,12 @@ const _BRICK_COLORS := [
 const BRICK_W := 4.0   # width along the wall (Godot X for N/S walls)
 const BRICK_H := 3.0   # height
 const BRICK_D := 1.5   # depth into arena (= wall thickness t)
+
+# Rendered toy-cube dimensions (decoupled from the thin collision wall). Smaller
+# width → more cubes per side; taller + deeper → chunky molded-plastic look.
+const BLOCK_W     := 3.2   # target rendered block width along the wall
+const BLOCK_VIS_H := 2.2   # rendered block height
+const BLOCK_VIS_D := 1.5   # rendered block depth
 static var _material_cache: Dictionary = {}
 
 static func build(half_x: float, half_z: float,
@@ -62,28 +75,42 @@ static func build(half_x: float, half_z: float,
 		plane.position = Vector3(0, 0.01, 0)   # sit just above y=0 to avoid z-fight
 		root.add_child(plane)
 	else:
-		# Procedural checkerboard tiled floor (default): beveled slabs from
-		# floor_tile.glb — gives 3D depth matching the reference art.
+		# Procedural checkerboard tiled floor (default): plush pillow slabs from
+		# floor_tile.glb (heavily rounded) — soft 3D cushions matching the
+		# reference art. The wide grout gap + dark sub-floor read as soft seams.
 		var ts    := 4.0    # tile pitch (= brick width for visual alignment)
-		var gap   := 0.12   # grout gap between tiles
+		var gap   := 0.20   # grout gap between tiles (wider → pillows read separate)
 		var tile_s := ts - gap   # rendered tile size
 
 		var nz   := ceili(half_z / ts)   # enough rows to cover ±half_z
 		var nx_t := ceili(half_x / ts)   # enough cols to cover ±half_x
-		# Checkerboard: two alternating bright slate-blue shades
-		var floor_a := Color("5b7da8")   # brighter slate-blue
-		var floor_b := Color("46658c")   # deeper slate-blue
 
+		# Dark sub-floor under the tiles so the grout gaps read as dark seams
+		# (not the green grass below) and SSAO has something to shade against.
+		var sub := MeshInstance3D.new()
+		var sm := BoxMesh.new()
+		sm.size = Vector3(half_x * 2.0 + ts, 0.4, half_z * 2.0 + ts)
+		sub.mesh = sm
+		sub.position = Vector3(0, -0.205, 0)
+		var subm := StandardMaterial3D.new()
+		subm.albedo_color = Color("2a333f")   # dark slate grout
+		subm.roughness = 0.95
+		sub.material_override = subm
+		root.add_child(sub)
+
+		# Checkerboard: two alternating muted grey-blue slate shades. The actual
+		# colours live in slate_floor.gdshader (slate_a / slate_b); _apply_floor
+		# just flips tile_blend per cell so the noise/roughness break-up applies.
 		for iz in range(-nz, nz):
 			for ix in range(-nx_t, nx_t):
 				var ti := TILE_SCENE.instantiate()
+				# slab is 0.45 tall now → centre at -0.225 keeps the top at y=0
 				ti.position = Vector3(
 					(float(ix) + 0.5) * ts,
-					-0.175,
+					-0.225,
 					(float(iz) + 0.5) * ts)
 				ti.scale = Vector3(tile_s / 4.0, 1.0, tile_s / 4.0)
-				var checker_color := floor_a if (ix + iz) % 2 == 0 else floor_b
-				_apply_color(ti, checker_color, 0.5)
+				_apply_floor(ti, (ix + iz) % 2 == 0)
 				root.add_child(ti)
 
 	# ── walls ─────────────────────────────────────────────────────────────────
@@ -127,11 +154,17 @@ static func build(half_x: float, half_z: float,
 		# Brick visuals — brick width in the wall-length direction
 		# For rot_y=0 bricks: length spans X (sz.x).
 		# For rot_y=PI/2 bricks: length spans Z (sz.z).
+		# Chunky toy cubes: more, smaller blocks than the wall-length / model-width
+		# would give, rendered taller and deeper than the collision box so the
+		# border reads as molded plastic cubes (reference art), independent of the
+		# (thin) collision wall_h / t.
 		var wall_len := sz.z if rot_y > 0.01 else sz.x
-		var n_bricks := int(round(wall_len / BRICK_W))
+		var n_bricks := int(round(wall_len / BLOCK_W))
 		if n_bricks < 1:
 			n_bricks = 1
 		var actual_bw := wall_len / float(n_bricks)
+		# Lift so each block's base sits on the floor (y=0) regardless of wall_h.
+		var by := BLOCK_VIS_H * 0.5 - wall_h * 0.5
 
 		for bi in n_bricks:
 			var bc: Color = _BRICK_COLORS[brick_idx % _BRICK_COLORS.size()]
@@ -143,13 +176,12 @@ static func build(half_x: float, half_z: float,
 			# Brick centre relative to StaticBody3D
 			var bpos: Vector3
 			if rot_y > 0.01:
-				bpos = Vector3(0, 0, offset)
+				bpos = Vector3(0, by, offset)
 			else:
-				bpos = Vector3(offset, 0, 0)
+				bpos = Vector3(offset, by, 0)
 
-			# Scale bricks to the (smaller) wall height/thickness — daintier border,
-			# play bounds unchanged. Width (X) stays so the row still tiles.
-			_add_brick(body, bpos, rot_y, bc, Vector3(1.0, wall_h / BRICK_H, t / BRICK_D))
+			var sc := Vector3(actual_bw / BRICK_W, BLOCK_VIS_H / BRICK_H, BLOCK_VIS_D / BRICK_D)
+			_add_brick(body, bpos, rot_y, bc, sc)
 
 	# ── decorative crates ─────────────────────────────────────────────────────
 	# Four crates at symmetric positions inside the arena — give depth / cover.
@@ -178,6 +210,17 @@ static func build(half_x: float, half_z: float,
 		body.add_child(ci)
 		root.add_child(body)
 
+		# Fake contact-shadow blob under the crate (SSAO substitute on Mobile).
+		# Depth derived from the blob texture's aspect so it stays round, not oval.
+		var blob := Decal.new()
+		blob.texture_albedo = _BLOB_TEX
+		blob.modulate = Color(0, 0, 0, 0.5)
+		var bts := _BLOB_TEX.get_size()
+		var b_aspect: float = bts.y / bts.x if bts.x > 0.0 else 1.0
+		blob.size = Vector3(3.0, 1.4, 3.0 * b_aspect)
+		blob.position = pos + Vector3(0, 0.06, 0)
+		root.add_child(blob)
+
 	return root
 
 
@@ -197,12 +240,37 @@ static func _apply_color(node: Node, color: Color, roughness: float = 0.55) -> v
 	for child in node.get_children():
 		_apply_color(child, color, roughness)
 
-static func _material(color: Color, roughness: float) -> StandardMaterial3D:
-	var key := "%s|%.3f" % [color.to_html(), roughness]
+# Beveled molded-plastic block material (toy_block.gdshader) for the wall bricks.
+static func _material(color: Color, roughness: float) -> ShaderMaterial:
+	var key := "block|%s|%.3f" % [color.to_html(), roughness]
 	if _material_cache.has(key):
 		return _material_cache[key]
-	var m := StandardMaterial3D.new()
-	m.albedo_color = color
-	m.roughness = roughness
+	var m := ShaderMaterial.new()
+	m.shader = _BLOCK_SHADER
+	m.set_shader_parameter("base_color", color)
+	m.set_shader_parameter("roughness", roughness)
+	m.set_shader_parameter("star_tex", _STAR_TEX)
+	m.set_shader_parameter("star_strength", 0.10)
+	m.set_shader_parameter("rim_strength", 0.22)
+	m.set_shader_parameter("rim_power", 4.5)
+	_material_cache[key] = m
+	return m
+
+# Slate floor material (slate_floor.gdshader). is_a flips between the two checker
+# shades baked into the shader.
+static func _apply_floor(node: Node, is_a: bool) -> void:
+	if node is MeshInstance3D:
+		(node as MeshInstance3D).material_override = _floor_material(is_a)
+	for child in node.get_children():
+		_apply_floor(child, is_a)
+
+static func _floor_material(is_a: bool) -> ShaderMaterial:
+	var key := "floor|%s" % str(is_a)
+	if _material_cache.has(key):
+		return _material_cache[key]
+	var m := ShaderMaterial.new()
+	m.shader = _FLOOR_SHADER
+	m.set_shader_parameter("tile_blend", 0.0 if is_a else 1.0)
+	m.set_shader_parameter("rough_noise", _SLATE_NOISE)
 	_material_cache[key] = m
 	return m

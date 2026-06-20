@@ -8,23 +8,48 @@ extends RefCounted
 # pipeline) and placed deterministically from a seed so an arena looks identical
 # every round but different per game.
 
-const _GREENS := [Color("3fa34d"), Color("57b85f"), Color("2f8f3e"), Color("69c46f")]
+const _GREENS := [Color("4fb05a"), Color("63c46d"), Color("3f9e4c"), Color("78cf76")]
 const _FLOWERS := [Color("ff5d8f"), Color("ffd23f"), Color("ff8c42"),
 	Color("c46bff"), Color("ff5a5a"), Color("ffffff")]
-const _GROUND := Color("5b6b4a")   # soft moss
+const _GROUND := Color("5aa83f")   # bright lush lawn green
+# Dappled patch shades scattered over the lawn for a richer, less-flat look
+const _GRASS_PATCH := [Color("66b84a"), Color("4f9c38"), Color("72c252"), Color("5aa83f")]
 const _WOOD := Color("9a5f2c")
 const _WOOD_BAND := Color("4a3320")
 const _ROCK := Color("8b919c")
 static var _mesh_cache: Dictionary = {}
 static var _material_cache: Dictionary = {}
 
-# Build the outer grassy ground plane (sits just under the tiled floor).
-static func ground(half_x: float, half_z: float, color: Color = _GROUND) -> MeshInstance3D:
+# Build the outer grassy ground plane (sits just under the tiled floor), with a
+# dapple of lighter/darker grass patches scattered over it for a lush, varied lawn.
+static func ground(half_x: float, half_z: float, color: Color = _GROUND) -> Node3D:
+	var root := Node3D.new()
+	root.name = "Ground"
 	var mi := MeshInstance3D.new()
-	mi.mesh = _box_mesh(Vector3((half_x + 12.0) * 2.0, 0.2, (half_z + 12.0) * 2.0))
+	mi.mesh = _box_mesh(Vector3((half_x + 16.0) * 2.0, 0.2, (half_z + 16.0) * 2.0))
 	mi.position = Vector3(0, -0.12, 0)
-	mi.material_override = _mat(color, 0.85)
-	return mi
+	mi.material_override = _mat(color, 0.9)
+	root.add_child(mi)
+
+	# Dappled grass patches — flat thin discs of varied green over the outer band.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 4242
+	var ox := half_x + 1.5
+	var oz := half_z + 1.5
+	for i in 90:
+		# pick a point in the band outside the arena (reject the play area)
+		var px := rng.randf_range(-(half_x + 15.0), half_x + 15.0)
+		var pz := rng.randf_range(-(half_z + 15.0), half_z + 15.0)
+		if absf(px) < ox + 0.5 and absf(pz) < oz + 0.5:
+			continue
+		var patch := MeshInstance3D.new()
+		var r := rng.randf_range(1.2, 3.2)
+		patch.mesh = _cylinder_mesh(r, r, 0.06)
+		patch.material_override = _mat(_GRASS_PATCH[rng.randi() % _GRASS_PATCH.size()], 0.9)
+		patch.position = Vector3(px, -0.01, pz)
+		patch.scale = Vector3(1.0, 1.0, rng.randf_range(0.7, 1.3))
+		root.add_child(patch)
+	return root
 
 # Scatter props around the outside of the arena. Returns a node to add to the scene.
 static func scatter(half_x: float, half_z: float, seed_val: int = 1337) -> Node3D:
@@ -39,18 +64,19 @@ static func scatter(half_x: float, half_z: float, seed_val: int = 1337) -> Node3
 	var lo := 1.1
 	var hi := 5.5
 
-	# North / South borders (props spread along X, just beyond ±oz)
-	var nx := 14
+	# North / South borders (props spread along X, just beyond ±oz) — two staggered
+	# rows so the border reads as a dense, lush garden rather than a sparse line.
+	var nx := 20
 	for s in [-1.0, 1.0]:
 		for i in nx:
-			var x := lerpf(-ox - 3.0, ox + 3.0, (float(i) + rng.randf_range(0.15, 0.85)) / nx)
+			var x := lerpf(-ox - 4.0, ox + 4.0, (float(i) + rng.randf_range(0.10, 0.90)) / nx)
 			var z: float = s * (oz + rng.randf_range(lo, hi))
 			_place(root, rng, Vector3(x, 0, z))
 	# East / West borders (props spread along Z, just beyond ±ox)
-	var nz := 10
+	var nz := 14
 	for s in [-1.0, 1.0]:
 		for i in nz:
-			var z := lerpf(-oz - 3.0, oz + 3.0, (float(i) + rng.randf_range(0.15, 0.85)) / nz)
+			var z := lerpf(-oz - 4.0, oz + 4.0, (float(i) + rng.randf_range(0.10, 0.90)) / nz)
 			var x: float = s * (ox + rng.randf_range(lo, hi))
 			_place(root, rng, Vector3(x, 0, z))
 	return root
@@ -58,15 +84,17 @@ static func scatter(half_x: float, half_z: float, seed_val: int = 1337) -> Node3
 static func _place(root: Node3D, rng: RandomNumberGenerator, pos: Vector3) -> void:
 	var pick := rng.randf()
 	var node: Node3D
-	if pick < 0.34:
+	if pick < 0.26:
 		node = _bush(rng)
-	elif pick < 0.58:
+	elif pick < 0.50:
 		node = _flower(rng)
-	elif pick < 0.72:
+	elif pick < 0.68:
+		node = _grass_tuft(rng)
+	elif pick < 0.80:
 		node = _tree(rng)
-	elif pick < 0.84:
+	elif pick < 0.88:
 		node = _rock(rng)
-	elif pick < 0.94:
+	elif pick < 0.95:
 		node = _barrel(rng)
 	else:
 		node = _banner(rng)
@@ -88,6 +116,21 @@ static func _bush(rng: RandomNumberGenerator) -> Node3D:
 		s.position = Vector3(rng.randf_range(-0.45, 0.45), r * 0.75, rng.randf_range(-0.45, 0.45))
 		s.scale.y = rng.randf_range(0.8, 1.15)
 		n.add_child(s)
+	return n
+
+static func _grass_tuft(rng: RandomNumberGenerator) -> Node3D:
+	# A little cluster of upright grass blades — cheap lushness filler.
+	var n := Node3D.new()
+	var blades := rng.randi_range(4, 7)
+	var col: Color = _GREENS[rng.randi() % _GREENS.size()]
+	for i in blades:
+		var b := MeshInstance3D.new()
+		var h := rng.randf_range(0.35, 0.7)
+		b.mesh = _prism_mesh(Vector3(0.12, h, 0.12))
+		b.material_override = _mat(col, 0.75)
+		b.position = Vector3(rng.randf_range(-0.28, 0.28), h * 0.5, rng.randf_range(-0.28, 0.28))
+		b.rotation.z = rng.randf_range(-0.25, 0.25)
+		n.add_child(b)
 	return n
 
 static func _flower(rng: RandomNumberGenerator) -> Node3D:

@@ -20,26 +20,24 @@ func _setup_round() -> void:
 	_start_x = -ARENA_HX + 1.5
 	_finish_x = ARENA_HX - 1.0
 
-	# ── Finish line: bold green wall + checkerboard strip ──────────────────
-	# Tall bright green post strip
-	spawn_marker(Vector3(_finish_x, 0.8, 0),
-				 Vector3(0.5, 1.6, ARENA_HZ * 2.0), Palette.SAFE)
-	# Bright checkered overlay (alternating white/green tile marks)
-	for i in int(ARENA_HZ):
-		var col := Palette.SAFE if i % 2 == 0 else Palette.ACCENT
-		spawn_marker(Vector3(_finish_x, 0.06, -ARENA_HZ + i * 2.0 + 1.0),
-					 Vector3(0.5, 0.12, 1.8), col)
+	# ── Finish & start markers: bold dashed lines (blue finish, red start) ───
+	# Matches the dashed colored lines in the reference floor art. Finish
+	# detection still uses _finish_x in _game_process — these are purely visual.
+	_dashed_line(_finish_x, Palette.player_color(1))   # blue dashes, finish end
+	_dashed_line(_start_x,  Palette.player_color(0))   # red dashes,  start end
 
-	# ── Start line: white strip ─────────────────────────────────────────────
-	spawn_marker(Vector3(_start_x, 0.06, 0), Vector3(0.3, 0.12, ARENA_HZ * 2.0),
-				 Color(1, 1, 1, 0.55))
+	# ── Painted golden chevron runway down the centre, pointing to the finish ───
+	# Crisp arrow_decal segments projected on the slate (no pixelation at angle).
+	var seg_w := 3.4
+	var count := int((_finish_x - _start_x) / seg_w)
+	for i in count:
+		var cx := _start_x + seg_w * (float(i) + 0.7)
+		# Float width → depth auto-derived from the arrow texture's aspect (no skew).
+		paint_decal(ARROW_DECAL, Vector3(cx, 0.0, 0.0), seg_w * 0.92, Palette.WARN)
 
-	# ── Per-player lane stripes on the floor ────────────────────────────────
-	var lane_z := _lane_zs(players.size())
-	for i in players.size():
-		var pc := Palette.player_color(players[i].id)
-		spawn_marker(Vector3((_finish_x + _start_x) * 0.5, 0.04, lane_z[i]),
-					 Vector3(_finish_x - _start_x, 0.08, 0.25), Color(pc, 0.40))
+	# ── Decorative golden stars + centre trophy emblem (reference floor art) ──
+	_scatter_stars()
+	_trophy_emblem()
 
 	spawn_avatars(lane_spawns(_start_x))
 	for p in players:
@@ -47,12 +45,69 @@ func _setup_round() -> void:
 		avatars[p.id].auto_input = false
 		avatars[p.id].face(Vector2(1, 0))
 
-func _lane_zs(n: int) -> Array:
-	var step := ARENA_HZ * 1.4 / maxf(n, 1)
-	var out := []
+func _dashed_line(x: float, color: Color) -> void:
+	# A bold dashed line running across the arena (along Z) at the given X —
+	# the red (start) / blue (finish) dashed lines from the reference floor.
+	var n := 7
+	var z0 := -ARENA_HZ + 0.7
+	var z1 := ARENA_HZ - 0.7
 	for i in n:
-		out.append(-ARENA_HZ * 0.7 + step * (i + 0.5))
-	return out
+		var z: float = lerp(z0, z1, float(i) / float(n - 1))
+		spawn_marker(Vector3(x, 0.07, z), Vector3(0.42, 0.14, 1.05), color)
+
+func _scatter_stars() -> void:
+	# Small painted golden stars sprinkled across the floor (purely decorative),
+	# kept clear of the centre trophy and the player lanes' spawn band.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 9173
+	for i in 13:
+		var px := rng.randf_range(-ARENA_HX + 2.0, ARENA_HX - 2.0)
+		var pz := rng.randf_range(-ARENA_HZ + 1.2, ARENA_HZ - 1.2)
+		if absf(px) < 1.8 and absf(pz) < 1.8:
+			continue   # leave the centre clear for the trophy
+		paint_decal(STAR_DECAL, Vector3(px, 0.0, pz),
+					rng.randf_range(0.7, 1.0), Palette.WARN, rng.randf_range(-0.6, 0.6))
+
+func _trophy_emblem() -> void:
+	# A flat golden trophy emblem painted on the arena centre — the toy-box
+	# "goal" icon from the reference. Built from thin shapes laid on the floor
+	# (XZ plane), oriented upright toward the camera (cup toward -Z = up-screen).
+	# Emissive so it glows like painted floor art.
+	var root := Node3D.new()
+	add_child(root)
+	var gold := StandardMaterial3D.new()
+	gold.albedo_color = Palette.WARN
+	gold.roughness = 0.35
+	gold.metallic = 0.2
+	gold.emission_enabled = true
+	gold.emission = Palette.WARN
+	gold.emission_energy_multiplier = 0.6
+	var y := 0.05
+	var th := 0.06   # emblem thickness
+
+	# (x_size, z_size, z_center) blocky pieces forming a trophy silhouette
+	var parts := [
+		Vector2(1.10, 0.60),   # cup bowl
+		Vector2(0.46, 0.22),   # neck
+		Vector2(0.18, 0.30),   # stem
+		Vector2(0.66, 0.16),   # base plate
+	]
+	var z_centers := [-0.62, -0.20, 0.06, 0.34]
+	for i in parts.size():
+		var p: Vector2 = parts[i]
+		var mi := MeshInstance3D.new()
+		var bm := BoxMesh.new(); bm.size = Vector3(p.x, th, p.y)
+		mi.mesh = bm; mi.material_override = gold
+		mi.position = Vector3(0, y, z_centers[i])
+		root.add_child(mi)
+
+	# Two ring handles flanking the cup (flat tori read as rings from above)
+	for sx in [-1.0, 1.0]:
+		var h := MeshInstance3D.new()
+		var h_m := TorusMesh.new(); h_m.inner_radius = 0.10; h_m.outer_radius = 0.22
+		h.mesh = h_m; h.material_override = gold
+		h.position = Vector3(sx * 0.62, y, -0.62)
+		root.add_child(h)
 
 func _game_process(delta: float) -> void:
 	for p in players:

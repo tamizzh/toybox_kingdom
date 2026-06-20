@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -f debug_floor.gd debug_floor.gd.uid debug_floor.tscn _floor_shot.png _floor_shot.png.import)",
+      "Bash(ls debug_floor* _floor_shot*)",
+      "Bash(powershell -NoProfile -Command \"\\(Get-Command blender -ErrorAction SilentlyContinue\\).Source; Get-ChildItem 'C:\\\\Program Files\\\\Blender Foundation' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name\")",
+      "Bash(\"/c/Program Files/Blender Foundation/Blender 5.1/blender.exe\" --background --python tools/gen_floor_tile.py)"
+    ]
+  }
+}

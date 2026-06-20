@@ -8,8 +8,7 @@ const CHIP_H := 76.0
 
 var _time_label: Label
 var _timer_node: _TimerPill   # drawn widget that shows clock icon + number
-var _title_label: Label
-var _title_shadow: Label
+var _arched_title: _ArchedTitle
 var _subtitle_label: Label
 var _chips      := {}   # player_id -> Label (score number)
 var _chip_roots := {}   # player_id -> Panel
@@ -44,11 +43,12 @@ func _build_title() -> void:
 						Color(Palette.WARN, 0.85), 3)
 	add_child(accent)
 
-	# Title — big, white, drop-shadowed
-	_title_shadow = _label("", 38, Vector2(bx + 2, 90), Vector2(bw, 46), self)
-	_title_shadow.add_theme_color_override("font_color", Color(0.0, 0.0, 0.0, 0.55))
-	_title_label = _label("", 38, Vector2(bx, 88), Vector2(bw, 46), self)
-	_title_label.add_theme_color_override("font_color", Color.WHITE)
+	# Title — arched, thick-outlined glyphs drawn along a shallow curve.
+	_arched_title = _ArchedTitle.new()
+	_arched_title.position = Vector2(bx, 84)
+	_arched_title.size     = Vector2(bw, 54)
+	_arched_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_arched_title)
 
 	# Subtitle — smaller, warm, sits under the title
 	_subtitle_label = _label("", 20, Vector2(bx, 132), Vector2(bw, 28), self)
@@ -144,9 +144,8 @@ func set_time(t: float) -> void:
 		_time_label.text = "%d" % int(ceil(t))
 
 func set_status(text: String) -> void:
-	var up := text.to_upper()
-	if _title_label:   _title_label.text   = up
-	if _title_shadow:  _title_shadow.text  = up
+	if _arched_title:
+		_arched_title.set_text(text.to_upper())
 
 func set_subtitle(text: String) -> void:
 	if _subtitle_label:
@@ -201,7 +200,7 @@ class _TimerPill extends Control:
 		var w := size.x
 		var h := size.y
 		var fill := Color("c0392b") if _warn else Color(0.05, 0.06, 0.14, 0.95)
-		var num_col := Color("ff6b6b") if _warn else Palette.WARN
+		var num_col := Color("ff6b6b") if _warn else Color.WHITE
 
 		# Pill background with outline
 		DrawKit.card(self, Rect2(Vector2.ZERO, size), h * 0.5, fill, 4.0, true)
@@ -222,3 +221,39 @@ class _TimerPill extends Control:
 		# number
 		draw_string(font, Vector2(tx, ty), txt,
 					HORIZONTAL_ALIGNMENT_LEFT, -1, fs, num_col)
+
+
+# ── Arched title: glyphs laid along a shallow upward curve with a thick outline ──
+class _ArchedTitle extends Control:
+	var _text := ""
+	var font_size := 46
+	var arc := 16.0                      # px the ends drop below the centre
+	var fill := Color("ffd23f")          # warm gold like the reference banner
+	var outline := Color("5a2e00")       # dark brown outline
+	var outline_w := 6
+
+	func set_text(t: String) -> void:
+		if t != _text:
+			_text = t
+			queue_redraw()
+
+	func _draw() -> void:
+		if _text == "":
+			return
+		var font: Font = ArcadeTheme.font if ArcadeTheme.font else ThemeDB.fallback_font
+		var total := font.get_string_size(_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		var x := (size.x - total) * 0.5
+		var cy := size.y * 0.5 + font_size * 0.35
+		for i in _text.length():
+			var cp := _text.unicode_at(i)
+			var w := font.get_char_size(cp, font_size).x
+			var t := (x + w * 0.5) / size.x          # 0..1 across the width
+			var lift := arc * pow(2.0 * t - 1.0, 2.0)  # parabola: ends sit lower
+			var pos := Vector2(x, cy + lift)
+			# thick outline via 8-way offset draw
+			for dx in [-outline_w, 0, outline_w]:
+				for dy in [-outline_w, 0, outline_w]:
+					if dx != 0 or dy != 0:
+						draw_char(font, pos + Vector2(dx, dy), _text[i], font_size, outline)
+			draw_char(font, pos, _text[i], font_size, fill)
+			x += w

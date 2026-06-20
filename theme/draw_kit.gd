@@ -172,8 +172,26 @@ static func action_glyph(ci: CanvasItem, center: Vector2, r: float, kind: String
 			# Boot kick: angled foot shape
 			stroke(ci, center + Vector2(-r * 0.6, r * 0.3), center + Vector2(r * 0.6, -r * 0.5), 6.0, col)
 			stroke(ci, center + Vector2(r * 0.6, -r * 0.5), center + Vector2(r * 0.8, r * 0.3), 6.0, col)
+		"run":
+			# Running figure: head + leaning torso + striding legs + swinging arms.
+			var head := center + Vector2(r * 0.28, -r * 0.62)
+			ci.draw_circle(head, r * 0.30, col)
+			ci.draw_circle(head, r * 0.30, dk, false, 3.0)
+			var hip := center + Vector2(-r * 0.05, r * 0.18)
+			# torso (lean forward)
+			stroke(ci, head + Vector2(0, r * 0.28), hip, 5.0, col)
+			# legs in stride
+			var knee := hip + Vector2(r * 0.45, r * 0.30)
+			stroke(ci, hip, knee, 5.0, col)
+			stroke(ci, knee, knee + Vector2(r * 0.10, r * 0.55), 5.0, col)
+			stroke(ci, hip, hip + Vector2(-r * 0.45, r * 0.55), 5.0, col)
+			stroke(ci, hip + Vector2(-r * 0.45, r * 0.55), hip + Vector2(-r * 0.70, r * 0.85), 5.0, col)
+			# arms swinging
+			var shoulder := center + Vector2(r * 0.10, -r * 0.18)
+			stroke(ci, shoulder, shoulder + Vector2(r * 0.55, r * 0.10), 5.0, col)
+			stroke(ci, shoulder, shoulder + Vector2(-r * 0.45, r * 0.18), 5.0, col)
 		_:
-			# generic "run" arrow
+			# generic forward arrow
 			var t := PackedVector2Array([
 				center + Vector2(-r * 0.5, -r * 0.7), center + Vector2(r * 0.7, 0),
 				center + Vector2(-r * 0.5, r * 0.7)])
