@@ -77,16 +77,23 @@ func _recolor_mascot(node: Node, c: Color) -> void:
 		if child is MeshInstance3D:
 			var n := child.name.to_lower()
 			# Skip outline passes added by _add_outline, and small detail meshes.
+			# NOTE: cheeks are intentionally recolored with the body so the pink
+			# blush doesn't wash the body toward pink/purple (esp. on the blue ball).
 			var is_detail := "outline_" in n or "eye" in n or "pupil" in n \
 							 or "iris" in n or "shine" in n or "highlight" in n \
-							 or "white" in n or "cheek" in n
+							 or "white" in n
 			if not is_detail:
+				# Deepen + saturate the base so the bright high-key lighting reads it
+				# as vivid red/blue (raw palette colors wash out to pastel under fill).
+				var deep := c
+				deep.s = clampf(deep.s * 1.12, 0.0, 1.0)
+				deep.v = deep.v * 0.82
 				var mat := ShaderMaterial.new()
 				mat.shader = _VINYL_SHADER
-				mat.set_shader_parameter("base_color", c)
+				mat.set_shader_parameter("base_color", deep)
 				mat.set_shader_parameter("roughness", 0.20)
-				mat.set_shader_parameter("wrap", 0.45)
-				mat.set_shader_parameter("sss_strength", 0.30)
+				mat.set_shader_parameter("wrap", 0.28)  # more shading contrast → deeper, truer red/blue
+				mat.set_shader_parameter("sss_strength", 0.10)  # subtle warmth only — keeps red red and blue blue
 				child.material_override = mat
 				_body_mats.append(mat)
 		_recolor_mascot(child, c)

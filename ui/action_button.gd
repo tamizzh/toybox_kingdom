@@ -4,7 +4,7 @@ extends Control
 # Styled to match the toy-box reference: vivid coloured circle with icon glyph + label.
 
 var player_id: int = 0
-var radius: float   = 72.0
+var radius: float   = 82.0
 var caption: String = "ACTION"
 var player_color: Color = Color("f02828")   # set by touch_controls
 var _touch_index: int = -1
@@ -36,22 +36,19 @@ func _draw() -> void:
 	var fill := player_color.darkened(0.10) if _down else player_color
 	var scale_r := radius * (0.93 if _down else 1.0)
 
-	# Drop shadow
-	draw_circle(c + Vector2(0, 5), scale_r, Color(0, 0, 0, 0.22))
-	# Dark outline ring
-	draw_circle(c, scale_r, DrawKit.OUTLINE)
-	# Player-colour fill
-	draw_circle(c, scale_r - 4.0, fill)
-	# Lighter top highlight (glossy feel)
-	draw_circle(c + Vector2(0, -scale_r * 0.28), scale_r * 0.48, Color(1, 1, 1, 0.15))
+	draw_circle(c + Vector2(0, 6), scale_r, Color(0, 0, 0, 0.24))
+	draw_circle(c, scale_r, Color(fill, 0.42))
+	draw_arc(c, scale_r - 2.0, 0, TAU, 96, fill.lightened(0.18), 8.0)
+	draw_circle(c, scale_r - 12.0, fill.darkened(0.08))
+	draw_circle(c + Vector2(0, -scale_r * 0.30), scale_r * 0.48, Color(1, 1, 1, 0.18))
 
 	# Icon glyph (upper portion of circle)
 	var glyph := _verb_to_glyph(caption)
-	DrawKit.action_glyph(self, c + Vector2(0, -radius * 0.18), radius * 0.38, glyph, Color(1, 1, 1, 0.95))
+	DrawKit.action_glyph(self, c + Vector2(0, -radius * 0.18), radius * 0.34, glyph, Color(1, 1, 1, 0.96))
 
 	# Caption label (bottom portion)
 	var font: Font = ArcadeTheme.font if ArcadeTheme.font else ThemeDB.fallback_font
-	var fs := 19
+	var fs := 24
 	var tw := font.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	# Dark shadow
 	draw_string(font, c + Vector2(-tw * 0.5 + 1, radius * 0.58 + 1),

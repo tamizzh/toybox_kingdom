@@ -7,6 +7,11 @@ const TAP_IMPULSE := 3.0    # speed gained per tap
 const MAX_SPEED := 11.0     # cap so mashing has a ceiling
 const FRICTION := 8.0       # how fast speed bleeds off — forces you to keep tapping
 
+const CRATE_SCENE := preload("res://assets/models/crate.glb")
+const BLOB_SHADOW := preload("res://assets/blob_shadow.png")
+const RACE_RED := Color("f03a3a")
+const RACE_BLUE := Color("1688f6")
+
 var _finish_x: float
 var _start_x: float
 var _order: Array = []
@@ -23,8 +28,8 @@ func _setup_round() -> void:
 	# ── Finish & start markers: bold dashed lines (blue finish, red start) ───
 	# Matches the dashed colored lines in the reference floor art. Finish
 	# detection still uses _finish_x in _game_process — these are purely visual.
-	_dashed_line(_finish_x, Palette.player_color(1))   # blue dashes, finish end
-	_dashed_line(_start_x,  Palette.player_color(0))   # red dashes,  start end
+	_dashed_line(_finish_x, RACE_BLUE)   # blue dashes, finish end
+	_dashed_line(_start_x,  RACE_RED)    # red dashes, start end
 
 	# ── Painted golden chevron runway down the centre, pointing to the finish ───
 	# Crisp arrow_decal segments projected on the slate (no pixelation at angle).
@@ -38,12 +43,15 @@ func _setup_round() -> void:
 	# ── Decorative golden stars + centre trophy emblem (reference floor art) ──
 	_scatter_stars()
 	_trophy_emblem()
+	_add_reference_crates()
 
 	spawn_avatars(lane_spawns(_start_x))
 	for p in players:
 		_spd[p.id] = 0.0
 		avatars[p.id].auto_input = false
 		avatars[p.id].face(Vector2(1, 0))
+		if avatars[p.id].has_method("set_body_scale"):
+			avatars[p.id].set_body_scale(1.16)
 
 func _dashed_line(x: float, color: Color) -> void:
 	# A bold dashed line running across the arena (along Z) at the given X —
@@ -53,7 +61,8 @@ func _dashed_line(x: float, color: Color) -> void:
 	var z1 := ARENA_HZ - 0.7
 	for i in n:
 		var z: float = lerp(z0, z1, float(i) / float(n - 1))
-		spawn_marker(Vector3(x, 0.07, z), Vector3(0.42, 0.14, 1.05), color)
+		# Bold, lightly-glowing dashes so they pop on the blue floor under high-key light.
+		spawn_marker(Vector3(x, 0.08, z), Vector3(0.7, 0.12, 1.5), color, true)
 
 func _scatter_stars() -> void:
 	# Small painted golden stars sprinkled across the floor (purely decorative),
@@ -108,6 +117,26 @@ func _trophy_emblem() -> void:
 		h.mesh = h_m; h.material_override = gold
 		h.position = Vector3(sx * 0.62, y, -0.62)
 		root.add_child(h)
+
+func _add_reference_crates() -> void:
+	var spots := [
+		Vector3(-4.6, 0.0, -2.9),
+		Vector3( 4.9, 0.0, -2.8),
+		Vector3(-5.1, 0.0,  3.2),
+		Vector3( 5.0, 0.0,  3.1),
+	]
+	for pos in spots:
+		var crate := CRATE_SCENE.instantiate()
+		crate.position = pos
+		crate.scale = Vector3.ONE * 2.0
+		add_child(crate)
+
+		var blob := Decal.new()
+		blob.texture_albedo = BLOB_SHADOW
+		blob.modulate = Color(0, 0, 0, 0.38)
+		blob.size = Vector3(3.0, 1.2, 2.0)
+		blob.position = pos + Vector3(0, 0.05, 0)
+		add_child(blob)
 
 func _game_process(delta: float) -> void:
 	for p in players:

@@ -1,24 +1,21 @@
 extends Control
 
-# Bold, playful front screen: a big centred logo, a row of bobbing mascots, a
-# player-count selector and one dominant PLAY button over a bright toy-box
-# background. SHOP / SETTINGS sit quietly in the top-right corner.
+# Toybox Kingdoms front screen: a big centred logo, a row of rival ruler crests,
+# and one dominant PLAY button over a bright toy-box background. This is the app's
+# boot scene — PLAY launches the territory match directly. SHOP / SETTINGS sit
+# quietly in the top-right corner; coins/level chip in the top-left.
 
-const MascotFace := preload("res://ui/mascot_face.gd")
+const Roster := preload("res://toybox_kingdoms/data/roster.gd")
+const KINGDOM_MATCH := "res://toybox_kingdoms/kingdom_match.tscn"
+const ROSTER_PREVIEW := 5        # crests shown in the rival row
 
-var _humans: int = 2
-var _cpus: int = 0
-var _difficulty: int = 1
-var _party_mode: bool = true
-var _mode_btns: Array = []
-var _human_btns: Array = []
-var _cpu_btns: Array = []
-var _diff_btn: _DiffButton
 var _coin_label: Label
 var _hook_label: Label
 
 
 func _ready() -> void:
+	AudioManager.play_music("menu")
+
 	var bg := _BG.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -33,19 +30,16 @@ func _ready() -> void:
 	add_child(center)
 
 	var col := VBoxContainer.new()
-	col.custom_minimum_size = Vector2(820, 0)
-	col.add_theme_constant_override("separation", 14)
+	col.custom_minimum_size = Vector2(860, 0)
+	col.add_theme_constant_override("separation", 20)
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
 	center.add_child(col)
 
 	col.add_child(_logo_node())
-	col.add_child(_mascot_row())
-	col.add_child(_human_row())
-	col.add_child(_cpu_row())
-	col.add_child(_mode_row())
+	col.add_child(_roster_row())
 	col.add_child(_play_row())
 
-	_update_visual()
+	_refresh_hook()
 
 
 # ── Top-right SHOP / SETTINGS ──────────────────────────────────────────────────
@@ -121,9 +115,10 @@ func _menu_btn(text: String, color: Color, cb: Callable, width: int = 140) -> Bu
 
 # ── Logo ───────────────────────────────────────────────────────────────────────
 func _logo_node() -> Control:
-	var logo_tex := AssetKit.menu_logo()
-	if logo_tex == null:
-		logo_tex = AssetKit.logo()
+	# Prefer dedicated Toybox Kingdoms logo art if dropped in; otherwise draw the
+	# branded text lockup. (The legacy assets/ui/menu_logo.png is the old Party Pals
+	# logo, so we intentionally do not fall back to it.)
+	var logo_tex := AssetKit.tex(AssetKit.UI + "kingdom_logo")
 
 	if logo_tex == null:
 		var fallback := _title_lockup()
@@ -134,7 +129,7 @@ func _logo_node() -> Control:
 	logo.texture = logo_tex
 	logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	logo.custom_minimum_size = Vector2(620, 200)
+	logo.custom_minimum_size = Vector2(640, 210)
 	logo.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return logo
@@ -142,136 +137,61 @@ func _logo_node() -> Control:
 
 func _title_lockup() -> Control:
 	var wrap := VBoxContainer.new()
-	wrap.add_theme_constant_override("separation", -8)
+	wrap.add_theme_constant_override("separation", -10)
 
-	var party := Label.new()
-	party.text = "PARTY PALS"
-	party.add_theme_font_size_override("font_size", 84)
-	party.add_theme_color_override("font_color", Color.WHITE)
-	party.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	party.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrap.add_child(party)
+	var toybox := Label.new()
+	toybox.text = "TOYBOX"
+	toybox.add_theme_font_size_override("font_size", 92)
+	toybox.add_theme_color_override("font_color", Color.WHITE)
+	toybox.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.55))
+	toybox.add_theme_constant_override("outline_size", 10)
+	toybox.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	toybox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(toybox)
 
-	var arena := Label.new()
-	arena.text = "ARENA"
-	arena.add_theme_font_size_override("font_size", 84)
-	arena.add_theme_color_override("font_color", Palette.PLAYER_COLORS[3])
-	arena.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	arena.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrap.add_child(arena)
+	var kingdoms := Label.new()
+	kingdoms.text = "KINGDOMS"
+	kingdoms.add_theme_font_size_override("font_size", 92)
+	kingdoms.add_theme_color_override("font_color", Palette.WARN)
+	kingdoms.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.55))
+	kingdoms.add_theme_constant_override("outline_size", 10)
+	kingdoms.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	kingdoms.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(kingdoms)
 
 	return wrap
 
 
-# ── Mascot character row ─────────────────────────────────────────────────────────
-func _mascot_row() -> Control:
+# ── Rival ruler crest row ────────────────────────────────────────────────────────
+func _roster_row() -> Control:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 26)
+	row.add_theme_constant_override("separation", 22)
 	row.size_flags_horizontal = Control.SIZE_FILL
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for i in 4:
-		row.add_child(_mascot(i))
+	for i in ROSTER_PREVIEW:
+		row.add_child(_crest(i))
 	return row
 
 
-func _mascot(i: int) -> Control:
+func _crest(i: int) -> Control:
 	var bob := _Bobber.new()
-	bob.custom_minimum_size = Vector2(110, 110)
+	bob.custom_minimum_size = Vector2(150, 132)
 	bob.phase = float(i) * 0.7
 	bob.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var face := MascotFace.new()
-	face.set_color(Palette.player_color(i))
-	face.size = Vector2(96, 96)
-	face.position = Vector2(7, 7)
-	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bob.add_child(face)
-	bob.face = face
+	var crest := _Crest.new()
+	crest.accent = _kingdom_color(i)
+	crest.ruler_name = String(Roster.info(i)["name"])
+	crest.size = Vector2(150, 124)
+	crest.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bob.add_child(crest)
+	bob.face = crest
 	return bob
 
 
-# ── Players / CPU / difficulty selectors ─────────────────────────────────────────
-func _row_label(text: String) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.custom_minimum_size = Vector2(132, 0)
-	l.add_theme_font_size_override("font_size", 20)
-	l.add_theme_color_override("font_color", Color(Palette.ACCENT, 0.85))
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	return l
-
-
-func _selector_row() -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 12)
-	row.size_flags_horizontal = Control.SIZE_FILL
-	return row
-
-
-func _human_row() -> Control:
-	var row := _selector_row()
-	row.add_child(_row_label("PLAYERS"))
-	for n in [1, 2, 3, 4]:
-		var btn := _CountButton.new()
-		btn.value = n
-		btn.show_dots = true
-		btn.accent = Palette.player_color(n - 1)
-		btn.custom_minimum_size = Vector2(78, 92)
-		btn.pressed.connect(_on_humans.bind(n))
-		row.add_child(btn)
-		_human_btns.append(btn)
-	return row
-
-
-func _cpu_row() -> Control:
-	var row := _selector_row()
-	row.add_child(_row_label("CPUs"))
-	for n in [0, 1, 2, 3]:
-		var btn := _CountButton.new()
-		btn.value = n
-		btn.show_dots = false
-		btn.accent = Color("aa60ff")
-		btn.custom_minimum_size = Vector2(78, 92)
-		btn.pressed.connect(_on_cpus.bind(n))
-		row.add_child(btn)
-		_cpu_btns.append(btn)
-	_diff_btn = _DiffButton.new()
-	_diff_btn.custom_minimum_size = Vector2(150, 92)
-	_diff_btn.pressed.connect(_on_diff)
-	row.add_child(_diff_btn)
-	return row
-
-
-# ── Mode: PARTY (auto-rotate) vs PICK GAMES (manual grid) ─────────────────────────
-func _mode_row() -> Control:
-	var row := _selector_row()
-	row.add_child(_row_label("MODE"))
-	var party := _ModeButton.new()
-	party.title = "PARTY"
-	party.subtitle = "auto-rotate"
-	party.accent = Palette.WARN
-	party.custom_minimum_size = Vector2(196, 70)
-	party.pressed.connect(_on_mode.bind(true))
-	row.add_child(party)
-	_mode_btns.append(party)
-	var pick := _ModeButton.new()
-	pick.title = "PICK GAMES"
-	pick.subtitle = "choose each round"
-	pick.accent = Color("aa60ff")
-	pick.custom_minimum_size = Vector2(196, 70)
-	pick.pressed.connect(_on_mode.bind(false))
-	row.add_child(pick)
-	_mode_btns.append(pick)
-	return row
-
-
-func _on_mode(party: bool) -> void:
-	AudioManager.play("tap", randf_range(0.96, 1.06))
-	_party_mode = party
-	_update_visual()
+# Mirror of KingdomMatch._kingdom_color so menu crests match in-game banner colors.
+func _kingdom_color(i: int) -> Color:
+	return Color.from_hsv(fmod(0.02 + float(i) / float(Roster.RULERS.size()), 1.0), 0.85, 0.92)
 
 
 # ── PLAY ─────────────────────────────────────────────────────────────────────────
@@ -281,13 +201,13 @@ func _play_row() -> Control:
 	wrap.size_flags_horizontal = Control.SIZE_FILL
 
 	var play := _PlayButton.new()
-	play.custom_minimum_size = Vector2(380, 100)
+	play.custom_minimum_size = Vector2(420, 104)
 	play.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	play.pressed.connect(_on_play)
 	wrap.add_child(play)
 
 	var hint := Label.new()
-	hint.text = "First to 5 points wins"
+	hint.text = "Claim land · grow your kingdom · outlast 7 rival rulers"
 	hint.add_theme_font_size_override("font_size", 16)
 	hint.add_theme_color_override("font_color", Color(Palette.NEUTRAL, 0.9))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -303,6 +223,23 @@ func _play_row() -> Control:
 	_hook_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(_hook_label)
 	return wrap
+
+
+func _on_play() -> void:
+	AudioManager.play("tap")
+	get_tree().change_scene_to_file(KINGDOM_MATCH)
+
+
+func _refresh_hook() -> void:
+	if not _hook_label:
+		return
+	var next_pack := SaveManager.next_unlock_pack_id()
+	if next_pack != "":
+		var remaining := SaveManager.next_unlock_pack_remaining()
+		_hook_label.text = "%d more coins unlock %s colors" % [remaining, Cosmetics.name_of(next_pack)]
+		return
+	var progress := int(round(SaveManager.level_progress() * 100.0))
+	_hook_label.text = "Rule 40%% of the toybox to win   ·   Level %d %d%%" % [SaveManager.level(), progress]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────────
@@ -325,67 +262,7 @@ func _panel_style(bg: Color, border: Color, radius: int, border_width: int, padd
 	return s
 
 
-func _on_humans(n: int) -> void:
-	AudioManager.play("tap", randf_range(0.96, 1.06))
-	_humans = n
-	_cpus = clampi(_cpus, 0, 4 - _humans)
-	_update_visual()
-
-
-func _on_cpus(n: int) -> void:
-	if n > 4 - _humans:
-		return
-	AudioManager.play("tap", randf_range(0.96, 1.06))
-	_cpus = n
-	_update_visual()
-
-
-func _on_diff() -> void:
-	AudioManager.play("tap", randf_range(0.96, 1.06))
-	_difficulty = (_difficulty + 1) % 3
-	_update_visual()
-
-
-func _update_visual() -> void:
-	for btn in _human_btns:
-		btn.selected = btn.value == _humans
-		btn.queue_redraw()
-	for btn in _cpu_btns:
-		btn.usable = btn.value <= 4 - _humans
-		btn.selected = btn.value == _cpus
-		btn.queue_redraw()
-	if _diff_btn:
-		_diff_btn.level = _difficulty
-		_diff_btn.usable = _cpus > 0
-		_diff_btn.queue_redraw()
-	for i in _mode_btns.size():
-		_mode_btns[i].selected = (i == 0) == _party_mode
-		_mode_btns[i].queue_redraw()
-	_refresh_hook()
-
-func _refresh_hook() -> void:
-	if not _hook_label:
-		return
-	var next_pack := SaveManager.next_unlock_pack_id()
-	if next_pack != "":
-		var remaining := SaveManager.next_unlock_pack_remaining()
-		_hook_label.text = "%d more coins unlock %s colors" % [remaining, Cosmetics.name_of(next_pack)]
-		return
-	var progress := int(round(SaveManager.level_progress() * 100.0))
-	if _cpus > 0:
-		_hook_label.text = "Winner bonus: +%d coins   Level %d %d%%" % [GameManager.MATCH_COINS, SaveManager.level(), progress]
-	else:
-		_hook_label.text = "Quick rematches build XP fast   Level %d %d%%" % [SaveManager.level(), progress]
-
-
-func _on_play() -> void:
-	AudioManager.play("tap")
-	GameManager.party_mode = _party_mode
-	GameManager.setup_match(_humans, _cpus, _difficulty)
-	GameManager.start_match()
-
-
-# ── Mascot idle bob ────────────────────────────────────────────────────────────────
+# ── Crest idle bob ───────────────────────────────────────────────────────────────
 class _Bobber extends Control:
 	var face: Control
 	var phase: float = 0.0
@@ -393,7 +270,7 @@ class _Bobber extends Control:
 	func _process(delta: float) -> void:
 		_t += delta
 		if face:
-			face.position.y = 8.0 + sin(_t * 2.2 + phase) * 5.0
+			face.position.y = 4.0 + sin(_t * 2.2 + phase) * 5.0
 
 
 # ── Bright toy-box background ────────────────────────────────────────────────────
@@ -417,92 +294,20 @@ class _BG extends Control:
 				draw_circle(Vector2(ccol * step + 8, crow * step + 8), 1.4, dot_color)
 
 
-class _CountButton extends Button:
-	var value: int = 1
+# ── Rival crest: a kingdom-colour banner card with a crown and the ruler's name. ──
+class _Crest extends Control:
 	var accent: Color = Color.WHITE
-	var show_dots: bool = false
-	var selected: bool = false
-	var usable: bool = true
-
-	func _ready() -> void:
-		focus_mode = Control.FOCUS_NONE
-		flat = true
+	var ruler_name: String = ""
 
 	func _draw() -> void:
-		var rect := Rect2(Vector2.ZERO, size)
-		var fill := Color("141c2c")
-		if usable:
-			fill = Color("2a3a5e") if selected else Color("1b2740")
-		DrawKit.card(self, rect, 20.0, fill, 3.0, true)
-		if selected and usable:
-			draw_rect(Rect2(5, 5, size.x - 10, 6), Color(accent, 0.95))
-		var txt_col := Color.WHITE if usable else Color(1, 1, 1, 0.28)
-		var s := str(value)
-		var tw := ArcadeTheme.font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, 26).x
-		var ty := 34.0 if show_dots else size.y * 0.5 + 10.0
-		draw_string(ArcadeTheme.font, Vector2((size.x - tw) * 0.5, ty), s,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 26, txt_col)
-
-		if show_dots:
-			var r := 6.0
-			var gap := 7.0
-			var total := value * r * 2.0 + (value - 1) * gap
-			var sx := (size.x - total) * 0.5 + r
-			var y := 70.0
-			for i in value:
-				var x := sx + i * (r * 2.0 + gap)
-				draw_circle(Vector2(x, y), r + 2.0, Color.BLACK)
-				draw_circle(Vector2(x, y), r, Palette.player_color(i))
-
-
-class _DiffButton extends Button:
-	const NAMES := ["EASY", "NORMAL", "HARD"]
-	const COLS := [Color("10b83c"), Color("f5c018"), Color("f02828")]
-	var level: int = 1
-	var usable: bool = true
-
-	func _ready() -> void:
-		focus_mode = Control.FOCUS_NONE
-		flat = true
-
-	func _draw() -> void:
-		var fill := Color("1b2740") if usable else Color("141c2c")
-		DrawKit.card(self, Rect2(Vector2.ZERO, size), 20.0, fill, 3.0, true)
-		var c: Color = COLS[level]
-		draw_rect(Rect2(5, 5, size.x - 10, 6), Color(c, 0.95 if usable else 0.3))
-		var txt_col := Color.WHITE if usable else Color(1, 1, 1, 0.3)
-		var cap := "DIFFICULTY"
-		var ctw := ArcadeTheme.font.get_string_size(cap, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
-		draw_string(ArcadeTheme.font, Vector2((size.x - ctw) * 0.5, 34), cap,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(txt_col, 0.7))
-		var s: String = NAMES[level]
-		var tw := ArcadeTheme.font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
-		draw_string(ArcadeTheme.font, Vector2((size.x - tw) * 0.5, 64), s,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 22, txt_col)
-
-
-class _ModeButton extends Button:
-	var title: String = ""
-	var subtitle: String = ""
-	var accent: Color = Color.WHITE
-	var selected: bool = false
-
-	func _ready() -> void:
-		focus_mode = Control.FOCUS_NONE
-		flat = true
-
-	func _draw() -> void:
-		var fill := Color("2a3a5e") if selected else Color("1b2740")
-		DrawKit.card(self, Rect2(Vector2.ZERO, size), 18.0, fill, 3.0, true)
-		if selected:
-			draw_rect(Rect2(5, 5, size.x - 10, 6), Color(accent, 0.95))
-		var tcol := Color.WHITE if selected else Color(1, 1, 1, 0.6)
-		var tw := ArcadeTheme.font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
-		draw_string(ArcadeTheme.font, Vector2((size.x - tw) * 0.5, 38), title,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 22, tcol)
-		var sw := ArcadeTheme.font.get_string_size(subtitle, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
-		draw_string(ArcadeTheme.font, Vector2((size.x - sw) * 0.5, 58), subtitle,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(accent, 0.85 if selected else 0.5))
+		var card_rect := Rect2(0, 0, size.x, size.y - 26)
+		DrawKit.card(self, card_rect, 20.0, Color(accent, 0.32), 3.0, true)
+		# kingdom banner stripe
+		draw_rect(Rect2(6, 6, size.x - 12, 8), accent)
+		DrawKit.crown(self, Vector2(size.x * 0.5, card_rect.size.y * 0.56), size.x * 0.46, accent)
+		var tw := ArcadeTheme.font.get_string_size(ruler_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 17).x
+		draw_string(ArcadeTheme.font, Vector2((size.x - tw) * 0.5, size.y - 4), ruler_name,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
 
 
 class _PlayButton extends Button:

@@ -10,10 +10,10 @@ config_version=5
 
 [application]
 
-config/name="Party Pals Arena"
-config/description="Fast couch-multiplayer party mini-games for 1-4 players. Pass the phone, race to 5 points!"
+config/name="Toybox Kingdoms"
+config/description="Rule a tiny toybox world. Claim land, grow your kingdom, and outlast 7 rival rulers in fast territory-conquest matches."
 config/version="1.0.0"
-run/main_scene="res://main.tscn"
+run/main_scene="res://ui/main_menu.tscn"
 config/features=PackedStringArray("4.6", "Mobile")
 boot_splash/bg_color=Color(0.094, 0.078, 0.149, 1)
 boot_splash/image="res://assets/splash.png"

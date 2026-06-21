@@ -21,14 +21,39 @@ func setup(players: Array) -> void:
 	# clutter over the play area — skip them. Touch devices always get them.
 	if not DeviceMode.has_touch:
 		return
+	var humans: Array = []
 	for p in players:
-		if p.is_ai:
-			continue   # CPUs are driven by AIController, not on-screen sticks
-		_make_pair(p.id, p.color)
+		if not p.is_ai:   # CPUs are driven by AIController, not on-screen sticks
+			humans.append(p)
+	var vp := get_viewport_rect().size
+	if humans.size() == 1:
+		# Solo / vs-CPU: classic single-player layout — move on the left, action on
+		# the right (matches the reference art). The opponent shows only as a score chip.
+		_make_solo(humans[0].id, humans[0].color, vp)
+	else:
+		for p in humans:
+			_make_pair(p.id, p.color, vp)
 
-func _make_pair(pid: int, color: Color) -> void:
-	const W := 1560.0
-	const H := 720.0
+func _make_solo(pid: int, color: Color, vp: Vector2) -> void:
+	var joy = Joy.new()
+	joy.player_id    = pid
+	joy.player_color = color
+	var btn = Btn.new()
+	btn.radius       = 88.0
+	btn.player_id    = pid
+	btn.player_color = Color("1878f0")
+	btn.caption      = "ACTION"
+	add_child(joy)
+	add_child(btn)
+	joy.position = Vector2(52, vp.y - joy.radius * 2.0 - 52)               # bottom-left
+	btn.position = Vector2(vp.x - btn.radius * 2.0 - 70, vp.y - btn.radius * 2.0 - 70)  # bottom-right
+	_nodes.append(joy)
+	_nodes.append(btn)
+	_buttons.append(btn)
+
+func _make_pair(pid: int, color: Color, vp: Vector2) -> void:
+	var w := vp.x
+	var h := vp.y
 	# Joy radius=110 → diameter=220.  Btn radius=72 → diameter=144.
 	var joy = Joy.new()
 	joy.player_id = pid
@@ -39,17 +64,17 @@ func _make_pair(pid: int, color: Color) -> void:
 	add_child(btn)
 	match pid:
 		0:  # bottom-left
-			joy.position = Vector2(18,  H - 248)
-			btn.position = Vector2(256, H - 204)
+			joy.position = Vector2(18,  h - 248)
+			btn.position = Vector2(256, h - 204)
 		1:  # bottom-right
-			joy.position = Vector2(W - 238, H - 248)
-			btn.position = Vector2(W - 400, H - 204)
+			joy.position = Vector2(w - 238, h - 248)
+			btn.position = Vector2(w - 400, h - 204)
 		2:  # top-left
 			joy.position = Vector2(18,  28)
 			btn.position = Vector2(256, 72)
 		3:  # top-right
-			joy.position = Vector2(W - 238, 28)
-			btn.position = Vector2(W - 400, 72)
+			joy.position = Vector2(w - 238, 28)
+			btn.position = Vector2(w - 400, 72)
 	# Player colour: passed explicitly so each node draws its own color-aware art
 	joy.player_color = color
 	btn.player_color = color

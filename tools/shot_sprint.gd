@@ -4,6 +4,12 @@
 extends Node
 
 func _ready() -> void:
+	# Fixed window matching target.png aspect (~1.68) so framing is reproducible
+	# (project default is maximized, which varies by monitor).
+	var win := get_window()
+	win.mode = Window.MODE_WINDOWED
+	win.size = Vector2i(1300, 775)
+
 	var players: Array = [PlayerData.new(0), PlayerData.new(1)]
 	var script: GDScript = load("res://minigames/racing/sprint_race.gd")
 	var game: MiniGameBase3D = script.new()

@@ -24,22 +24,22 @@ for col in [bpy.data.meshes, bpy.data.materials, bpy.data.cameras, bpy.data.ligh
     for item in list(col):
         col.remove(item)
 
-# Tile slab: 4.0 × 0.35 × 4.0  (Blender X×Z×Y)
+# Tile slab: 4.0 × 0.40 × 4.0  (Blender X×Z×Y) — slightly lower profile, more rubber-like
 bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))
 tile = bpy.context.active_object
 tile.name = "floor_tile"
-tile.scale = (2.0, 2.0, 0.225)          # → 4.0 × 4.0 × 0.45 world dims
+tile.scale = (2.0, 2.0, 0.225)          # → 4.0 × 4.0 × 0.45 world dims (top sits at y=0)
 bpy.ops.object.transform_apply(scale=True)
 
-# Heavy rounded bevel — turns each tile into a soft plush "pillow" with a
-# generous rounded edge and corners, matching the cushiony tiles in the
-# reference art. Smooth shading + SSAO (set in Godot) then give the soft
-# top highlight and the dark contact shadow in the grout seams.
+# Tight chamfer: target.png tiles read as flat-topped slate slabs with a small
+# rounded lip, not soft pillows. A narrow bevel (0.10) with 3 segments keeps the
+# top face a large flat plateau and gives a crisp edge so the seam/groove between
+# tiles reads as a clean dark line. Angle limit keeps the top face flat.
 bev = tile.modifiers.new("Bevel", "BEVEL")
-bev.width            = 0.30
-bev.segments         = 6
+bev.width            = 0.10
+bev.segments         = 3
 bev.limit_method     = "ANGLE"
-bev.angle_limit      = 0.70   # ~40° — perimeter edges (top + vertical corners)
+bev.angle_limit      = 0.70   # ~40° — only perimeter edges, not interior faces
 bpy.ops.object.modifier_apply(modifier="Bevel")
 bpy.ops.object.shade_smooth()
 

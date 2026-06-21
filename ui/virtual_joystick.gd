@@ -44,31 +44,31 @@ func _draw() -> void:
 	var ring_col := player_color
 
 	# Drop shadow under base
-	draw_circle(c + Vector2(0, 4), radius, Color(0, 0, 0, 0.20))
+	draw_circle(c + Vector2(0, 6), radius, Color(0, 0, 0, 0.18))
 	# Dark outline ring (base plate)
-	draw_circle(c, radius, DrawKit.OUTLINE)
-	# Player-colour translucent base fill
-	draw_circle(c, radius - 4.0, Color(ring_col, 0.28))
-	# Bright ring edge
-	draw_arc(c, radius - 4.0, 0, TAU, 80, Color(ring_col, 0.90), 3.5)
+	draw_circle(c, radius, Color(ring_col, 0.44))
+	# Dark navy base plate (target's D-pad look — colour lives on the rim + knob)
+	draw_arc(c, radius - 2.0, 0, TAU, 96, Color(ring_col.lightened(0.10), 0.96), 8.0)
+	# Bright player-colour ring edge
+	draw_arc(c, radius - 14.0, 0, TAU, 96, Color(1, 1, 1, 0.16), 3.0)
 
 	# Cardinal directional arrows (N/S/E/W)
 	for i in 4:
 		var angle := TAU * i / 4.0 - PI * 0.5  # start at top
 		var dir := Vector2(cos(angle), sin(angle))
 		var tip := c + dir * (radius * 0.80)
-		var base_l := c + dir * (radius * 0.58) + Vector2(-dir.y, dir.x) * (radius * 0.14)
-		var base_r := c + dir * (radius * 0.58) - Vector2(-dir.y, dir.x) * (radius * 0.14)
+		var base_l := c + dir * (radius * 0.60) + Vector2(-dir.y, dir.x) * (radius * 0.12)
+		var base_r := c + dir * (radius * 0.60) - Vector2(-dir.y, dir.x) * (radius * 0.12)
 		var arrow := PackedVector2Array([tip, base_l, base_r])
-		draw_colored_polygon(arrow, Color(1, 1, 1, 0.55))
+		draw_colored_polygon(arrow, Color(1, 1, 1, 0.85))
 
 	# Knob
-	var knob_r := radius * 0.44
+	var knob_r := radius * 0.43
 	var knob_c := c + _value * (radius - knob_r * 0.7)
 	# Knob shadow
-	draw_circle(knob_c + Vector2(0, 4), knob_r, Color(0, 0, 0, 0.25))
+	draw_circle(knob_c + Vector2(0, 5), knob_r, Color(0, 0, 0, 0.25))
 	# Knob outline
-	draw_circle(knob_c, knob_r, DrawKit.OUTLINE)
+	draw_circle(knob_c, knob_r, Color(ring_col.darkened(0.35), 1.0))
 	# Knob fill — player colour
 	draw_circle(knob_c, knob_r - 3.5, ring_col)
 	# Knob highlight

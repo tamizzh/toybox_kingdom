@@ -10,12 +10,12 @@ uniform float roughness    : hint_range(0.0, 1.0) = 0.20;  // glossy
 uniform float specular     : hint_range(0.0, 1.0) = 0.62;
 
 uniform float wrap         : hint_range(0.0, 1.0) = 0.45;  // half-lambert softness
-uniform vec4  sss_tint     : source_color = vec4(1.0, 0.45, 0.40, 1.0);
+uniform vec4  sss_tint     : source_color = vec4(1.0, 0.72, 0.64, 1.0);  // gentle warmth, not heavy red (keeps blue from going purple)
 uniform float sss_strength : hint_range(0.0, 1.0) = 0.30;
 
 uniform vec4  rim_color    : source_color = vec4(1.0, 1.0, 1.0, 1.0);
-uniform float rim_power    : hint_range(0.5, 8.0) = 4.0;
-uniform float rim_strength : hint_range(0.0, 2.0) = 0.40;
+uniform float rim_power    : hint_range(0.5, 8.0) = 6.0;   // tighter rim → only the very edge, keeps small balls saturated
+uniform float rim_strength : hint_range(0.0, 2.0) = 0.16;
 
 void fragment() {
 	ALBEDO    = base_color.rgb;

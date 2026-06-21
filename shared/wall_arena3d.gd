@@ -21,6 +21,12 @@ const _STAR_TEX     := preload("res://assets/star_overlay.png")
 const _SLATE_NOISE  := preload("res://assets/slate_noise.png")
 const _BLOB_TEX     := preload("res://assets/blob_shadow.png")
 
+# PBR playground-rubber floor textures (soft blue-gray tiles with bevelled seams).
+const _FLOOR_ALBEDO    := preload("res://assets/floor_albedo.png")
+const _FLOOR_NORMAL    := preload("res://assets/floor_normal.png")
+const _FLOOR_ROUGHNESS := preload("res://assets/floor_roughness.png")
+const _FLOOR_AO        := preload("res://assets/floor_ao.png")
+
 const _BRICK_COLORS := [
 	Color("e83030"),  # red
 	Color("f5c020"),  # yellow
@@ -36,8 +42,8 @@ const BRICK_D := 1.5   # depth into arena (= wall thickness t)
 # Rendered toy-cube dimensions (decoupled from the thin collision wall). Smaller
 # width → more cubes per side; taller + deeper → chunky molded-plastic look.
 const BLOCK_W     := 3.2   # target rendered block width along the wall
-const BLOCK_VIS_H := 2.2   # rendered block height
-const BLOCK_VIS_D := 1.5   # rendered block depth
+const BLOCK_VIS_H := 2.2   # rendered block height (chunky but not looming)
+const BLOCK_VIS_D := 1.55  # rendered block depth (chunky, but less bulky in the close camera)
 static var _material_cache: Dictionary = {}
 
 static func build(half_x: float, half_z: float,
@@ -75,43 +81,17 @@ static func build(half_x: float, half_z: float,
 		plane.position = Vector3(0, 0.01, 0)   # sit just above y=0 to avoid z-fight
 		root.add_child(plane)
 	else:
-		# Procedural checkerboard tiled floor (default): plush pillow slabs from
-		# floor_tile.glb (heavily rounded) — soft 3D cushions matching the
-		# reference art. The wide grout gap + dark sub-floor read as soft seams.
-		var ts    := 4.0    # tile pitch (= brick width for visual alignment)
-		var gap   := 0.20   # grout gap between tiles (wider → pillows read separate)
-		var tile_s := ts - gap   # rendered tile size
-
-		var nz   := ceili(half_z / ts)   # enough rows to cover ±half_z
-		var nx_t := ceili(half_x / ts)   # enough cols to cover ±half_x
-
-		# Dark sub-floor under the tiles so the grout gaps read as dark seams
-		# (not the green grass below) and SSAO has something to shade against.
-		var sub := MeshInstance3D.new()
-		var sm := BoxMesh.new()
-		sm.size = Vector3(half_x * 2.0 + ts, 0.4, half_z * 2.0 + ts)
-		sub.mesh = sm
-		sub.position = Vector3(0, -0.205, 0)
-		var subm := StandardMaterial3D.new()
-		subm.albedo_color = Color("2a333f")   # dark slate grout
-		subm.roughness = 0.95
-		sub.material_override = subm
-		root.add_child(sub)
-
-		# Checkerboard: two alternating muted grey-blue slate shades. The actual
-		# colours live in slate_floor.gdshader (slate_a / slate_b); _apply_floor
-		# just flips tile_blend per cell so the noise/roughness break-up applies.
-		for iz in range(-nz, nz):
-			for ix in range(-nx_t, nx_t):
-				var ti := TILE_SCENE.instantiate()
-				# slab is 0.45 tall now → centre at -0.225 keeps the top at y=0
-				ti.position = Vector3(
-					(float(ix) + 0.5) * ts,
-					-0.225,
-					(float(iz) + 0.5) * ts)
-				ti.scale = Vector3(tile_s / 4.0, 1.0, tile_s / 4.0)
-				_apply_floor(ti, (ix + iz) % 2 == 0)
-				root.add_child(ti)
+		# Blue checkerboard rubber floor (default): one flat plane shaded by
+		# slate_floor.gdshader, which draws a per-tile checker of two periwinkle
+		# blues, a soft seam groove, and a faint star sprinkle — all in world space
+		# (target.png look). Pitch 3.4 → ~7 tiles across the arena width.
+		var plane := MeshInstance3D.new()
+		var pm := PlaneMesh.new()
+		pm.size = Vector2(half_x * 2.0, half_z * 2.0)
+		plane.mesh = pm
+		plane.material_override = _floor_material(true, 3.4, 3.4)
+		plane.position = Vector3(0, 0.01, 0)   # sit just above y=0 to avoid z-fight
+		root.add_child(plane)
 
 	# ── walls ─────────────────────────────────────────────────────────────────
 	# Each wall: one StaticBody3D for collision + a row of LEGO blocks.
@@ -231,7 +211,7 @@ static func _add_brick(parent: Node3D, pos: Vector3, rot_y: float,
 	inst.rotation.y      = rot_y
 	inst.scale           = scale
 	parent.add_child(inst)
-	_apply_color(inst, color, 0.38)   # glossier blocks for the toy-box sheen
+	_apply_color(inst, color, 0.30)   # glossy candy blocks for the toy-box sheen
 
 
 static func _apply_color(node: Node, color: Color, roughness: float = 0.55) -> void:
@@ -251,26 +231,78 @@ static func _material(color: Color, roughness: float) -> ShaderMaterial:
 	m.set_shader_parameter("roughness", roughness)
 	m.set_shader_parameter("star_tex", _STAR_TEX)
 	m.set_shader_parameter("star_strength", 0.10)
-	m.set_shader_parameter("rim_strength", 0.22)
-	m.set_shader_parameter("rim_power", 4.5)
+	m.set_shader_parameter("rim_strength", 0.30)
+	m.set_shader_parameter("rim_power", 4.0)
+	_material_cache[key] = m
+	return m
+
+# PBR rubber-tile floor material from the imported texture set. Tiled so ~11
+# tiles span the arena width; depth scaled to keep tiles roughly square.
+static func _pbr_floor_material(half_x: float, half_z: float) -> StandardMaterial3D:
+	var key := "pbrfloor|%.1f|%.1f" % [half_x, half_z]
+	if _material_cache.has(key):
+		return _material_cache[key]
+
+	var m := StandardMaterial3D.new()
+
+	# Albedo — the source map is a neutral-gray tile photo, so tint it toward the
+	# target's soft blue-gray rubber (≈ slate base #565F75) instead of letting the
+	# warm sun read it as tan.
+	m.albedo_texture = _FLOOR_ALBEDO
+	m.albedo_color   = Color(0.67, 0.75, 0.92)
+
+	# Normal map — soft tile bevels (visible chamfer between tiles).
+	m.normal_enabled = true
+	m.normal_texture = _FLOOR_NORMAL
+	m.normal_scale   = 0.6
+
+	# Matte rubber: no metal, roughness driven by the texture, soft satin sheen.
+	m.metallic                  = 0.0
+	m.metallic_specular         = 0.3
+	m.roughness                 = 1.0
+	m.roughness_texture         = _FLOOR_ROUGHNESS
+	m.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+
+	# Ambient occlusion — subtle depth in the tile seams (kept gentle).
+	m.ao_enabled         = true
+	m.ao_texture         = _FLOOR_AO
+	m.ao_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+	m.ao_light_affect    = 0.4
+
+	# This is playground rubber, not plastic or metal — keep these off.
+	m.clearcoat_enabled = false
+	m.emission_enabled  = false
+
+	# Tiling. The source map already contains ~7 tiles per copy, so a ~1.5×
+	# repeat puts ~10-12 tiles across the arena width. The plane aspect (~1.71)
+	# closely matches the texture aspect (~1.66), so equal scale keeps tiles
+	# roughly square.
+	m.texture_repeat = true
+	m.uv1_scale = Vector3(1.5, 1.5, 1.0)
+
 	_material_cache[key] = m
 	return m
 
 # Slate floor material (slate_floor.gdshader). is_a flips between the two checker
-# shades baked into the shader.
-static func _apply_floor(node: Node, is_a: bool) -> void:
+# shades baked into the shader. pitch_x/z must match ts_x/ts_z for the bevel UVs.
+static func _apply_floor(node: Node, is_a: bool,
+						  pitch_x: float = 3.2, pitch_z: float = 3.2) -> void:
 	if node is MeshInstance3D:
-		(node as MeshInstance3D).material_override = _floor_material(is_a)
+		(node as MeshInstance3D).material_override = _floor_material(is_a, pitch_x, pitch_z)
 	for child in node.get_children():
-		_apply_floor(child, is_a)
+		_apply_floor(child, is_a, pitch_x, pitch_z)
 
-static func _floor_material(is_a: bool) -> ShaderMaterial:
-	var key := "floor|%s" % str(is_a)
+static func _floor_material(is_a: bool,
+							 pitch_x: float = 3.2, pitch_z: float = 3.2) -> ShaderMaterial:
+	var key := "floor|%s|%.2f|%.2f" % [str(is_a), pitch_x, pitch_z]
 	if _material_cache.has(key):
 		return _material_cache[key]
 	var m := ShaderMaterial.new()
 	m.shader = _FLOOR_SHADER
 	m.set_shader_parameter("tile_blend", 0.0 if is_a else 1.0)
-	m.set_shader_parameter("rough_noise", _SLATE_NOISE)
+	m.set_shader_parameter("noise_tex", _SLATE_NOISE)
+	m.set_shader_parameter("star_tex", _STAR_TEX)
+	m.set_shader_parameter("tile_pitch_x", pitch_x)
+	m.set_shader_parameter("tile_pitch_z", pitch_z)
 	_material_cache[key] = m
 	return m

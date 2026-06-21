@@ -7,13 +7,16 @@
 extends Node
 
 func _ready() -> void:
-	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-	DisplayServer.window_set_size(Vector2i(1560, 720))
-
 	var args := OS.get_cmdline_user_args()
 	var slug: String = args[0] if args.size() > 0 else "snake_battle"
 	var count: int = int(args[1]) if args.size() > 1 else 2
 	var wait_s: float = float(args[2]) if args.size() > 2 else 3.2
+	var shot_size := Vector2i(1624, 968)  # target.png dimensions/aspect
+	if args.size() > 5:
+		shot_size = Vector2i(int(args[4]), int(args[5]))
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	DisplayServer.window_set_size(shot_size)
+	Palette.active_palette = Palette.PLAYER_COLORS
 
 	# Find the registry entry for this slug.
 	var entry := {}
@@ -34,6 +37,10 @@ func _ready() -> void:
 	var demo := [0, 1, 2, 3]
 	for i in count:
 		players[i].score = demo[i]
+	# Mark everyone past the local player as a CPU opponent, so the touch layer uses
+	# the single-player split layout (D-pad left, RUN right) like the reference art.
+	for i in range(1, count):
+		players[i].is_ai = true
 
 	# Game — mirrors GameManager.pick_game().
 	var game: MiniGameBase3D = load(entry.script).new()
@@ -59,7 +66,7 @@ func _ready() -> void:
 	hud.set_status(entry.title)
 	if hud.has_method("set_subtitle"):
 		hud.set_subtitle(entry.get("tagline", ""))
-	hud.set_time(45.0)
+	hud.set_time(16.0)
 
 	# Touch controls — force-show even on desktop so the shot matches the target.
 	DeviceMode.has_touch = true
@@ -73,15 +80,17 @@ func _ready() -> void:
 
 	await get_tree().create_timer(wait_s).timeout
 
-	# Spread any avatars across the arena and face the camera so they read well.
+	# Pose avatars for the shot: cluster on the left start, staggered diagonally and
+	# facing the run direction (+X) so their eyes read toward the camera — like target.png.
 	if not game.avatars.is_empty():
 		var ids := game.avatars.keys()
-		var xs := [-6.0, 4.0, -2.0, 7.0]
+		var spots := [Vector3(-6.0, 0.0, -1.4), Vector3(-8.0, 0.0, 1.6),
+					  Vector3(-2.0, 0.0, 0.0), Vector3(2.0, 0.0, 2.2)]
 		for i in ids.size():
 			var av = game.avatars[ids[i]]
-			av.global_position = Vector3(xs[i % xs.size()], 0.0, av.global_position.z)
+			av.global_position = spots[i % spots.size()]
 			if av.has_method("face"):
-				av.face(Vector2(0, -1))
+				av.face(Vector2(1, 0))
 		await get_tree().process_frame
 		await get_tree().process_frame
 

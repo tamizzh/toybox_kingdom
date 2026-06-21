@@ -8,12 +8,12 @@ extends RefCounted
 # pipeline) and placed deterministically from a seed so an arena looks identical
 # every round but different per game.
 
-const _GREENS := [Color("4fb05a"), Color("63c46d"), Color("3f9e4c"), Color("78cf76")]
+const _GREENS := [Color("3f984a"), Color("55ad58"), Color("367f40"), Color("6ab85f")]
 const _FLOWERS := [Color("ff5d8f"), Color("ffd23f"), Color("ff8c42"),
 	Color("c46bff"), Color("ff5a5a"), Color("ffffff")]
-const _GROUND := Color("5aa83f")   # bright lush lawn green
+const _GROUND := Color("4e8c35")   # lush lawn green, slightly muted so it doesn't read neon under high-key light
 # Dappled patch shades scattered over the lawn for a richer, less-flat look
-const _GRASS_PATCH := [Color("66b84a"), Color("4f9c38"), Color("72c252"), Color("5aa83f")]
+const _GRASS_PATCH := [Color("5ca543"), Color("477f32"), Color("67ad4d"), Color("50943a")]
 const _WOOD := Color("9a5f2c")
 const _WOOD_BAND := Color("4a3320")
 const _ROCK := Color("8b919c")
@@ -61,22 +61,24 @@ static func scatter(half_x: float, half_z: float, seed_val: int = 1337) -> Node3
 	var t := 1.5
 	var ox := half_x + t   # outer wall plane (X)
 	var oz := half_z + t   # outer wall plane (Z)
-	var lo := 1.1
-	var hi := 5.5
+	# Cluster props right against the wall so the dense flower/bush border reads in
+	# the tight target framing (props further out fall outside the frame).
+	var lo := 0.4
+	var hi := 3.2
 
 	# North / South borders (props spread along X, just beyond ±oz) — two staggered
 	# rows so the border reads as a dense, lush garden rather than a sparse line.
-	var nx := 20
+	var nx := 28
 	for s in [-1.0, 1.0]:
 		for i in nx:
-			var x := lerpf(-ox - 4.0, ox + 4.0, (float(i) + rng.randf_range(0.10, 0.90)) / nx)
+			var x := lerpf(-ox - 3.0, ox + 3.0, (float(i) + rng.randf_range(0.10, 0.90)) / nx)
 			var z: float = s * (oz + rng.randf_range(lo, hi))
 			_place(root, rng, Vector3(x, 0, z))
 	# East / West borders (props spread along Z, just beyond ±ox)
-	var nz := 14
+	var nz := 20
 	for s in [-1.0, 1.0]:
 		for i in nz:
-			var z := lerpf(-oz - 4.0, oz + 4.0, (float(i) + rng.randf_range(0.10, 0.90)) / nz)
+			var z := lerpf(-oz - 3.0, oz + 3.0, (float(i) + rng.randf_range(0.10, 0.90)) / nz)
 			var x: float = s * (ox + rng.randf_range(lo, hi))
 			_place(root, rng, Vector3(x, 0, z))
 	return root
@@ -84,17 +86,17 @@ static func scatter(half_x: float, half_z: float, seed_val: int = 1337) -> Node3
 static func _place(root: Node3D, rng: RandomNumberGenerator, pos: Vector3) -> void:
 	var pick := rng.randf()
 	var node: Node3D
-	if pick < 0.26:
+	if pick < 0.22:
 		node = _bush(rng)
-	elif pick < 0.50:
+	elif pick < 0.56:
 		node = _flower(rng)
 	elif pick < 0.68:
 		node = _grass_tuft(rng)
 	elif pick < 0.80:
 		node = _tree(rng)
-	elif pick < 0.88:
+	elif pick < 0.86:
 		node = _rock(rng)
-	elif pick < 0.95:
+	elif pick < 0.94:
 		node = _barrel(rng)
 	else:
 		node = _banner(rng)

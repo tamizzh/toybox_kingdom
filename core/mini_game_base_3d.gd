@@ -65,9 +65,15 @@ var _cam_rest_pos: Vector3        # saved resting position for screen-shake rest
 # solved per-frame-size so the arena fits the screen. FRAME_MARGIN=1.0 fills the
 # frame edge-to-edge (arena takes full width/height); >1.0 pulls back to show the
 # garden border, <1.0 crops in.
-const CAM_DIR := Vector3(0, 19, 11)
+const CAM_DIR := Vector3(0, 14, 13)   # ~47° hero 3/4: balanced, arena centered with even border
 const CAM_FOV := 50.0
-const FRAME_MARGIN := 1.03
+const FRAME_MARGIN := 1.02             # the fit box already includes walls + a thin garden border
+
+# Target-frame camera overrides used by _frame_camera(). The legacy constants
+# above stay in place for context, but the live camera uses these.
+const TARGET_CAM_DIR := Vector3(0, 13, 14)
+const TARGET_CAM_FOV := 48.0
+const TARGET_FRAME_MARGIN := 0.80
 
 # ------------------------------------------------------------------ lifecycle
 func start_game(player_list: Array) -> void:
@@ -89,72 +95,96 @@ func _build_world() -> void:
 	# flattening the coloured walls.
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = arena_color          # warm tabletop seen outside arena
+	env.background_color = arena_color
+	# Cool sky ambient — preserves the blue-gray tile hue while warm key provides contrast
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color  = Color("e6eef8")  # cool sky tint
-	env.ambient_light_energy = 0.42             # lower so colours stay saturated, not washed
-	# Bloom only on genuinely bright things (player discs, emissive pickups) — a high
-	# threshold stops normally-lit surfaces from blooming into a pale wash.
-	env.glow_enabled = true
-	env.glow_intensity = 0.22
-	env.glow_strength = 1.0
-	env.glow_bloom = 0.05
-	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
-	env.glow_hdr_threshold = 1.35
-	# Filmic tonemap holds candy saturation better than ACES; a saturation/contrast
-	# push gives the vivid toy-box pop from the reference art.
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.tonemap_exposure = 1.0
-	env.tonemap_white = 1.6
-	env.adjustment_enabled = true
-	env.adjustment_brightness = 1.0
-	env.adjustment_contrast = 1.10
-	env.adjustment_saturation = 1.22
-	# NOTE: renderer is "mobile" → SSAO/SSIL are ignored. Soft contact shadows come
-	# from blob-shadow decals (see _add_blob_shadow). Switch to Forward+ to use real
-	# SSAO instead (env.ssao_enabled = true).
+	env.ambient_light_color  = Color("e4eaf0")  # near-neutral cool fill (less blue → reds stay red, not pink)
+	env.ambient_light_energy = 0.48
+
+	# Bloom: lower threshold so toy surfaces catch a soft glow, not just neon.
+	# softlight mode gives the warm halo from the reference art.
+	env.glow_enabled         = true
+	env.glow_intensity       = 0.14
+	env.glow_strength        = 0.72
+	env.glow_bloom           = 0.02
+	env.glow_blend_mode      = Environment.GLOW_BLEND_MODE_SOFTLIGHT
+	env.glow_hdr_threshold   = 1.25  # only genuinely bright/emissive blooms — keeps colors saturated, not pastel
+
+	# ACES tonemap: filmic highlight roll-off that keeps the warm sun + glossy
+	# blocks from clipping, with a golden-hour saturation boost below.
+	env.tonemap_mode       = Environment.TONE_MAPPER_ACES
+	env.tonemap_exposure   = 1.0
+	env.tonemap_white      = 1.5
+	env.adjustment_enabled    = true
+	env.adjustment_brightness = 0.94
+	env.adjustment_contrast   = 1.08
+	env.adjustment_saturation = 1.12
+
+	# SSAO/SSIL: enabled for Forward+ renderer; ignored gracefully on Mobile.
+	# Adds the ambient occlusion between tile seams and under characters.
+	env.ssao_enabled   = true
+	env.ssao_intensity = 2.4
+	env.ssao_radius    = 0.8
+	env.ssao_power     = 1.8
+	env.ssil_enabled   = true
+	env.ssil_intensity = 0.6
+	env.ssil_radius    = 4.0
+
+	# Very subtle aerial perspective — softens far background without fog.
+	env.fog_enabled           = false  # keep it clean; DOF handles depth
+
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
 
-	# Key light — warm sun with soft, PCF-blurred shadows. Tight max_distance packs
-	# shadow texels onto the small arena so blur reads soft, not chunky.
+	# Key light — warm afternoon sun. Soft PCF shadows; tight max_distance keeps
+	# shadow texels dense on the small arena so blur reads silky, not chunky.
 	var key := DirectionalLight3D.new()
-	key.rotation_degrees = Vector3(-55, -38, 0)
-	key.light_color    = Color("fff3da")
-	key.light_energy   = 1.5
+	key.rotation_degrees = Vector3(-52, -38, 0)
+	key.light_color    = Color("ffe7c2")  # warm afternoon sun
+	key.light_energy   = 1.16
 	key.shadow_enabled = true
-	key.shadow_opacity = 0.42
-	key.shadow_blur    = 1.6        # main soft-edge dial
+	key.shadow_opacity = 0.30   # soft grey contact shadow, not a hard black band
+	key.shadow_blur    = 3.2    # soft shadow edges
 	key.shadow_bias    = 0.04
 	key.shadow_normal_bias = 1.2
 	key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 	key.directional_shadow_blend_splits = true
-	key.directional_shadow_max_distance = 60.0
-	key.directional_shadow_split_1 = 0.18
+	key.directional_shadow_max_distance = 30.0   # dense texels on the small arena → silky blur
+	key.directional_shadow_split_1 = 0.10
 	add_child(key)
 
-	# Fill light — cool blue opposite side
+	# Fill light — cool blue opposite to key for colour contrast
 	var fill := DirectionalLight3D.new()
 	fill.rotation_degrees = Vector3(-38, 148, 0)
 	fill.light_color    = Color("b8d0ff")
-	fill.light_energy   = 0.50
+	fill.light_energy   = 0.26
 	fill.shadow_enabled = false
 	add_child(fill)
 
-	# Overhead dome OmniLight — kills dark corners, keeps arena uniformly bright
+	# Overhead dome — kills dark corners uniformly
 	var dome := OmniLight3D.new()
 	dome.position = Vector3(0, 10, 0)
-	dome.light_color = Color("fff8f0")
-	dome.light_energy = 0.5
-	dome.omni_range = 28.0
+	dome.light_color = Color("fff8ee")
+	dome.light_energy = 0.28
+	dome.omni_range = 30.0
 	dome.shadow_enabled = false
 	add_child(dome)
+
+	# Cool bounce light from the floor — simulates GI from the blue rubber tiles.
+	# Kept cool/neutral so it doesn't push the red avatar toward pink.
+	var bounce := OmniLight3D.new()
+	bounce.position = Vector3(0, 0.5, 0)
+	bounce.light_color = Color("c8d0e0")  # cool neutral bounce
+	bounce.light_energy = 0.10
+	bounce.omni_range = 22.0
+	bounce.shadow_enabled = false
+	add_child(bounce)
 
 	# top-down-ish perspective camera, framed to fill whatever viewport we get
 	# (desktop, mobile landscape, or portrait). Re-frames on rotation / resize.
 	_cam = Camera3D.new()
-	_cam.fov = CAM_FOV
+	_cam.fov = TARGET_CAM_FOV
 	_cam.keep_aspect = Camera3D.KEEP_HEIGHT
 	add_child(_cam)
 	_frame_camera()
@@ -177,22 +207,27 @@ func _frame_camera() -> void:
 		return
 	var size := vp.get_visible_rect().size
 	var aspect: float = size.x / maxf(size.y, 1.0)
-	var t: float = tan(deg_to_rad(CAM_FOV) * 0.5)
+	var t: float = tan(deg_to_rad(TARGET_CAM_FOV) * 0.5)
 	var th: float = t * aspect
 
-	var vd := CAM_DIR.normalized()
+	var vd := TARGET_CAM_DIR.normalized()
 	var f := -vd
 	var r := f.cross(Vector3.UP).normalized()
 	if r.length() < 0.001:
 		r = Vector3.RIGHT
 	var u := r.cross(f).normalized()
 
-	var hy := 1.3
+	# Pad the fit box outward to include the surrounding walls (which protrude ~1.5
+	# beyond the inner arena and rise ~2.2 tall) plus a thin garden border, so the
+	# whole walled arena stays framed with a slim border all around (target look).
+	var hy := 2.3   # headroom so the chunky wall blocks aren't clipped at the top
+	var ex := ARENA_HX + 2.0
+	var ez := ARENA_HZ + 2.0
 	var corners := [
-		Vector3(-ARENA_HX, 0, -ARENA_HZ), Vector3(ARENA_HX, 0, -ARENA_HZ),
-		Vector3(-ARENA_HX, 0,  ARENA_HZ), Vector3(ARENA_HX, 0,  ARENA_HZ),
-		Vector3(-ARENA_HX, hy, -ARENA_HZ), Vector3(ARENA_HX, hy, -ARENA_HZ),
-		Vector3(-ARENA_HX, hy,  ARENA_HZ), Vector3(ARENA_HX, hy,  ARENA_HZ),
+		Vector3(-ex, 0, -ez), Vector3(ex, 0, -ez),
+		Vector3(-ex, 0,  ez), Vector3(ex, 0,  ez),
+		Vector3(-ex, hy, -ez), Vector3(ex, hy, -ez),
+		Vector3(-ex, hy,  ez), Vector3(ex, hy,  ez),
 	]
 
 	var lo := 5.0
@@ -204,10 +239,22 @@ func _frame_camera() -> void:
 		else:
 			lo = mid
 
-	_cam.position = vd * (hi * FRAME_MARGIN)
+	_cam.position = vd * (hi * TARGET_FRAME_MARGIN)
 	_cam_rest_pos = _cam.position
 	_cam.look_at(Vector3.ZERO, Vector3.UP)
 	_cam.make_current()
+
+	# Depth-of-field: keep the play grid razor sharp, softly blur the garden behind
+	# it (the reference look). Far blur starts past the arena's far edge.
+	var cam_dist := _cam.position.length()
+	var attr := _cam.attributes as CameraAttributesPractical
+	if attr == null:
+		attr = CameraAttributesPractical.new()
+		_cam.attributes = attr
+	attr.dof_blur_far_enabled = true
+	attr.dof_blur_far_distance = cam_dist * 1.20   # keep the playfield crisp; blur the outer garden
+	attr.dof_blur_far_transition = cam_dist * 0.20
+	attr.dof_blur_amount = 0.08
 
 func _arena_fits(cpos: Vector3, f: Vector3, r: Vector3, u: Vector3, t: float, th: float, corners: Array) -> bool:
 	for p in corners:

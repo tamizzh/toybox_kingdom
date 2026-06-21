@@ -3,6 +3,9 @@
 ## Run:  godot --path . tools/gen_splash.tscn
 extends Node
 
+const Roster := preload("res://toybox_kingdoms/data/roster.gd")
+
+
 func _ready() -> void:
 	var vp := SubViewport.new()
 	vp.size = Vector2i(1280, 720)
@@ -15,29 +18,26 @@ func _ready() -> void:
 	bg.size = Vector2(1280, 720)
 	vp.add_child(bg)
 
-	var f1 := MascotFace.new()
-	f1.set_color(Palette.PLAYER_COLORS[0])
-	f1.size = Vector2(200, 200)
-	f1.position = Vector2(420, 200)
-	vp.add_child(f1)
-	var f2 := MascotFace.new()
-	f2.set_color(Palette.PLAYER_COLORS[1])
-	f2.size = Vector2(200, 200)
-	f2.position = Vector2(660, 200)
-	vp.add_child(f2)
+	# A row of rival-ruler crowns in their kingdom colours.
+	var crowns := _CrownRow.new()
+	crowns.size = Vector2(1280, 240)
+	crowns.position = Vector2(0, 150)
+	vp.add_child(crowns)
 
 	var title := Label.new()
-	title.text = "PARTY PALS ARENA"
-	title.add_theme_font_size_override("font_size", 80)
+	title.text = "TOYBOX KINGDOMS"
+	title.add_theme_font_size_override("font_size", 92)
 	title.add_theme_color_override("font_color", Color.WHITE)
+	title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.55))
+	title.add_theme_constant_override("outline_size", 12)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.size = Vector2(1280, 100)
-	title.position = Vector2(0, 430)
+	title.size = Vector2(1280, 110)
+	title.position = Vector2(0, 410)
 	vp.add_child(title)
 
 	var sub := Label.new()
-	sub.text = "Pass the phone. Race to 5."
-	sub.add_theme_font_size_override("font_size", 32)
+	sub.text = "Claim the land. Rule the toybox."
+	sub.add_theme_font_size_override("font_size", 34)
 	sub.add_theme_color_override("font_color", Color("ffd23f"))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.size = Vector2(1280, 50)
@@ -51,3 +51,15 @@ func _ready() -> void:
 	img.save_png(ProjectSettings.globalize_path("res://assets/splash.png"))
 	print("SPLASH_SAVED:", ProjectSettings.globalize_path("res://assets/splash.png"))
 	get_tree().quit()
+
+
+# Five kingdom crowns bobbing across the splash, coloured to match the in-game banners.
+class _CrownRow extends Control:
+	const N := 5
+	func _draw() -> void:
+		var spacing := size.x / float(N + 1)
+		for i in N:
+			var c := Color.from_hsv(fmod(0.02 + float(i) / float(Roster.RULERS.size()), 1.0), 0.85, 0.92)
+			var cx := spacing * float(i + 1)
+			var cy := size.y * 0.5 + sin(float(i) * 1.1) * 18.0
+			DrawKit.crown(self, Vector2(cx, cy), 150.0, c, 6.0)
