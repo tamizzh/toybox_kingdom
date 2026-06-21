@@ -23,6 +23,7 @@ const Roster := preload("res://toybox_kingdoms/data/roster.gd")
 const Minimap := preload("res://toybox_kingdoms/ui/minimap.gd")
 const Scatter := preload("res://toybox_kingdoms/env/scatter.gd")
 const GrassTexture := preload("res://toybox_kingdoms/env/grass_texture.gd")
+const TerritoryGround := preload("res://toybox_kingdoms/grid/territory_ground.gd")
 
 const GW := 128
 const GH := 96
@@ -50,6 +51,7 @@ var _minimap
 
 var _populace
 var _scatter
+var _ground
 var _kingdom_t := 0.0
 var _terr_rebuild_t := 0.0
 
@@ -84,13 +86,19 @@ func _ready() -> void:
 
 	renderer = GridRenderer.new()
 	add_child(renderer)
-	renderer.setup(grid, CELL, _kid_color)
-	renderer.build_neutral()
+	renderer.setup(grid, CELL, _kid_color)   # trails + flash only now (cube fill removed)
 
 	# spawn kingdoms
 	for i in N_KINGDOMS:
 		_spawn_kingdom(i)
-	renderer.rebuild_territory()
+
+	# NEW painted-ground territory (replaces the territory cubes)
+	_ground = TerritoryGround.new()
+	add_child(_ground)
+	_ground.setup(grid, CELL, _kid_color)
+	_ground.update()
+	# Borders are now part of the clay (raised plateau + seam AO in the ground
+	# shader) — no more crenellated wall cubes ringing every region.
 
 	# the town layer: houses + citizens rising from claimed land
 	_populace = Populace.new()
@@ -109,7 +117,7 @@ func _ready() -> void:
 
 	# camera follows the human
 	camera = KingdomCamera.new()
-	camera.offset = Vector3(0.0, 22.0, 17.0)
+	camera.offset = Vector3(0.0, 13.0, 11.0)   # closer ~50° follow
 	add_child(camera)
 	camera.target = _rulers[0].avatar
 
@@ -222,7 +230,7 @@ func _physics_process(delta: float) -> void:
 	# show instantly via the flash; the slab catches up within 0.1s).
 	_terr_rebuild_t -= delta
 	if grid.has_dirty() and _terr_rebuild_t <= 0.0:
-		renderer.rebuild_territory()
+		_ground.update()
 		grid.reset_dirty()
 		_terr_rebuild_t = 0.1
 	_kingdom_tick(delta)
@@ -247,8 +255,33 @@ func _kingdom_tick(delta: float) -> void:
 			if not a.is_ai:
 				AudioManager.play("round_win")   # your kingdom leveled up
 
+	_check_conquests()
 	_check_eliminations()
 	_check_match_end()
+
+# If a kingdom's castle cell has been claimed by a rival, the whole kingdom falls
+# to that rival — BUT only if the attacker's castle is at least as high a level as
+# the defender's. A weaker attacker can't take the castle: it defends + reclaims
+# its core.
+func _check_conquests() -> void:
+	for a in _rulers:
+		if a.eliminated:
+			continue
+		var ho: int = grid.get_owner(a.home.x, a.home.y)
+		if ho == a.kid or ho == 0:
+			continue
+		var conq = _kid_to_agent.get(ho)
+		var def_tier: int = a.castle.tier if a.castle != null else 1
+		var conq_tier: int = conq.castle.tier if (conq != null and conq.castle != null) else 1
+		if conq_tier >= def_tier:
+			grid.transfer_all(a.kid, ho)
+			_toast("%s conquered %s!" % [_kid_name.get(ho, "?"), _kid_name[a.kid]],
+				_kid_color.get(ho, Color.WHITE))
+		else:
+			# castle out-levels the attacker -> it holds and reclaims its core
+			grid.seed_kingdom(a.kid, a.home.x, a.home.y, HOME_R)
+			if a == _rulers[0] or conq == _rulers[0]:
+				_toast("%s's castle held!" % _kid_name[a.kid], _kid_color[a.kid])
 
 # A kingdom whose territory hits zero is conquered for good.
 func _check_eliminations() -> void:
@@ -513,58 +546,101 @@ func _home_anchor(i: int, n: int) -> Vector2i:
 	var y := int(lerpf(16.0, GH - 16.0, row / float(maxi(rows - 1, 1))))
 	return Vector2i(x, y)
 
+# The 8 kingdom colours, sampled from the atlas's coloured ground tiles so the
+# painted territory matches the art exactly.
+const KINGDOM_COLORS := [
+	Color("1365d3"), Color("d33921"), Color("679d11"), Color("e8ab0a"),
+	Color("803dba"), Color("2ba5ac"), Color("e7740b"), Color("e85379"),
+]
+
 func _kingdom_color(i: int, n: int) -> Color:
-	return Color.from_hsv(fmod(0.02 + float(i) / float(n), 1.0), 0.85, 0.92)
+	return KINGDOM_COLORS[i % KINGDOM_COLORS.size()]
 
 # ── world dressing ────────────────────────────────────────────────────────────
 func _build_environment() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("27331f")   # deep forest shadow framing the grassland
+	env.background_color = Color("0c2733")   # deep teal sea framing the clay continent
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color("ffeccb")  # warm sky bounce
-	env.ambient_light_energy = 0.36
+	env.ambient_light_color = Color("d4e2ec")  # soft sky fill
+	env.ambient_light_energy = 0.32           # lower = richer, less washed colours
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.tonemap_white = 1.0
-	# richer, more saturated look (the target art is deep + golden, not washed)
+	env.ssao_enabled = true                  # deepen clay crevices + cell seams
+	env.ssao_intensity = 2.8
+	env.ssao_radius = 0.6
+	env.ssao_power = 2.2
 	env.adjustment_enabled = true
-	env.adjustment_brightness = 0.97
-	env.adjustment_contrast = 1.12
-	env.adjustment_saturation = 1.18
+	env.adjustment_brightness = 0.99
+	env.adjustment_contrast = 1.14
+	env.adjustment_saturation = 1.30         # punchy toy colours
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
-	# warm golden-hour key with soft shadows
+	# warm key for a sunny tabletop; soft long shadows sell the clay relief
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-50, -42, 0)
-	key.light_color = Color("ffd98f")
-	key.light_energy = 1.05
+	key.light_color = Color("fff0d2")
+	key.light_energy = 1.1
 	key.shadow_enabled = true
-	key.shadow_opacity = 0.5
-	key.shadow_blur = 1.6
+	key.shadow_opacity = 0.55
+	key.shadow_blur = 2.0
 	add_child(key)
 	var fill := DirectionalLight3D.new()
-	fill.rotation_degrees = Vector3(-38, 140, 0)
-	fill.light_color = Color("bcd0ff")
+	fill.rotation_degrees = Vector3(-36, 138, 0)
+	fill.light_color = Color("bfd6ff")
 	fill.light_energy = 0.22
 	add_child(fill)
+
+const WATER_SHADER := """
+shader_type spatial;
+render_mode cull_back;
+uniform vec3 col_a : source_color = vec3(0.10, 0.32, 0.40);
+uniform vec3 col_b : source_color = vec3(0.05, 0.18, 0.26);
+void vertex() {
+	float w = sin(VERTEX.x * 0.4 + TIME * 1.4) + cos(VERTEX.z * 0.4 + TIME * 1.1);
+	VERTEX.y += w * 0.04;
+}
+void fragment() {
+	float t = 0.5 + 0.5 * sin(UV.x * 26.0 + TIME) * cos(UV.y * 26.0 - TIME * 0.7);
+	ALBEDO = mix(col_b, col_a, t * 0.6);   // gentler ripple contrast
+	ROUGHNESS = 0.5;
+	SPECULAR = 0.25;
+}
+"""
 
 func _build_ground() -> void:
 	var wx := GW * CELL
 	var wz := GH * CELL
 
-	# grass field, extended well past the play area so the world reads as a lush
-	# landscape fading into the dark background (the target look).
-	var plane := MeshInstance3D.new()
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(wx + 60.0, wz + 60.0)
-	plane.mesh = pm
-	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color("294a1b")   # deep green surround framing the raised play board
-	gmat.roughness = 1.0
-	plane.material_override = gmat
-	plane.position = Vector3(0, -0.12, 0)
-	add_child(plane)
+	# water all around — gentle animated shader; the kingdoms sit on an island.
+	var water := MeshInstance3D.new()
+	var wpm := PlaneMesh.new()
+	wpm.size = Vector2(wx + 140.0, wz + 140.0)
+	water.mesh = wpm
+	var wmat := ShaderMaterial.new()
+	var wsh := Shader.new()
+	wsh.code = WATER_SHADER
+	wmat.shader = wsh
+	water.material_override = wmat
+	water.position = Vector3(0, -0.55, 0)
+	add_child(water)
+
+	# Continent BASE: a rounded-rectangle sandy island the clay plateau sits on,
+	# giving it thickness + a beach/cliff down to the water (Blender bevelled mesh
+	# so the corners are round, not a sharp box).
+	var island_scene := load("res://assets/models/island.glb")
+	if island_scene:
+		var island = island_scene.instantiate()
+		add_child(island)
+		var sxz := (wx + 4.0) / 16.0          # island model is 16 x 12 wide
+		island.scale = Vector3(sxz, 0.7, sxz)
+		island.position = Vector3(0, 0.04 - 0.35, 0)   # top ~y=0.04 under the clay plane
+		var sandy := StandardMaterial3D.new()
+		sandy.albedo_color = Color("c0ad7a")   # sandy shoreline
+		sandy.roughness = 1.0
+		for mi in island.find_children("", "MeshInstance3D", true, false):
+			mi.material_override = sandy
 
 func _box_part(pos: Vector3, size: Vector3, color: Color) -> void:
 	var mi := MeshInstance3D.new()

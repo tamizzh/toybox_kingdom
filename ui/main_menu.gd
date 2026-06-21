@@ -16,10 +16,7 @@ var _hook_label: Label
 func _ready() -> void:
 	AudioManager.play_music("menu")
 
-	var bg := _BG.new()
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(bg)
+	_build_background()
 
 	_build_top_buttons()
 	_build_currency_chip()
@@ -40,6 +37,34 @@ func _ready() -> void:
 	col.add_child(_play_row())
 
 	_refresh_hook()
+
+
+# ── Background ─────────────────────────────────────────────────────────────────
+# Prefer the painted toybox-kingdom hero art; fall back to the procedural wash when
+# the PNG hasn't been imported yet. A dark scrim keeps the white UI text legible
+# over the bright artwork.
+func _build_background() -> void:
+	var bg_tex := AssetKit.tex("res://assets/main_menu")
+	if bg_tex == null:
+		var bg := _BG.new()
+		bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+		bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(bg)
+		return
+
+	var photo := TextureRect.new()
+	photo.texture = bg_tex
+	photo.set_anchors_preset(Control.PRESET_FULL_RECT)
+	photo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	photo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	photo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(photo)
+
+	var scrim := ColorRect.new()
+	scrim.color = Color(0.07, 0.05, 0.16, 0.38)
+	scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(scrim)
 
 
 # ── Top-right SHOP / SETTINGS ──────────────────────────────────────────────────

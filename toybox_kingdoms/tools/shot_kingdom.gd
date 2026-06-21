@@ -14,8 +14,8 @@ func _ready() -> void:
 	var m: Node = km.new()
 	add_child(m)
 
-	# let the AI expand: castles should hit tier 2-3 and towns fill in
-	await get_tree().create_timer(9.0).timeout
+	# let the AI expand into a mature match (kingdoms fill the continent)
+	await get_tree().create_timer(24.0).timeout
 
 	# overview camera so the whole toybox is in frame
 	if m.camera:
@@ -34,7 +34,7 @@ func _ready() -> void:
 	# close-up over a developed kingdom to check the town (houses + citizens)
 	if m.camera:
 		var focus := Vector3(-9.3, 0.0, 19.5)
-		m.camera.global_position = focus + Vector3(0, 16, 13)
+		m.camera.global_position = focus + Vector3(0, 7, 6)
 		m.camera.look_at(focus, Vector3.UP)
 		m.camera.fov = 50
 	await get_tree().process_frame

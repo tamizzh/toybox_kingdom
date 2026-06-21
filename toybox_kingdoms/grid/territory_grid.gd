@@ -73,6 +73,17 @@ func trail_cells(id: int) -> Array:
 func clear_trail(id: int) -> void:
 	_kill_trail(id)
 
+# Hand every cell owned by `from_id` over to `to_id` (castle captured -> whole
+# kingdom falls). Returns the number of cells transferred.
+func transfer_all(from_id: int, to_id: int) -> int:
+	var n := w * h
+	var count := 0
+	for i in n:
+		if int(owner[i]) == from_id:
+			_set_owner(i % w, i / w, to_id)
+			count += 1
+	return count
+
 func has_dirty() -> bool:
 	return dirty_max.x >= dirty_min.x
 

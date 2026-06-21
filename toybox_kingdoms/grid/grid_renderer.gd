@@ -34,6 +34,7 @@ void fragment() {
 var _neutral: MultiMeshInstance3D
 var _terr: MultiMeshInstance3D
 var _trail: MultiMeshInstance3D
+var _border: MultiMeshInstance3D
 
 func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	grid = p_grid
@@ -48,6 +49,55 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	add_child(_terr)
 	_trail = _make_batch(Vector3(cell * 0.86, TRAIL_H, cell * 0.86), true)
 	add_child(_trail)
+	_border = _make_wall_batch()
+	add_child(_border)
+
+func _make_wall_batch() -> MultiMeshInstance3D:
+	var inst := (load("res://assets/models/wall.glb") as PackedScene).instantiate()
+	var mesh := _extract_mesh(inst)
+	inst.free()
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = mesh
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true   # tint the grey wall per kingdom
+	mat.roughness = 0.85
+	mmi.material_override = mat
+	return mmi
+
+func _extract_mesh(n: Node) -> Mesh:
+	if n is MeshInstance3D and n.mesh != null:
+		return n.mesh
+	for c in n.get_children():
+		var r := _extract_mesh(c)
+		if r != null:
+			return r
+	return null
+
+# Place a 3D wall block on every border cell, tinted to the kingdom colour.
+func rebuild_borders() -> void:
+	var w: int = grid.w
+	var h: int = grid.h
+	var n: int = w * h
+	var pts: Array = []
+	var cols: Array = []
+	for i in n:
+		var kid: int = grid.owner[i]
+		if kid == 0:
+			continue
+		var cx := i % w
+		var cy := i / w
+		if _is_border(i, cx, cy, w, h, kid):
+			pts.append(_c2w(cx, cy, 0.0))
+			cols.append((colors.get(kid, Color.WHITE) as Color).darkened(0.12))
+	var mm := _border.multimesh
+	mm.instance_count = pts.size()
+	for k in pts.size():
+		mm.set_instance_transform(k, Transform3D(Basis(), pts[k]))
+		mm.set_instance_color(k, cols[k])
 
 # Build the wilderness as a tiled patchwork of green shades (once at startup).
 # Claimed land is a separate, taller batch drawn on top, so we never rebuild this.
