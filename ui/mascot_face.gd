@@ -27,11 +27,12 @@ func _draw() -> void:
 	var r: float = min(size.x, size.y) * 0.5
 	# Body
 	draw_circle(c, r, color, true, -1.0, true)
-	# Soft top shine
-	draw_circle(c + Vector2(-r * 0.30, -r * 0.34), r * 0.30,
-		Color(1, 1, 1, 0.22), true, -1.0, true)
-	# Dark rim
-	draw_arc(c, r - 1.0, 0.0, TAU, 40, color.darkened(0.30), 2.0, true)
+	# Candy-coat primary shine — large soft blob upper-left
+	draw_circle(c + Vector2(-r * 0.28, -r * 0.32), r * 0.42,
+		Color(1, 1, 1, 0.30), true, -1.0, true)
+	# Tight secondary catch-light — the crisp white dot that reads "shiny toy"
+	draw_circle(c + Vector2(-r * 0.36, -r * 0.42), r * 0.16,
+		Color(1, 1, 1, 0.72), true, -1.0, true)
 
 	# Eyes
 	var eye_r := r * 0.30

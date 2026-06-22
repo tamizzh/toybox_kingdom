@@ -84,6 +84,49 @@ func transfer_all(from_id: int, to_id: int) -> int:
 			count += 1
 	return count
 
+# Transfer only the cells owned by `from_id` that are NEAREST to `target` (vs the
+# kingdom's `others` castles) — the captured castle's slice of the realm. If
+# `others` is empty (the last castle), this takes everything.
+func transfer_nearest(from_id: int, to_id: int, target: Vector2i, others: Array) -> int:
+	var n := w * h
+	var count := 0
+	for i in n:
+		if int(owner[i]) != from_id:
+			continue
+		var cx := i % w
+		var cy := i / w
+		var dt := (cx - target.x) * (cx - target.x) + (cy - target.y) * (cy - target.y)
+		var nearest := true
+		for o in others:
+			var ox: int = o.x
+			var oy: int = o.y
+			if (cx - ox) * (cx - ox) + (cy - oy) * (cy - oy) < dt:
+				nearest = false
+				break
+		if nearest:
+			_set_owner(cx, cy, to_id)
+			count += 1
+	return count
+
+# True only when EVERY in-bounds cell of the disc of `radius` around (cx,cy) is owned
+# by `id`. A castle is taken only once a conqueror covers its WHOLE footprint, so the
+# match controller passes a radius that grows with the castle's tier — a bigger castle
+# demands more ground be engulfed before it falls. Out-of-bounds cells (castle near a
+# world edge) are skipped: you can't own cells that don't exist.
+func region_fully_owned(cx: int, cy: int, radius: int, id: int) -> bool:
+	var r2 := radius * radius
+	for dy in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			if dx * dx + dy * dy > r2:
+				continue
+			var x := cx + dx
+			var y := cy + dy
+			if not in_bounds(x, y):
+				continue
+			if int(owner[y * w + x]) != id:
+				return false
+	return true
+
 func has_dirty() -> bool:
 	return dirty_max.x >= dirty_min.x
 
@@ -144,83 +187,66 @@ func _capture(id: int) -> int:
 	if trail.is_empty():
 		return 0
 
-	# bbox(trail) padded by 1 and clamped. The enclosed pocket is always inside
-	# this box because the trail wraps it, so we never flood the whole world.
-	var x0 := w
-	var y0 := h
-	var x1 := -1
-	var y1 := -1
+	# Record bbox of the trail for the capture-flash VFX (renderer uses this).
+	var fx0 := w; var fy0 := h; var fx1 := -1; var fy1 := -1
 	for cell in trail:
-		var cx: int = cell % w
-		var cy: int = cell / w
-		x0 = mini(x0, cx); y0 = mini(y0, cy)
-		x1 = maxi(x1, cx); y1 = maxi(y1, cy)
-	x0 = maxi(0, x0 - 1); y0 = maxi(0, y0 - 1)
-	x1 = mini(w - 1, x1 + 1); y1 = mini(h - 1, y1 + 1)
-	_last_cap_min = Vector2i(x0, y0)
-	_last_cap_max = Vector2i(x1, y1)
-	var bw := x1 - x0 + 1
-	var bh := y1 - y0 + 1
-	var n := bw * bh
+		var cx: int = cell % w; var cy: int = cell / w
+		fx0 = mini(fx0, cx); fy0 = mini(fy0, cy)
+		fx1 = maxi(fx1, cx); fy1 = maxi(fy1, cy)
+	_last_cap_min = Vector2i(fx0, fy0)
+	_last_cap_max = Vector2i(fx1, fy1)
 
 	# blocked = our own soil OR our trail (the flood may not pass through either).
+	var n := w * h
 	var blocked := PackedByteArray()
 	blocked.resize(n)
-	for ly in bh:
-		var gy := y0 + ly
-		var grow := gy * w
-		var brow := ly * bw
-		for lx in bw:
-			var gidx := grow + x0 + lx
-			if int(owner[gidx]) == id or int(trail_owner[gidx]) == id:
-				blocked[brow + lx] = 1
+	for i in n:
+		if int(owner[i]) == id or int(trail_owner[i]) == id:
+			blocked[i] = 1
 
-	# Flood the OUTSIDE: start from every non-blocked border cell of the bbox.
+	# Flood the OUTSIDE from the world perimeter. Using the world boundary instead
+	# of just the trail bbox prevents the flood from leaking through concave gaps in
+	# the territory wall — a neutral notch inside the bbox edge would seed the flood
+	# inside the enclosure with the old bbox approach.
 	var visited := PackedByteArray()
 	visited.resize(n)
 	var stack: Array[int] = []
-	for lx in bw:
-		_try_seed(stack, visited, blocked, lx)                 # top edge
-		_try_seed(stack, visited, blocked, (bh - 1) * bw + lx) # bottom edge
-	for ly in bh:
-		_try_seed(stack, visited, blocked, ly * bw)            # left edge
-		_try_seed(stack, visited, blocked, ly * bw + bw - 1)   # right edge
+	for x in w:
+		_try_seed(stack, visited, blocked, x)             # top row
+		_try_seed(stack, visited, blocked, (h - 1) * w + x) # bottom row
+	for y in h:
+		_try_seed(stack, visited, blocked, y * w)         # left col
+		_try_seed(stack, visited, blocked, y * w + w - 1) # right col
 
 	while not stack.is_empty():
-		var li: int = stack.pop_back()
-		var lx2: int = li % bw
-		var ly2: int = li / bw
-		if lx2 > 0:
-			var a := li - 1
+		var gi: int = stack.pop_back()
+		var gx: int = gi % w
+		var gy: int = gi / w
+		if gx > 0:
+			var a := gi - 1
 			if blocked[a] == 0 and visited[a] == 0:
 				visited[a] = 1; stack.append(a)
-		if lx2 < bw - 1:
-			var b := li + 1
+		if gx < w - 1:
+			var b := gi + 1
 			if blocked[b] == 0 and visited[b] == 0:
 				visited[b] = 1; stack.append(b)
-		if ly2 > 0:
-			var c := li - bw
+		if gy > 0:
+			var c := gi - w
 			if blocked[c] == 0 and visited[c] == 0:
 				visited[c] = 1; stack.append(c)
-		if ly2 < bh - 1:
-			var d := li + bw
+		if gy < h - 1:
+			var d := gi + w
 			if blocked[d] == 0 and visited[d] == 0:
 				visited[d] = 1; stack.append(d)
 
-	# Capture: any bbox cell the outside flood never reached, that we don't
-	# already own, is enclosed (or is our trail) -> claim it.
+	# Capture: any cell the outside flood never reached that we don't already own.
 	var captured := 0
-	for ly3 in bh:
-		var gy3 := y0 + ly3
-		var grow3 := gy3 * w
-		var brow3 := ly3 * bw
-		for lx3 in bw:
-			var gidx3 := grow3 + x0 + lx3
-			if int(owner[gidx3]) == id:
-				continue
-			if visited[brow3 + lx3] == 0:
-				_set_owner(x0 + lx3, gy3, id)
-				captured += 1
+	for i in n:
+		if int(owner[i]) == id:
+			continue
+		if visited[i] == 0:
+			_set_owner(i % w, i / w, id)
+			captured += 1
 
 	# Trail is now baked into territory.
 	for cell in trail:
@@ -228,10 +254,10 @@ func _capture(id: int) -> int:
 	_trail[id] = []
 	return captured
 
-func _try_seed(stack: Array, visited: PackedByteArray, blocked: PackedByteArray, lidx: int) -> void:
-	if blocked[lidx] == 0 and visited[lidx] == 0:
-		visited[lidx] = 1
-		stack.append(lidx)
+func _try_seed(stack: Array, visited: PackedByteArray, blocked: PackedByteArray, idx: int) -> void:
+	if blocked[idx] == 0 and visited[idx] == 0:
+		visited[idx] = 1
+		stack.append(idx)
 
 # ── trail revert (death) ─────────────────────────────────────────────────────
 func _kill_trail(id: int) -> void:

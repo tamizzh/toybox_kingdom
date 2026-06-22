@@ -13,7 +13,19 @@ var home: Vector2i = Vector2i.ZERO
 var last_cell: Vector2i = Vector2i.ZERO
 var alive: bool = true
 var eliminated: bool = false   # territory fully conquered -> out of the match
+var defense: int = 0           # towers/castle upgrades add here (raises conquest level-gate)
+
+# ── economy (per ruler; human spends via the panel, AI buys via a heuristic) ──
+var coins: int = 60
+var income: float = 12.0       # coins per minute
+var coin_accum: float = 0.0
+var farms: int = 0
+var towers: int = 0
+var barracks: int = 0
+var castle_floor: int = 1      # min castle level bought via CASTLE
 var respawn_t: float = 0.0
 var ai                        # KingdomAI brain, or null for the human
-var castle                    # Castle node at this kingdom's home
-var name_tag                  # Label3D floating over the castle
+var castle                    # PRIMARY Castle node (castles[0].node) — spawn/AI home
+var castles: Array = []       # all owned castles: [{cell: Vector2i, node: Castle}, ...]
+                              # you only fall when ALL of these are captured.
+var name_tag                  # Label3D floating over the (primary) castle

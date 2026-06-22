@@ -13,7 +13,7 @@ var colors := {}                  # kingdom id -> Color
 const NEUTRAL_H := 0.06          # wilderness tiles — a low patchwork of green shades
 const LAND_H := 0.15             # claimed land rises as a plateau above the wilderness
 const BORDER_H := 0.44           # border cells rise into a wall above the plateau
-const TRAIL_H := 0.40            # pending trail stands proud + glows so it reads as risk
+const TRAIL_H := 0.30            # pending trail stands proud + glows so it reads as risk (slimmer)
 
 # Wilderness green shades (different per tile -> the tiled terrain look)
 const G_DARK := Color("335f22")
@@ -26,8 +26,20 @@ const TRAIL_SHADER := """
 shader_type spatial;
 render_mode cull_back;
 void fragment() {
-	ALBEDO = COLOR.rgb;
-	EMISSION = COLOR.rgb * 0.5;   // glow, but stay the kingdom's colour (don't clip to white)
+	vec3 c = COLOR.rgb;
+	// FACES use the exact territory-tile albedo (territory_ground.gd) so the trail
+	// reads as the SAME colour as the kingdom's plate. The glow lives only on the
+	// silhouette as a same-hue fresnel rim halo — so it glows without the face
+	// brightening/desaturating away from the plate colour.
+	ALBEDO = c * 0.96;
+	ROUGHNESS = 0.62;
+	SPECULAR = 0.06;
+	// Strong SAME-HUE glow: a gentle whole-block lift + a wide, punchy fresnel rim
+	// halo. Same-hue + face near plate level → it glows HARD while staying the
+	// kingdom colour instead of blooming out to white.
+	float ndv = clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0);
+	float rim = pow(1.0 - ndv, 1.8);
+	EMISSION = c * (0.25 + rim * 1.9);
 }
 """
 
@@ -47,10 +59,30 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	# interior land is flat and only border cells rise into a wall.
 	_terr = _make_batch(Vector3(cell, 1.0, cell), false)
 	add_child(_terr)
-	_trail = _make_batch(Vector3(cell * 0.86, TRAIL_H, cell * 0.86), true)
+	_trail = _make_trail_batch()
 	add_child(_trail)
 	_border = _make_wall_batch()
 	add_child(_border)
+
+# Trail = the beveled toy block (trail.glb), per-instance kingdom colour, glowing.
+# Scale is baked per-instance in update_trails (slim footprint, short height).
+func _make_trail_batch() -> MultiMeshInstance3D:
+	var inst := (load("res://assets/models/trail.glb") as PackedScene).instantiate()
+	var mesh := _extract_mesh(inst)
+	inst.free()
+	var sh := Shader.new()
+	sh.code = TRAIL_SHADER
+	var sm := ShaderMaterial.new()
+	sm.shader = sh
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = mesh
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.material_override = sm
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mmi
 
 func _make_wall_batch() -> MultiMeshInstance3D:
 	var inst := (load("res://assets/models/wall.glb") as PackedScene).instantiate()
@@ -245,6 +277,9 @@ func update_trails(ids: Array) -> void:
 		var id: int = pairs[k][1]
 		var cx: int = c % grid.w
 		var cy: int = c / grid.w
-		mm.set_instance_transform(k, Transform3D(Basis(), _c2w(cx, cy, TRAIL_H * 0.5)))
+		# beveled unit cube scaled to the slim trail footprint + short height
+		mm.set_instance_transform(k, Transform3D(
+			Basis().scaled(Vector3(cell * 0.62, TRAIL_H, cell * 0.62)),
+			_c2w(cx, cy, TRAIL_H * 0.5)))
 		var col: Color = colors.get(id, Color.WHITE)
 		mm.set_instance_color(k, col)   # full saturation; the shader adds a soft glow

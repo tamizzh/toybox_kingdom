@@ -21,30 +21,43 @@ func _ready() -> void:
 	_build_top_buttons()
 	_build_currency_chip()
 
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(center)
-
-	var col := VBoxContainer.new()
-	col.custom_minimum_size = Vector2(860, 0)
-	col.add_theme_constant_override("separation", 20)
-	col.alignment = BoxContainer.ALIGNMENT_CENTER
-	center.add_child(col)
-
-	col.add_child(_logo_node())
-	col.add_child(_roster_row())
-	col.add_child(_play_row())
+	# The splash background already shows the TOYBOX KINGDOMS title, tagline and the
+	# rival kingdoms, so the menu only overlays the PLAY button, anchored near the
+	# bottom so it doesn't cover the artwork.
+	var col := _play_row()
+	col.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	col.offset_top = -210
+	col.offset_bottom = -36
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(col)
 
 	_refresh_hook()
 
+	# First launch: show the how-to-play tutorial (marks onboarding done when finished).
+	if not SaveManager.onboarding_done():
+		_open_overlay(load("res://ui/onboarding_screen.gd").new())
+
+
+# Open a full-screen overlay in its own high CanvasLayer so it sits ABOVE all menu
+# chrome (which uses z_index=12). The layer is freed when the overlay closes.
+func _open_overlay(node: Control) -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 50
+	add_child(layer)
+	layer.add_child(node)
+	node.tree_exited.connect(layer.queue_free)
+
 
 # ── Background ─────────────────────────────────────────────────────────────────
-# Prefer the painted toybox-kingdom hero art; fall back to the procedural wash when
-# the PNG hasn't been imported yet. A dark scrim keeps the white UI text legible
-# over the bright artwork.
+# Prefer the painted toybox-kingdom splash art (logo + tagline are baked in); fall
+# back to the procedural wash when the PNG hasn't been imported yet.
+#
+# The splash is 16:9 but the menu frame is wider (1560×720 ≈ 2.17:1), so showing the
+# whole poster leaves gaps on the sides. We fill them with a dimmed, zoomed copy of
+# the same art (so the sides read as an intentional backdrop, not flat bars) and lay
+# the full, un-cropped poster on top, centred.
 func _build_background() -> void:
-	var bg_tex := AssetKit.tex("res://assets/main_menu")
+	var bg_tex := AssetKit.tex("res://assets/splash")
 	if bg_tex == null:
 		var bg := _BG.new()
 		bg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -52,17 +65,30 @@ func _build_background() -> void:
 		add_child(bg)
 		return
 
+	# Zoomed copy that fully covers the frame, dimmed so it recedes behind the poster.
+	var backdrop := TextureRect.new()
+	backdrop.texture = bg_tex
+	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	backdrop.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	backdrop.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	backdrop.modulate = Color(0.45, 0.45, 0.52)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(backdrop)
+
+	# The full poster, scaled to fit without cropping (full height, centred).
 	var photo := TextureRect.new()
 	photo.texture = bg_tex
 	photo.set_anchors_preset(Control.PRESET_FULL_RECT)
 	photo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	photo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	photo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	photo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(photo)
 
+	# Gentle scrim along the bottom so the PLAY button + hint text stay legible.
 	var scrim := ColorRect.new()
-	scrim.color = Color(0.07, 0.05, 0.16, 0.38)
-	scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scrim.color = Color(0.07, 0.05, 0.16, 0.30)
+	scrim.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	scrim.offset_top = -240
 	scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(scrim)
 
@@ -76,13 +102,13 @@ func _build_top_buttons() -> void:
 	add_child(bar)
 	bar.add_child(_menu_btn("HOW TO PLAY", Palette.PLAYER_COLORS[1], func() -> void:
 		AudioManager.play("tap")
-		add_child(load("res://ui/onboarding_screen.gd").new()), 176))
+		_open_overlay(load("res://ui/onboarding_screen.gd").new()), 176))
 	bar.add_child(_menu_btn("SHOP", Palette.WARN, func() -> void:
 		AudioManager.play("tap")
-		add_child(load("res://ui/shop_screen.gd").new())))
+		_open_overlay(load("res://ui/shop_screen.gd").new())))
 	bar.add_child(_menu_btn("SETTINGS", Palette.NEUTRAL, func() -> void:
 		AudioManager.play("tap")
-		add_child(load("res://ui/settings_screen.gd").new())))
+		_open_overlay(load("res://ui/settings_screen.gd").new())))
 
 
 # ── Top-left coins / level chip (opens the profile/stats panel) ───────────────────
@@ -111,7 +137,7 @@ func _build_currency_chip() -> void:
 	SaveManager.coins_changed.connect(_on_coins_changed)
 	btn.pressed.connect(func() -> void:
 		AudioManager.play("tap")
-		add_child(load("res://ui/profile_screen.gd").new()))
+		_open_overlay(load("res://ui/profile_screen.gd").new()))
 
 
 func _on_coins_changed(_total: int) -> void:

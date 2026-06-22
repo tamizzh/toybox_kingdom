@@ -6,20 +6,24 @@ extends Control
 
 const PAGES := [
 	{
-		"title": "WELCOME TO PARTY PALS ARENA",
-		"body": "Fast, silly mini-games for 1–4 players.\nWin rounds, score points, race to 5 to win the match!",
+		"title": "RULE YOUR TOY KINGDOM",
+		"body": "Start with a tiny castle and a patch of land.\nGrow it into the biggest kingdom in the toybox!",
 	},
 	{
-		"title": "PLAY YOUR WAY",
-		"body": "Pass & play with friends on one device,\nor add CPU opponents and play solo.",
+		"title": "CLAIM NEW LAND",
+		"body": "Leave your land to draw a trail, then loop back home.\nEverything you circle becomes your territory!",
 	},
 	{
-		"title": "SIMPLE CONTROLS",
-		"body": "Move with the stick, tap the button to act.\nOn a PC: P1 = WASD + Space, P2 = Arrows + Enter.",
+		"title": "MIND YOUR TRAIL",
+		"body": "Out in the open your trail is exposed.\nIf a rival crosses it you pop — so cut theirs first!",
 	},
 	{
-		"title": "EVERY ROUND IS DIFFERENT",
-		"body": "Each game shows a quick how-to at the start.\nEarn coins as you play and unlock new looks. Have fun!",
+		"title": "CONQUER CASTLES",
+		"body": "Reach a rival's castle to take their whole kingdom —\nif your castle is the same level or higher.",
+	},
+	{
+		"title": "RULE THE TOYBOX",
+		"body": "Claim 40% of the map, or be biggest when time runs out.\nGood luck, ruler!",
 	},
 ]
 
@@ -27,10 +31,11 @@ var _page: int = 0
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)   # force full-viewport size
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	z_index = 100   # cover the menu chrome (its buttons/chip use z_index=12)
 	var bg := _Backdrop.new()
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
 	_rebuild()
@@ -145,40 +150,85 @@ class _Backdrop extends Control:
 
 class _Illo extends Control:
 	var page: int = 0
+	const BLUE := Color("2f7ae0")
+	const RED := Color("e0463a")
+
 	func _draw() -> void:
 		var cx := size.x * 0.5
 		var cy := size.y * 0.5
 		match page:
-			0:  # four mascots
-				var cols := [Palette.player_color(0), Palette.player_color(1), Palette.player_color(2), Palette.player_color(3)]
-				for i in 4:
-					var x := cx + (i - 1.5) * 100.0
-					_mascot(Vector2(x, cy), 44.0, cols[i])
-			1:  # friends cluster vs a CPU
-				_mascot(Vector2(cx - 130, cy), 46.0, Palette.player_color(0))
-				_mascot(Vector2(cx - 40, cy + 10), 46.0, Palette.player_color(1))
-				var f := ArcadeTheme.font
-				draw_string(f, Vector2(cx + 18, cy + 14), "vs", HORIZONTAL_ALIGNMENT_LEFT, -1, 40, Color.WHITE)
-				_mascot(Vector2(cx + 130, cy), 46.0, Color("8b93a6"))   # grey = CPU
-			2:  # joystick + action button
-				var jc := Vector2(cx - 90, cy)
-				draw_circle(jc, 70.0, Color(1, 1, 1, 0.16))
-				draw_arc(jc, 70.0, 0, TAU, 40, Color(1, 1, 1, 0.7), 5.0)
-				draw_circle(jc + Vector2(18, -10), 32.0, Color(1, 1, 1, 0.9))
-				var bc := Vector2(cx + 110, cy + 10)
-				DrawKit.blob(self, bc, 52.0, Palette.SAFE, 5.0)
-			3:  # crown over a "5" target
-				DrawKit.crown(self, Vector2(cx, cy - 40), 110.0)
-				DrawKit.star(self, Vector2(cx - 120, cy + 60), 34.0)
-				DrawKit.star(self, Vector2(cx + 120, cy + 60), 34.0)
-				var f2 := ArcadeTheme.font
-				var s := "5"
-				var tw := f2.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, 72).x
-				draw_string(f2, Vector2(cx - tw * 0.5, cy + 80), s, HORIZONTAL_ALIGNMENT_LEFT, -1, 72, Palette.WARN)
+			0:  # your kingdom: a patch of land + castle + blob
+				_land(Vector2(cx, cy + 20), 230, 130, BLUE)
+				_castle(Vector2(cx - 30, cy), 1.0, BLUE)
+				_mascot(Vector2(cx + 70, cy + 30), 30.0, BLUE)
+			1:  # claim: home + a trail loop back, enclosed area filled
+				_land(Vector2(cx - 110, cy + 30), 90, 110, BLUE)
+				_dash_rect(Rect2(cx - 110, cy - 70, 200, 150), BLUE)
+				_land(Vector2(cx + 10, cy - 20), 150, 90, Color(BLUE, 0.35))   # claimed area
+				_mascot(Vector2(cx - 110, cy - 70), 22.0, BLUE)
+				_arrow(Vector2(cx + 70, cy + 70), Vector2(cx - 70, cy + 70), Color.WHITE)
+			2:  # mind your trail: rival cutting your exposed trail
+				_dash_line(Vector2(cx - 150, cy + 30), Vector2(cx + 40, cy + 30), BLUE)
+				_mascot(Vector2(cx - 150, cy + 30), 24.0, BLUE)
+				_mascot(Vector2(cx + 30, cy - 30), 26.0, RED)
+				# the X where the rival cuts the trail
+				var p := Vector2(cx + 5, cy + 5)
+				draw_line(p + Vector2(-16, -16), p + Vector2(16, 16), Color.WHITE, 5.0)
+				draw_line(p + Vector2(16, -16), p + Vector2(-16, 16), Color.WHITE, 5.0)
+			3:  # conquer castles: rival castle -> captured (colour flip)
+				_castle(Vector2(cx - 110, cy), 0.95, RED)
+				_arrow(Vector2(cx - 50, cy), Vector2(cx + 40, cy), Color.WHITE)
+				_castle(Vector2(cx + 110, cy), 0.95, BLUE)
+				draw_string(ArcadeTheme.font, Vector2(cx + 70, cy - 70),
+					"Lv ≥", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Palette.WARN)
+			4:  # rule the toybox: crown + 40%
+				DrawKit.crown(self, Vector2(cx, cy - 30), 110.0)
+				DrawKit.star(self, Vector2(cx - 120, cy + 55), 30.0)
+				DrawKit.star(self, Vector2(cx + 120, cy + 55), 30.0)
+				var s := "40%"
+				var tw := ArcadeTheme.font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, 64).x
+				draw_string(ArcadeTheme.font, Vector2(cx - tw * 0.5, cy + 90), s,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 64, Palette.WARN)
 
 	func _mascot(c: Vector2, r: float, col: Color) -> void:
 		DrawKit.blob(self, c, r, col, 5.0)
 		DrawKit.eyes(self, c + Vector2(0, -r * 0.05), r * 0.7)
+
+	func _land(c: Vector2, w: float, h: float, col: Color) -> void:
+		var r := Rect2(c.x - w * 0.5, c.y - h * 0.5, w, h)
+		draw_rect(r, col)
+		draw_rect(r, col.darkened(0.35), false, 4.0)
+
+	func _castle(c: Vector2, s: float, roof: Color) -> void:
+		var stone := Color("d8cdb5")
+		draw_rect(Rect2(c.x - 22 * s, c.y - 8 * s, 44 * s, 32 * s), stone)        # keep body
+		for sx in [-1.0, 1.0]:
+			draw_rect(Rect2(c.x + sx * 26 * s - 7 * s, c.y - 16 * s, 14 * s, 40 * s), stone)  # towers
+			_roof(Vector2(c.x + sx * 26 * s, c.y - 16 * s), 9 * s, roof)
+		_roof(Vector2(c.x, c.y - 8 * s), 24 * s, roof)                            # keep roof
+
+	func _roof(base_c: Vector2, w: float, col: Color) -> void:
+		draw_colored_polygon(PackedVector2Array([
+			base_c + Vector2(-w, 0), base_c + Vector2(w, 0), base_c + Vector2(0, -w * 1.4)]),
+			col)
+
+	func _dash_rect(r: Rect2, col: Color) -> void:
+		_dash_line(r.position, r.position + Vector2(r.size.x, 0), col)
+		_dash_line(r.position + Vector2(r.size.x, 0), r.position + r.size, col)
+		_dash_line(r.position + r.size, r.position + Vector2(0, r.size.y), col)
+		_dash_line(r.position + Vector2(0, r.size.y), r.position, col)
+
+	func _dash_line(a: Vector2, b: Vector2, col: Color) -> void:
+		var n := int(a.distance_to(b) / 14.0)
+		for i in n:
+			if i % 2 == 0:
+				draw_line(a.lerp(b, float(i) / n), a.lerp(b, float(i + 1) / n), col, 5.0)
+
+	func _arrow(a: Vector2, b: Vector2, col: Color) -> void:
+		draw_line(a, b, col, 4.0)
+		var d := (b - a).normalized()
+		var n := Vector2(-d.y, d.x) * 8.0
+		draw_colored_polygon(PackedVector2Array([b, b - d * 16.0 + n, b - d * 16.0 - n]), col)
 
 
 class _Dots extends Control:

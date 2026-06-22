@@ -2,8 +2,7 @@ class_name Avatar3D
 extends CharacterBody3D
 
 # Generic 3D avatar. Loads the shared mascot GLB (cute blob) and recolours it
-# per player. Adds a cartoon outline via a normal-expansion shader. Falls back
-# to procedural geometry if the GLB is not yet present.
+# per player. Falls back to procedural geometry if the GLB is not yet present.
 
 @export var speed: float = 6.0
 @export var momentum: float = 0.0
@@ -23,9 +22,6 @@ const _VINYL_SHADER := preload("res://shaders/vinyl_toy.gdshader")
 var _bob_t: float = 0.0
 var _dust_t: float = 0.0
 
-# Shared outline shader across all avatar instances (created once, reused).
-static var _outline_shader: Shader
-static var _outline_material: ShaderMaterial
 static var _capsule_shape: CapsuleShape3D
 static var _disc_mesh: CylinderMesh
 static var _dust_mesh: CylinderMesh
@@ -70,16 +66,15 @@ func _build_default_visual(c: Color) -> void:
 	# toys in a big arena, matching the reference art.
 	set_model(MASCOT, 0.8, 0.0)
 	_recolor_mascot(_visual, c)
-	_add_outline(_visual)
 
 func _recolor_mascot(node: Node, c: Color) -> void:
 	for child in node.get_children():
 		if child is MeshInstance3D:
 			var n := child.name.to_lower()
-			# Skip outline passes added by _add_outline, and small detail meshes.
+			# Skip small detail meshes — eyes, pupils, cheek blush keep their own colors.
 			# NOTE: cheeks are intentionally recolored with the body so the pink
 			# blush doesn't wash the body toward pink/purple (esp. on the blue ball).
-			var is_detail := "outline_" in n or "eye" in n or "pupil" in n \
+			var is_detail := "eye" in n or "pupil" in n \
 							 or "iris" in n or "shine" in n or "highlight" in n \
 							 or "white" in n
 			if not is_detail:
@@ -97,40 +92,6 @@ func _recolor_mascot(node: Node, c: Color) -> void:
 				child.material_override = mat
 				_body_mats.append(mat)
 		_recolor_mascot(child, c)
-
-func _get_outline_shader() -> Shader:
-	if not _outline_shader:
-		_outline_shader = Shader.new()
-		_outline_shader.code = """
-shader_type spatial;
-render_mode cull_front, unshaded, depth_draw_always;
-uniform float width : hint_range(0.001, 0.20) = 0.055;
-uniform vec3  color : source_color = vec3(0.03, 0.02, 0.05);
-void vertex() { VERTEX += NORMAL * width; }
-	void fragment() { ALBEDO = color; }
-"""
-	return _outline_shader
-
-func _get_outline_material() -> ShaderMaterial:
-	if not _outline_material:
-		_outline_material = ShaderMaterial.new()
-		_outline_material.shader = _get_outline_shader()
-	return _outline_material
-
-func _add_outline(node: Node) -> void:
-	for child in node.get_children():
-		var n := child.name.to_lower()
-		if "outline_" in n:
-			continue  # never recurse into our own outline passes
-		if child is MeshInstance3D and child.mesh != null:
-			# Only outline the body — eye/pupil/shine/cheek parts look bad with outlines
-			if "shine" not in n and "cheek" not in n and "eye" not in n and "pupil" not in n:
-				var ol := MeshInstance3D.new()
-				ol.name = "Outline_" + child.name
-				ol.mesh = child.mesh
-				ol.material_override = _get_outline_material()
-				child.add_child(ol)
-		_add_outline(child)
 
 # ───────────────────────────── external model (e.g. tank.glb) ──
 func set_model(scene: PackedScene, model_scale: float = 1.0, y: float = 0.0) -> void:

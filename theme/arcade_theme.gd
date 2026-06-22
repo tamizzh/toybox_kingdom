@@ -10,21 +10,29 @@ const FONT_PATH := "res://assets/fonts/Fredoka-Variable.ttf"
 # Shared display font. Loaded once; used everywhere via the theme default plus
 # direct draw_string callers (DrawKit, action buttons, menu, results, etc.).
 var font: Font
+# Heavier cut (wght 700) for big numbers / headings — the % readout, timer,
+# leaderboard ranks. Numbers at 700 vs labels at 500 is most of the UI polish.
+var font_heavy: Font
 
 func _ready() -> void:
-	font = _load_font()
+	var base := _load_base()
+	font = _weighted(base, 600)             # SemiBold — friendly but solid
+	font_heavy = _weighted(base, 700)       # Bold — headings + big numbers
 	var theme := _build()
 	get_tree().root.theme = theme
 
-# Load the variable Fredoka TTF straight from disk (no import step needed) and
-# pin it to a bold-ish weight so headings read with confident, rounded strokes.
-func _load_font() -> Font:
+# Load the variable Fredoka TTF straight from disk (no import step needed).
+func _load_base() -> FontFile:
 	var base := FontFile.new()
 	base.load_dynamic_font(FONT_PATH)
 	base.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+	return base
+
+# Pin a variable font to a specific weight so each cut renders crisply.
+func _weighted(base: FontFile, wght: int) -> Font:
 	var fv := FontVariation.new()
 	fv.base_font = base
-	fv.variation_opentype = {"wght": 600}   # SemiBold — friendly but solid
+	fv.variation_opentype = {"wght": wght}
 	return fv
 
 func _build() -> Theme:

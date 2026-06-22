@@ -14,15 +14,15 @@ func _ready() -> void:
 	var m: Node = km.new()
 	add_child(m)
 
-	# let the AI expand into a mature match (kingdoms fill the continent)
-	await get_tree().create_timer(24.0).timeout
+	# let the AI expand into a MATURE match (kingdoms fill the continent like target)
+	await get_tree().create_timer(90.0).timeout
 
-	# overview camera so the whole toybox is in frame
+	# close 3/4 hero framing like target_art.png (not a far top-down)
 	if m.camera:
 		m.camera.target = null
-		m.camera.global_position = Vector3(0, 72, 48)
-		m.camera.look_at(Vector3.ZERO, Vector3.UP)
-		m.camera.fov = 56
+		m.camera.global_position = Vector3(0, 30, 30)
+		m.camera.look_at(Vector3(0, 0, -2), Vector3.UP)
+		m.camera.fov = 50
 	await get_tree().process_frame
 	await get_tree().process_frame
 

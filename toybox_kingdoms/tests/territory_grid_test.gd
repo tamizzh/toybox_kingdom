@@ -20,6 +20,7 @@ func _initialize() -> void:
 	_test_conquest_inside_pocket()
 	_test_trail_cut_kills_rival()
 	_test_self_cut_dies()
+	_test_castle_footprint_coverage()
 	_test_capture_cost_is_loop_bound_not_kingdom_bound()
 	print("\n--- correctness: %d passed, %d failed ---\n" % [_pass, _fail])
 
@@ -104,6 +105,41 @@ func _test_self_cut_dies() -> void:
 	var res := g.enter_cell(1, 3, 9)      # ...cross our own trail
 	_check("self-cross reported as death", res.get("died", false))
 	_check("own trail wiped on death", g.trail_length(1) == 0)
+
+# A castle only falls once a rival owns its WHOLE footprint disc — region_fully_owned
+# is the gate. One uncovered cell anywhere in the disc must keep the castle standing,
+# and a bigger (higher-tier) footprint must demand more covered ground.
+func _test_castle_footprint_coverage() -> void:
+	print("[castle footprint coverage]")
+	var g := Grid.new()
+	g.setup(20, 20)
+	var cx := 10; var cy := 10; var r := 3
+	# Rival 2 paints the entire radius-3 disc around the castle except one corner cell.
+	for dy in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			if dx * dx + dy * dy <= r * r:
+				g._set_owner(cx + dx, cy + dy, 2)
+	_check("full disc -> covered", g.region_fully_owned(cx, cy, r, 2))
+	g._set_owner(cx + 2, cy + 2, 1)        # one cell flips to a third party
+	_check("one stray cell -> NOT covered", not g.region_fully_owned(cx, cy, r, 2))
+	g._set_owner(cx + 2, cy + 2, 2)        # rival re-covers it
+	_check("re-covered -> covered again", g.region_fully_owned(cx, cy, r, 2))
+	# Owning the centre alone is not enough for any footprint bigger than a point.
+	var g2 := Grid.new()
+	g2.setup(20, 20)
+	g2._set_owner(cx, cy, 2)
+	_check("centre-only does NOT cover r=3", not g2.region_fully_owned(cx, cy, 3, 2))
+	_check("centre-only DOES cover r=0", g2.region_fully_owned(cx, cy, 0, 2))
+	# A footprint partly off the world edge: only the in-bounds cells must be owned.
+	var g3 := Grid.new()
+	g3.setup(20, 20)
+	for dy in range(-2, 3):
+		for dx in range(-2, 3):
+			if dx * dx + dy * dy <= 4:
+				var x := 0 + dx; var y := 0 + dy
+				if g3.in_bounds(x, y):
+					g3._set_owner(x, y, 2)
+	_check("edge castle covered by in-bounds cells only", g3.region_fully_owned(0, 0, 2, 2))
 
 # Two captures with the SAME loop size must cost the same whether the kingdom is
 # tiny or already enormous — proving capture is bound to the trail, not the realm.
