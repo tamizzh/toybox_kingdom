@@ -21,11 +21,14 @@ uniform sampler2D own : filter_nearest;       // R = kingdom idx/255, A = claime
 uniform sampler2D own_l : filter_linear;      // same texture, smooth — drives plateau height
 uniform vec3 kcolors[8];
 uniform vec2 grid_size = vec2(128.0, 96.0);
-// Natural wilderness palette (sampled from the authored grass/soil tiles).
-uniform vec3 grass_dark = vec3(0.24, 0.36, 0.13);
-uniform vec3 grass_mid  = vec3(0.38, 0.54, 0.19);
-uniform vec3 grass_lite = vec3(0.52, 0.70, 0.28);
-uniform vec3 soil_col   = vec3(0.46, 0.35, 0.22);
+// Wilderness uses the authored grass (0-3) + soil (4) TILES, one per cell.
+uniform sampler2DArray terrain_tex : filter_linear_mipmap;
+// The tile supplies only light/dark DETAIL; hue comes from these real green shades
+// (so grass is controllably natural-green, not the tiles' fixed yellow-green).
+uniform vec3 grass_a = vec3(0.20, 0.38, 0.15);       // deep green
+uniform vec3 grass_b = vec3(0.32, 0.51, 0.20);       // mid green
+uniform vec3 grass_c = vec3(0.47, 0.64, 0.26);       // light green
+uniform vec3 soil_col = vec3(0.44, 0.33, 0.20);      // earthy brown
 uniform vec3 sand_col = vec3(0.34, 0.30, 0.20);      // muted coast, doesn't glow
 uniform float bump_amp = 0.045;
 uniform float plateau = 0.115;                // claimed land rises into thicker toy-board plates
@@ -89,22 +92,29 @@ void fragment(){
 		ROUGHNESS = 0.62;
 		SPECULAR = 0.06;
 	} else {
-		// Natural wilderness: rolling grass with organic SOIL patches, all driven
-		// by smooth noise (not the grid) so it reads as terrain, not a tiled floor.
-		// The scattered trees/rocks/bushes (env/scatter.gd) supply the fine detail.
-		float nb = vnoise(v_world.xz * 0.45);
-		float nm = vnoise(v_world.xz * 1.7 + 5.0);
-		float nf = vnoise(v_world.xz * 6.5 + 11.0);
-		vec3 grass = mix(grass_dark, grass_mid, smoothstep(0.25, 0.75, nb));
-		grass = mix(grass, grass_lite, smoothstep(0.55, 0.95, nm) * 0.6);
-		grass *= 0.93 + nf * 0.14;                      // fine blade speckle
-		float soil = smoothstep(0.60, 0.74, vnoise(v_world.xz * 0.5 + 19.0));
-		vec3 g = mix(grass, soil_col * (0.9 + nf * 0.2), soil);
-		g *= seam_ao;                                    // gap shadow next to a plate
-		g = mix(sand_col, g, coast);                     // sandy coast
+		// Tiled wilderness: one authored grass tile per cell (4 variants by hash),
+		// with SOIL tiles forming organic CLUMPS via low-freq noise (not random
+		// salt-and-pepper). Tinted + tonally varied so it doesn't read as a flat
+		// repeating quilt.
+		vec2 tuv = fract(uv * grid_size);
+		float gh = hash(floor(uv * grid_size) + 0.37);
+		// plenty of soil now: large organic earthy clumps (~45%), grass between
+		float soil = smoothstep(0.47, 0.59, vnoise(v_world.xz * 0.5 + 19.0));
+		bool is_soil = soil > 0.5;
+		float layer = is_soil ? 4.0 : floor(gh * 4.0);
+		vec3 t = texture(terrain_tex, vec3(tuv, layer)).rgb;
+		float d = dot(t, vec3(0.299, 0.587, 0.114));      // tile luminance = bevel/blade detail
+		// hue from real green shades (multiple tones blended by large-scale noise)
+		float sn = vnoise(v_world.xz * 0.32 + 7.0);
+		vec3 shade = mix(grass_a, grass_b, smoothstep(0.20, 0.55, sn));
+		shade = mix(shade, grass_c, smoothstep(0.55, 0.88, sn));
+		vec3 base_col = is_soil ? soil_col : shade;
+		vec3 g = base_col * (0.55 + d * 1.05);            // tile detail modulates brightness
+		g *= seam_ao;                                     // gap shadow next to a plate
+		g = mix(sand_col, g, coast);                      // sandy coast
 		ALBEDO = g;
-		ROUGHNESS = 0.9;
-		SPECULAR = 0.08;
+		ROUGHNESS = 0.85;
+		SPECULAR = 0.1;
 	}
 }
 """
@@ -140,6 +150,7 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	mat.set_shader_parameter("own_l", _tex)
 	mat.set_shader_parameter("grid_size", Vector2(_w, _h))
 	mat.set_shader_parameter("bump_amp", BUMP)
+	mat.set_shader_parameter("terrain_tex", _build_terrain_array())
 	# Kingdom tiles use the exact same base colour as castle roofs.
 	var pal := PackedVector3Array()
 	pal.resize(8)
@@ -150,6 +161,31 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	mesh.material_override = mat
 	mesh.position = Vector3(0, TOP_Y, 0)
 	add_child(mesh)
+
+# Pack the authored grass/soil tiles into a Texture2DArray the shader samples
+# per-cell (layers 0-3 = grass variants, 4 = soil). All are 128x128; mipmaps must
+# match across layers, so we (re)generate them consistently.
+func _build_terrain_array() -> Texture2DArray:
+	const PATHS := [
+		"res://assets/tile_grass_0.png",
+		"res://assets/tile_grass_1.png",
+		"res://assets/tile_grass_2.png",
+		"res://assets/tile_grass_3.png",
+		"res://assets/tile_dirt.png",
+	]
+	var imgs: Array[Image] = []
+	for p in PATHS:
+		var tex: Texture2D = load(p)
+		var img := tex.get_image()
+		if img.is_compressed():
+			img.decompress()
+		img.convert(Image.FORMAT_RGBA8)
+		img.clear_mipmaps()
+		img.generate_mipmaps()
+		imgs.append(img)
+	var arr := Texture2DArray.new()
+	arr.create_from_images(imgs)
+	return arr
 
 # Repaint the ownership texture from the grid (throttled dirty tick).
 func update() -> void:

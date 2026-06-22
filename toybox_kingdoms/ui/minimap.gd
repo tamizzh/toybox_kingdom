@@ -23,7 +23,7 @@ func setup(gw: int, gh: int, world: World3D, cell: float) -> void:
 	_vp.size = VP
 	_vp.world_3d = world                                  # share the main 3D world
 	_vp.transparent_bg = false
-	_vp.msaa_3d = Viewport.MSAA_2X
+	_vp.msaa_3d = Viewport.MSAA_DISABLED                  # MSAA on a shared-world SubViewport trips a mipmap/framebuffer bug
 	_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 	add_child(_vp)
 
