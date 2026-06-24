@@ -25,6 +25,14 @@ const TREE_CAP := 1500
 const ROCK_CAP := 520
 const BUSH_CAP := 900
 
+# Forest border: trees keep going past the play grid (off-grid "apron" cells),
+# dense at the board edge and thinning out into the fog. Own budget so the
+# wilderness inside the board is never starved by the surround.
+const APRON_CELLS    := 34   # how many cells the forest extends beyond the grid
+const APRON_TREE_CAP := 2400
+const APRON_ROCK_CAP := 480
+const APRON_BUSH_CAP := 1100
+
 var grid
 var cell: float = 0.6
 
@@ -90,10 +98,12 @@ func _batch(mesh: Mesh, colors: Array) -> MultiMeshInstance3D:
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	# whole-map AABB so each batch frustum-culls instead of always drawing.
-	var wx: float = grid.w * cell
-	var wz: float = grid.h * cell
-	mmi.custom_aabb = AABB(Vector3(-wx * 0.5, -1.0, -wz * 0.5), Vector3(wx, 8.0, wz))
+	# AABB spans the board PLUS the forest apron so off-grid trees frustum-cull
+	# correctly (a grid-only box would clip the surrounding forest away).
+	var pad: float = APRON_CELLS * cell
+	var fw: float = grid.w * cell + pad * 2.0
+	var fz: float = grid.h * cell + pad * 2.0
+	mmi.custom_aabb = AABB(Vector3(-fw * 0.5, -1.0, -fz * 0.5), Vector3(fw, 8.0, fz))
 	return mmi
 
 # Place props on currently-neutral cells (hash-stable, capped for mobile).
@@ -135,6 +145,44 @@ func rebuild() -> void:
 			rocks.append(_xform(cx, cy, bucket, 1.0))
 		elif bucket < tree_thresh + 20 and bushes.size() < bush_cap:
 			bushes.append(_xform(cx, cy, bucket, 1.08))
+	# ── Forest apron: scatter onto the off-grid ring framing the board ──────────
+	# Dense at the board edge, thinning out with distance; the fog swallows the
+	# far rows so we don't need to place trees all the way to the plane edge.
+	var apron_tree_cap := int(APRON_TREE_CAP * dense)
+	var apron_rock_cap := int(APRON_ROCK_CAP * dense)
+	var apron_bush_cap := int(APRON_BUSH_CAP * dense)
+	var apron_trees := 0
+	var apron_rocks := 0
+	var apron_bushes := 0
+	for ay in range(-APRON_CELLS, gh + APRON_CELLS):
+		var dy: int = 0
+		if ay < 0:
+			dy = -ay
+		elif ay >= gh:
+			dy = ay - (gh - 1)
+		for ax in range(-APRON_CELLS, w + APRON_CELLS):
+			if ax >= 0 and ax < w and ay >= 0 and ay < gh:
+				continue   # inside the play grid → handled by the pass above
+			var dx: int = 0
+			if ax < 0:
+				dx = -ax
+			elif ax >= w:
+				dx = ax - (w - 1)
+			var d: int = maxi(dx, dy)             # Chebyshev distance outside the board
+			var frac: float = 1.0 - float(d) / float(APRON_CELLS)
+			var thresh: int = int(26.0 * frac * frac)   # dense at the edge, thinning out
+			var hh: int = ((ax * 73856093) ^ (ay * 19349663)) & 0x7fffffff
+			var bucket: int = hh % 1000
+			if bucket < thresh and apron_trees < apron_tree_cap:
+				var kind: int = (((ax * 49157) ^ (ay * 98317)) & 0x7fffffff) % TREE_KINDS.size()
+				tree_buckets[kind].append(_xform(ax, ay, bucket, 0.58))
+				apron_trees += 1
+			elif bucket < thresh + 8 and apron_rocks < apron_rock_cap:
+				rocks.append(_xform(ax, ay, bucket, 1.0))
+				apron_rocks += 1
+			elif bucket < thresh + 18 and apron_bushes < apron_bush_cap:
+				bushes.append(_xform(ax, ay, bucket, 1.08))
+				apron_bushes += 1
 	for k in TREE_KINDS.size():
 		_fill(_trees[k], tree_buckets[k], true)
 	_fill(_rock, rocks, false)

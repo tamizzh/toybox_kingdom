@@ -54,6 +54,7 @@ var _minimap
 var _populace
 var _scatter
 var _ground
+var _world_env: Environment      # the live board env; the minimap reuses a fog-free copy
 var _kingdom_t := 0.0
 var _terr_rebuild_t := 0.0
 
@@ -687,6 +688,19 @@ func _build_environment() -> void:
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color("0e1512")   # dark frame → saturated plates pop (target look)
 
+	# Distance fog fades the grass continent + forest border into the dark frame,
+	# giving the soft misty vignette of the target instead of a hard board edge.
+	env.fog_enabled = true
+	env.fog_mode = Environment.FOG_MODE_DEPTH
+	env.fog_light_color = Color("0e1512")    # fade toward the bg colour
+	env.fog_light_energy = 1.0
+	env.fog_sun_scatter = 0.0
+	env.fog_depth_begin = 26.0               # play area stays crisp; wilderness recedes
+	env.fog_depth_end = 64.0
+	env.fog_depth_curve = 1.5
+	env.fog_density = 1.0
+	env.fog_sky_affect = 1.0
+
 	# Cool sky-ambient fill — kept LOW so shadows stay deep and colours stay rich.
 	# (High ambient floods the shadows → SSAO/directional shadow vanish + pastel wash.)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
@@ -724,6 +738,7 @@ func _build_environment() -> void:
 	env.adjustment_brightness = 1.0
 	env.adjustment_contrast = 1.06
 	env.adjustment_saturation = 1.38         # deep, rich toy-plate colours (target look)
+	_world_env = env                         # minimap mirrors this (fog-free) so it matches the board
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
@@ -748,55 +763,25 @@ func _build_environment() -> void:
 	fill.shadow_enabled = false
 	add_child(fill)
 
-const WATER_SHADER := """
-shader_type spatial;
-render_mode cull_back;
-uniform vec3 col_a : source_color = vec3(0.06, 0.11, 0.12);
-uniform vec3 col_b : source_color = vec3(0.03, 0.06, 0.07);
-void vertex() {
-	float w = sin(VERTEX.x * 0.4 + TIME * 1.4) + cos(VERTEX.z * 0.4 + TIME * 1.1);
-	VERTEX.y += w * 0.04;
-}
-void fragment() {
-	float t = 0.5 + 0.5 * sin(UV.x * 26.0 + TIME) * cos(UV.y * 26.0 - TIME * 0.7);
-	ALBEDO = mix(col_b, col_a, t * 0.6);   // gentler ripple contrast
-	ROUGHNESS = 0.5;
-	SPECULAR = 0.25;
-}
-"""
-
 func _build_ground() -> void:
 	var wx := GW * CELL
 	var wz := GH * CELL
 
-	# water all around — gentle animated shader; the kingdoms sit on an island.
-	var water := MeshInstance3D.new()
-	var wpm := PlaneMesh.new()
-	wpm.size = Vector2(wx + 140.0, wz + 140.0)
-	water.mesh = wpm
-	var wmat := ShaderMaterial.new()
-	var wsh := Shader.new()
-	wsh.code = WATER_SHADER
-	wmat.shader = wsh
-	water.material_override = wmat
-	water.position = Vector3(0, -0.55, 0)
-	add_child(water)
-
-	# Continent BASE: a rounded-rectangle sandy island the clay plateau sits on,
-	# giving it thickness + a beach/cliff down to the water (Blender bevelled mesh
-	# so the corners are round, not a sharp box).
-	var island_scene := load("res://assets/models/island.glb")
-	if island_scene:
-		var island = island_scene.instantiate()
-		add_child(island)
-		var sxz := (wx + 4.0) / 16.0          # island model is 16 x 12 wide
-		island.scale = Vector3(sxz, 0.7, sxz)
-		island.position = Vector3(0, 0.04 - 0.35, 0)   # top ~y=0.04 under the clay plane
-		var sandy := StandardMaterial3D.new()
-		sandy.albedo_color = Color("3a2e1e")   # dark earth cliff/shore (recedes into the frame)
-		sandy.roughness = 1.0
-		for mi in island.find_children("", "MeshInstance3D", true, false):
-			mi.material_override = sandy
+	# The play board sits on a large GRASS continent that runs well past the grid
+	# and fades into mist (Environment fog) at the edges — no water, no void.
+	# One big matte plane; the forest border (scatter.gd) + fog do the framing.
+	var apron := MeshInstance3D.new()
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(wx + 300.0, wz + 300.0)
+	apron.mesh = pm
+	var gm := StandardMaterial3D.new()
+	gm.albedo_color = Color(0.26, 0.42, 0.17)   # deep wilderness green (recedes so plates pop)
+	gm.roughness = 0.98
+	gm.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	apron.material_override = gm
+	apron.position = Vector3(0, 0.02, 0)         # just under the clay board so its edge tucks in
+	apron.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(apron)
 
 func _box_part(pos: Vector3, size: Vector3, color: Color) -> void:
 	var mi := MeshInstance3D.new()
@@ -866,8 +851,12 @@ func _build_hud(ui: CanvasLayer) -> void:
 	_build_action_stack(ui)
 	_build_toolbar(ui)
 
+	# fog-free copy of the board environment → minimap matches the main view exactly
+	# (the world's depth fog would otherwise black out its 100u-high top-down camera).
+	var mm_env := _world_env.duplicate(true) as Environment
+	mm_env.fog_enabled = false
 	_minimap = Minimap.new()
-	_minimap.setup(GW, GH, get_world_3d(), CELL)   # live top-down render of the board
+	_minimap.setup(GW, GH, get_world_3d(), CELL, mm_env)   # live top-down render of the board
 	_minimap.position = Vector2(Palette.DESIGN_W - 286, Palette.DESIGN_H - 202)
 	ui.add_child(_minimap)
 

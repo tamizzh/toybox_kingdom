@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://t53vrd21a17"
-path="res://.godot/imported/mascot_options.png-f9d05e773f4a44540a57f4ef60693ae7.ctex"
+uid="uid://dpmgyh7wd3ob1"
+path="res://.godot/imported/mascot_preview.png-136b929aff0ea1b546b588ced9f2db82.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://tools/_mascot_preview/mascot_options.png"
-dest_files=["res://.godot/imported/mascot_options.png-f9d05e773f4a44540a57f4ef60693ae7.ctex"]
+source_file="res://tools/mascot_preview.png"
+dest_files=["res://.godot/imported/mascot_preview.png-136b929aff0ea1b546b588ced9f2db82.ctex"]
 
 [params]
 

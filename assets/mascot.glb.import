@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://bwdks25f5020a"
-path="res://.godot/imported/mascot.glb-0456812ad04b53ed5b71028b808f2788.scn"
+uid="uid://b4mptfms3457e"
+path="res://.godot/imported/mascot.glb-588b872e727cca83d318624e399aca80.scn"
 
 [deps]
 
-source_file="res://players/mascot.glb"
-dest_files=["res://.godot/imported/mascot.glb-0456812ad04b53ed5b71028b808f2788.scn"]
+source_file="res://assets/mascot.glb"
+dest_files=["res://.godot/imported/mascot.glb-588b872e727cca83d318624e399aca80.scn"]
 
 [params]
 

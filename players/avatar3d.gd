@@ -23,7 +23,6 @@ var _bob_t: float = 0.0
 var _dust_t: float = 0.0
 
 static var _capsule_shape: CapsuleShape3D
-static var _disc_mesh: CylinderMesh
 static var _dust_mesh: CylinderMesh
 static var _ring_mesh: CylinderMesh
 static var _spark_mesh: SphereMesh
@@ -42,29 +41,18 @@ func setup(p: PlayerData) -> void:
 	col.position = Vector3(0, 0.56, 0)   # centre = height/2 keeps feet on y=0
 	add_child(col)
 
-	# Glowing player-colour disc on the ground
-	var disc := MeshInstance3D.new()
-	disc.mesh = _shared_disc_mesh()
-	var dm := StandardMaterial3D.new()
-	dm.albedo_color            = p.color
-	dm.emission_enabled        = true
-	dm.emission                = p.color
-	dm.emission_energy_multiplier = 0.5
-	disc.material_override = dm
-	disc.position = Vector3(0, 0.04, 0)
-	add_child(disc)
-
 	_visual = Node3D.new()
 	add_child(_visual)
 	_build_default_visual(p.color)
 
 # ──────────────────────────────────────────────────── mascot GLB visual ──
-const MASCOT := preload("res://players/mascot.glb")
+const MASCOT := preload("res://assets/mascot.glb")
 
 func _build_default_visual(c: Color) -> void:
-	# Blob sits with bottom at Y=0 (no offset). Scale 0.8 makes the mascots small
-	# toys in a big arena, matching the reference art.
-	set_model(MASCOT, 0.8, 0.0)
+	# Scale 1.6 (the new mascot reads better at double size). It's modelled around
+	# its centre (AABB min_y ≈ -0.557), so lift it by -min_y*scale (≈0.891) to seat
+	# the feet on Y=0 / the ground. +90° Y so its face points along travel.
+	set_model(MASCOT, 1.6, 0.891, 90.0)
 	_recolor_mascot(_visual, c)
 
 func _recolor_mascot(node: Node, c: Color) -> void:
@@ -76,7 +64,18 @@ func _recolor_mascot(node: Node, c: Color) -> void:
 			# blush doesn't wash the body toward pink/purple (esp. on the blue ball).
 			var is_detail := "eye" in n or "pupil" in n \
 							 or "iris" in n or "shine" in n or "highlight" in n \
-							 or "white" in n
+							 or "white" in n or "face" in n or "crown" in n
+			# The new mascot.glb uses generic "Sphere_NNN" part names, so the name
+			# check above can't spot its accents — also keep any part that's near-white
+			# in the source art (eye/face/belly), which the kingdom colour would flood.
+			if not is_detail:
+				var src: Material = child.get_surface_override_material(0)
+				if src == null and child.mesh != null:
+					src = child.mesh.surface_get_material(0)
+				if src is StandardMaterial3D:
+					var a: Color = (src as StandardMaterial3D).albedo_color
+					if a.r > 0.85 and a.g > 0.85 and a.b > 0.85:
+						is_detail = true
 			if not is_detail:
 				# Deepen + saturate the base so the bright high-key lighting reads it
 				# as vivid red/blue (raw palette colors wash out to pastel under fill).
@@ -94,13 +93,14 @@ func _recolor_mascot(node: Node, c: Color) -> void:
 		_recolor_mascot(child, c)
 
 # ───────────────────────────── external model (e.g. tank.glb) ──
-func set_model(scene: PackedScene, model_scale: float = 1.0, y: float = 0.0) -> void:
+func set_model(scene: PackedScene, model_scale: float = 1.0, y: float = 0.0, y_rot_deg: float = 0.0) -> void:
 	for c in _visual.get_children():
 		c.queue_free()
 	_body_mats.clear()
 	var m := scene.instantiate()
 	m.scale    = Vector3.ONE * model_scale
 	m.position = Vector3(0, y, 0)
+	m.rotation = Vector3(0, deg_to_rad(y_rot_deg), 0)   # model's own facing offset (composes with face())
 	_visual.add_child(m)
 
 # ──────────────────────────────────────────────────── animations ──
@@ -254,14 +254,6 @@ func _shared_capsule_shape() -> CapsuleShape3D:
 		_capsule_shape.radius = 0.48
 		_capsule_shape.height = 1.12
 	return _capsule_shape
-
-func _shared_disc_mesh() -> CylinderMesh:
-	if not _disc_mesh:
-		_disc_mesh = CylinderMesh.new()
-		_disc_mesh.top_radius = 0.52
-		_disc_mesh.bottom_radius = 0.52
-		_disc_mesh.height = 0.07
-	return _disc_mesh
 
 func _shared_dust_mesh() -> CylinderMesh:
 	if not _dust_mesh:

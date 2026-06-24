@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://qshotscene01"]
+
+[ext_resource type="Script" path="res://toybox_kingdoms/tools/qshot.gd" id="1_qshot"]
+
+[node name="QShot" type="Node"]
+script = ExtResource("1_qshot")

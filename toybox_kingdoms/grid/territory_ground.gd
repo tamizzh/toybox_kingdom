@@ -123,6 +123,7 @@ var grid
 var colors := {}
 var _img: Image
 var _tex: ImageTexture
+var _buf: PackedByteArray   # reused RGBA8 scratch — avoids per-pixel set_pixel/Color churn
 var _w: int
 var _h: int
 
@@ -134,6 +135,8 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	_img = Image.create(_w, _h, false, Image.FORMAT_RGBA8)
 	_img.fill(Color(0, 0, 0, 0))
 	_tex = ImageTexture.create_from_image(_img)
+	_buf = PackedByteArray()
+	_buf.resize(_w * _h * 4)
 
 	var mesh := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
@@ -188,13 +191,22 @@ func _build_terrain_array() -> Texture2DArray:
 	return arr
 
 # Repaint the ownership texture from the grid (throttled dirty tick).
+# Writes a reused PackedByteArray and uploads once — ~10-50x cheaper than the
+# per-pixel set_pixel()/Color path, and allocation-free per tick.
 func update() -> void:
-	for y in _h:
-		var row := y * _w
-		for x in _w:
-			var oid: int = grid.owner[row + x]
-			if oid == 0:
-				_img.set_pixel(x, y, Color(0, 0, 0, 0))
-			else:
-				_img.set_pixel(x, y, Color(float(oid - 1) / 255.0, 0, 0, 1.0))
+	var n := _w * _h
+	for i in n:
+		var oid: int = grid.owner[i]
+		var o := i * 4
+		if oid == 0:
+			_buf[o] = 0
+			_buf[o + 1] = 0
+			_buf[o + 2] = 0
+			_buf[o + 3] = 0
+		else:
+			_buf[o] = oid - 1        # R: shader reads floor(R*255+0.5) == oid-1
+			_buf[o + 1] = 0
+			_buf[o + 2] = 0
+			_buf[o + 3] = 255        # A = claimed
+	_img.set_data(_w, _h, false, Image.FORMAT_RGBA8, _buf)
 	_tex.update(_img)
