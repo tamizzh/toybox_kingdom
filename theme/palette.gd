@@ -5,7 +5,7 @@ extends RefCounted
 
 const PLAYER_COLORS := [
 	Color("f02828"), # P1 vivid red
-	Color("1878f0"), # P2 vivid blue
+	Color("4d9ef5"), # P2 sky blue (softer)
 	Color("10b83c"), # P3 vivid green
 	Color("f5c018"), # P4 vivid yellow
 ]

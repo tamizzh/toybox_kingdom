@@ -4,6 +4,7 @@
 extends Node3D
 
 func _ready() -> void:
+	Palette.active_palette = Palette.PLAYER_COLORS   # override cosmetic pack for preview
 	var win := get_window()
 	win.mode = Window.MODE_WINDOWED
 	win.size = Vector2i(1280, 720)
@@ -11,10 +12,12 @@ func _ready() -> void:
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.62, 0.74, 0.92)
+	e.background_color = Color("0e1512")
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.7, 0.78, 0.9)
-	e.ambient_light_energy = 0.6
+	e.ambient_light_color = Color("cfe0ee")   # matches kingdom_match.gd
+	e.ambient_light_energy = 0.30
+	e.adjustment_enabled = true
+	e.adjustment_saturation = 1.38            # matches kingdom_match.gd tone-map
 	env.environment = e
 	add_child(env)
 

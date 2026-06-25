@@ -759,7 +759,7 @@ func _home_anchor(i: int, n: int) -> Vector2i:
 # Hues tuned to target_art.png: true distinct primaries (red is RED not orange,
 # green is emerald not olive) so the eight kingdoms read as cleanly as the target.
 const KINGDOM_COLORS := [
-	Color("1a3fb0"), Color("d22323"), Color("33a23a"), Color("ecae12"),
+	Color("4d9ef5"), Color("d22323"), Color("33a23a"), Color("ecae12"),
 	Color("8a3fc0"), Color("23a6ad"), Color("e87b14"), Color("e2479a"),
 ]
 const KINGDOM_LABELS := [

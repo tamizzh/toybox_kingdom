@@ -102,11 +102,12 @@ void fragment(){
 		float gh = hash(floor(uv * grid_size) + 0.37);
 		float soil = smoothstep(0.42, 0.56, vnoise(v_world.xz * 0.5 + 19.0));  // ~50% soil clumps
 		bool is_soil = soil > 0.5;
-		// sample a tile (7 grass variants 0-6, soil pattern = layer 7) for DETAIL
-		float layer = is_soil ? 7.0 : floor(gh * 7.0);
+		// sample a tile (5 grass variants 0-4, soil pattern = layer 5) for DETAIL
+		float layer = is_soil ? 5.0 : floor(gh * 5.0);
 		vec3 t = texture(terrain_tex, vec3(tuv, layer)).rgb;
 		float d = dot(t, vec3(0.299, 0.587, 0.114));      // tile luminance = bevel + pattern detail
-		// multiple grass shades (large-scale noise); soil = brown
+		// multiple grass shades (large-scale noise); soil = brown. Hue is driven
+		// from clean colours (the raw tiles render yellow-acid under the grade).
 		float sn = vnoise(v_world.xz * 0.32 + 7.0);
 		vec3 shade = mix(grass_a, grass_b, smoothstep(0.20, 0.55, sn));
 		shade = mix(shade, grass_c, smoothstep(0.55, 0.88, sn));
@@ -174,12 +175,20 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 # the rightmost cell of the _row_grass atlas instead. All forced to 128x128 with
 # matching mipmaps (the array requires consistent mipmap usage across layers).
 func _build_terrain_array() -> Texture2DArray:
+	# Curated grass tiles (the clean/green ones — the yellow/dry grass_1..3 are
+	# dropped). Layers 0-4 = grass detail, layer 5 = soil pattern. The shader uses
+	# tile LUMINANCE only and recolours, so the tiles' own hues don't matter.
+	const GRASS := [
+		"res://assets/tile_grass.png",
+		"res://assets/tile_grass_0.png",
+		"res://assets/tile_grass_4.png",
+		"res://assets/tile_grass_5.png",
+		"res://assets/tile_grass_6.png",
+	]
 	var imgs: Array[Image] = []
-	for i in 7:
-		imgs.append(_prep_tile((load("res://assets/tile_grass_%d.png" % i) as Texture2D).get_image()))
-	# soil DETAIL = tile_dirt's cracked-stone pattern (its blue colour is irrelevant;
-	# the shader recolours the wilderness from luminance only).
-	imgs.append(_prep_tile((load("res://assets/tile_dirt.png") as Texture2D).get_image()))
+	for p in GRASS:
+		imgs.append(_prep_tile((load(p) as Texture2D).get_image()))
+	imgs.append(_prep_tile((load("res://assets/tile_dirt.png") as Texture2D).get_image()))  # soil pattern
 	var arr := Texture2DArray.new()
 	arr.create_from_images(imgs)
 	return arr

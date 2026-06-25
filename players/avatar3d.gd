@@ -51,12 +51,11 @@ func setup(p: PlayerData) -> void:
 const MASCOT := preload("res://assets/mascot.glb")
 
 func _build_default_visual(c: Color) -> void:
-	# y=0.578 lifts feet to Y=0 (GLB min_y=-0.578 at scale 1.0).
-	# z=-1.613 corrects the GLB's X-center offset (-1.613 local X) which becomes
-	# a +1.613 world-Z offset after the 90° Y rotation, shifting the model forward.
-	set_model(MASCOT, 1.0, 0.578, 90.0)
+	# y=0.750 lifts feet to Y=0 (GLB min_y=-0.750 at scale 1.0).
+	# z=-1.629 corrects the GLB's X-center offset after the 90° Y rotation.
+	set_model(MASCOT, 1.0, 0.750, 90.0)
 	if _visual.get_child_count() > 0:
-		_visual.get_child(0).position.z = -1.613
+		_visual.get_child(0).position.z = -1.629
 	_recolor_mascot(_visual, c)
 	_anim = _find_anim_player(_visual)
 	if _anim:
@@ -86,13 +85,11 @@ func _recolor_mascot(node: Node, c: Color) -> void:
 					keep = true
 					break
 			if not keep:
-				# Boost saturation slightly so colors stay vivid under the ambient fill.
 				var vivid := c
-				vivid.s = clampf(vivid.s * 1.1, 0.0, 1.0)
 				vivid.v = clampf(vivid.v * 0.88, 0.0, 1.0)
 				var mat := StandardMaterial3D.new()
 				mat.albedo_color      = vivid
-				mat.roughness         = 0.18   # glossy soft-plastic, matches reference
+				mat.roughness         = 0.42   # soft matte-plastic, less harsh
 				mat.metallic          = 0.0
 				mat.specular_mode     = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 				child.material_override = mat
