@@ -23,6 +23,10 @@ func _ready() -> void:
 		m.camera.global_position = Vector3(0, 30, 30)
 		m.camera.look_at(Vector3(0, 0, -2), Vector3.UP)
 		m.camera.fov = 50
+	# Hide the HUD + any DEFEATED/results overlay so we capture a clean board (the
+	# headless human sits still and gets conquered, so the results panel is up by now).
+	if m._ui_layer:
+		m._ui_layer.visible = false
 	await get_tree().process_frame
 	await get_tree().process_frame
 

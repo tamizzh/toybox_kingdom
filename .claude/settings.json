@@ -6,7 +6,19 @@
       "Bash(powershell -NoProfile -Command \"\\(Get-Command blender -ErrorAction SilentlyContinue\\).Source; Get-ChildItem 'C:\\\\Program Files\\\\Blender Foundation' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name\")",
       "Bash(\"/c/Program Files/Blender Foundation/Blender 5.1/blender.exe\" --background --python tools/gen_floor_tile.py)",
       "Bash(\"/c/Users/rpandian/Downloads/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_console.exe\" --headless --path . \"res://toybox_kingdoms/kingdom_match.tscn\" --quit-after 12)",
-      "Bash(\"/c/Users/rpandian/Downloads/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_console.exe\" --path . res://toybox_kingdoms/tools/shot_art.tscn)"
+      "Bash(\"/c/Users/rpandian/Downloads/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_console.exe\" --path . res://toybox_kingdoms/tools/shot_art.tscn)",
+      "Bash(\"C:/Users/rpandian/Downloads/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_console.exe\" --headless --path . \"res://toybox_kingdoms/kingdom_match.tscn\" --quit-after 30)",
+      "Bash(cp .claude/shot_kingdom.png .claude/shot_kingdom_before.png)",
+      "Bash(cp .claude/shot_kingdom_close.png .claude/shot_kingdom_close_before.png)",
+      "Bash(\"C:/Users/rpandian/Downloads/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_console.exe\" --path . res://toybox_kingdoms/tools/shot_kingdom.tscn)",
+      "Bash(python -c \"from PIL import Image; im=Image.open\\('tiles.png'\\); print\\('tiles.png', im.size, im.mode\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(\"C:/Users/rpandian/Downloads/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_console.exe\" --headless --path . --import)",
+      "Bash(\"C:/Users/rpandian/Downloads/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_console.exe\" --path . res://toybox_kingdoms/tools/shot_ground.tscn)",
+      "Read(//c/Users/rpandian/.claude/projects/c--Users-rpandian-Documents-toybox-kingdom/memory/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\rpandian\\.claude\\projects\\c--Users-rpandian-Documents-toybox-kingdom\\memory"
     ]
   }
 }

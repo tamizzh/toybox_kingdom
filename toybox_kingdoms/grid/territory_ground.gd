@@ -27,9 +27,9 @@ uniform sampler2DArray terrain_tex : filter_linear_mipmap;
 // cracked-stone pattern) for their bevel + DETAIL only, then drives the hue from
 // these clean colours — so it reads as grass/soil tiles with the tile grid intact,
 // without the tiles' wrong raw hues (yellow grass, blue "dirt").
-uniform vec3 grass_a = vec3(0.22, 0.42, 0.16);       // deep green
-uniform vec3 grass_b = vec3(0.34, 0.54, 0.20);       // mid green
-uniform vec3 grass_c = vec3(0.48, 0.64, 0.26);       // light green
+uniform vec3 grass_a = vec3(0.24, 0.46, 0.17);       // deep green
+uniform vec3 grass_b = vec3(0.37, 0.60, 0.22);       // mid green (lush)
+uniform vec3 grass_c = vec3(0.52, 0.71, 0.29);       // light green
 uniform vec3 soil_col = vec3(0.47, 0.34, 0.21);      // earthy brown
 uniform vec3 sand_col = vec3(0.34, 0.30, 0.20);      // muted coast, doesn't glow
 uniform float bump_amp = 0.045;
@@ -94,31 +94,49 @@ void fragment(){
 		ROUGHNESS = 0.62;
 		SPECULAR = 0.06;
 	} else {
-		// Tiled wilderness: the AUTHORED grass/soil tiles, one per cell (bevel + grain
-		// + the tile grid kept intact = the target's tiled-board look). 4 grass
-		// variants by hash; SOIL tiles form big organic clumps via low-freq noise.
-		// Only a light per-channel recolour to de-yellow grass / warm the soil.
+		// Tiled wilderness: the AUTHORED painted tiles (tiles.png), shown with their
+		// REAL colour — lush grass with the occasional flower, plus rare dirt patches.
+		// One tile per cell; a per-cell 90° rotation + variant hash breaks the grid
+		// repetition so it reads as a continuous meadow, not a stamped checkerboard.
+		vec2 cell_id = floor(uv * grid_size);
 		vec2 tuv = fract(uv * grid_size);
-		float gh = hash(floor(uv * grid_size) + 0.37);
-		float soil = smoothstep(0.42, 0.56, vnoise(v_world.xz * 0.5 + 19.0));  // ~50% soil clumps
+		// rotate the tile 0/90/180/270 deg per cell (kills the "same flower every cell" look)
+		int rot = int(floor(hash(cell_id + 5.1) * 4.0));
+		vec2 rc = tuv - 0.5;
+		if (rot == 1) rc = vec2(-rc.y, rc.x);
+		else if (rot == 2) rc = -rc;
+		else if (rot == 3) rc = vec2(rc.y, -rc.x);
+		tuv = rc + 0.5;
+		float gh = hash(cell_id + 0.37);
+		float soil = smoothstep(0.74, 0.84, vnoise(v_world.xz * 0.5 + 19.0));  // rare dirt clumps (~10-15%)
 		bool is_soil = soil > 0.5;
-		// sample a tile (5 grass variants 0-4, soil pattern = layer 5) for DETAIL
-		float layer = is_soil ? 5.0 : floor(gh * 5.0);
+		// layers 0-3 = grass variants (tiles.png bottom row), layer 4 = dirt (middle row)
+		float layer = is_soil ? 4.0 : floor(gh * 4.0);
 		vec3 t = texture(terrain_tex, vec3(tuv, layer)).rgb;
-		float d = dot(t, vec3(0.299, 0.587, 0.114));      // tile luminance = bevel + pattern detail
-		// multiple grass shades (large-scale noise); soil = brown. Hue is driven
-		// from clean colours (the raw tiles render yellow-acid under the grade).
-		float sn = vnoise(v_world.xz * 0.32 + 7.0);
-		vec3 shade = mix(grass_a, grass_b, smoothstep(0.20, 0.55, sn));
-		shade = mix(shade, grass_c, smoothstep(0.55, 0.88, sn));
-		vec3 target = is_soil ? soil_col : shade;
-		// STRONG detail contrast → tile bevel grid + cracked-stone pattern read clearly
-		vec3 g = target * (0.38 + d * 1.42);
+		vec3 g;
+		if (is_soil) {
+			// the raw dirt tile is too orange → salmon under the grade; pull it to an
+			// earthy brown while keeping the pebble detail.
+			g = vec3(t.r * 0.58, t.g * 0.70, t.b * 0.85);
+		} else {
+			// tiles.png grass is chartreuse (blue≈0) → neon under the grade. Remap to a
+			// rich, natural grass green, deriving the missing blue from the green channel,
+			// while KEEPING the painted detail (tufts read as lighter patches).
+			// low blue (t.g*0.18) keeps it a rich grass green, not a pale mint.
+			vec3 green = vec3(t.r * 0.42, t.g * 0.68, t.g * 0.18);
+			// flowers/highlights are bright + actually have blue → keep them as light
+			// specks instead of flattening them to green (preserves the tile's charm).
+			float flower = smoothstep(0.30, 0.55, t.b);
+			g = mix(green, t * 0.9, flower);
+		}
+		// subtle large-scale brightness variation so the open field has gentle tonal movement
+		float sn = vnoise(v_world.xz * 0.30 + 7.0);
+		g *= (0.88 + sn * 0.16);
 		g *= seam_ao;                                     // gap shadow next to a plate
 		g = mix(sand_col, g, coast);                      // sandy coast
 		ALBEDO = g;
-		ROUGHNESS = 0.85;
-		SPECULAR = 0.12;
+		ROUGHNESS = 0.88;
+		SPECULAR = 0.10;
 	}
 }
 """
@@ -173,26 +191,28 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	mesh.position = Vector3(0, TOP_Y, 0)
 	add_child(mesh)
 
-# Pack the AUTHENTIC authored tiles into a Texture2DArray the shader samples
-# per-cell: layers 0-6 = the seven grass variants, layer 7 = the brown soil tile.
-# The standalone tile_dirt.png is a blue cobble tile, so the soil is cropped from
-# the rightmost cell of the _row_grass atlas instead. All forced to 128x128 with
-# matching mipmaps (the array requires consistent mipmap usage across layers).
+# Pack the painted tiles sliced from tiles.png into a Texture2DArray the shader
+# samples per-cell: layers 0-3 = the four grass variants, layer 4 = a dirt tile.
+# All forced to 128x128 with matching mipmaps (the array requires consistent
+# mipmap usage across layers).
 func _build_terrain_array() -> Texture2DArray:
-	# Curated grass tiles (the clean/green ones — the yellow/dry grass_1..3 are
-	# dropped). Layers 0-4 = grass detail, layer 5 = soil pattern. The shader uses
-	# tile LUMINANCE only and recolours, so the tiles' own hues don't matter.
-	const GRASS := [
-		"res://assets/tile_grass.png",
-		"res://assets/tile_grass_0.png",
-		"res://assets/tile_grass_4.png",
-		"res://assets/tile_grass_5.png",
-		"res://assets/tile_grass_6.png",
+	# The authored painted tiles sliced from tiles.png. Layers 0-3 = the four grass
+	# variants (plain → flowered), layer 4 = a pebbly dirt tile for the rare dirt
+	# patches. The shader now shows the tiles' REAL painted colour, so the order +
+	# hue of these tiles matters directly.
+	const TILES := [
+		"res://assets/ground_grass_0.png",
+		"res://assets/ground_grass_1.png",
+		"res://assets/ground_grass_2.png",
+		"res://assets/ground_grass_3.png",
+		"res://assets/ground_dirt_1.png",
 	]
+	# Texture2DArray needs every layer in the same format with matching mipmaps.
+	# Imported tiles are VRAM-compressed → load the raw PNGs off disk instead so
+	# convert()/generate_mipmaps() can run (see the FIXED note in memory).
 	var imgs: Array[Image] = []
-	for p in GRASS:
-		imgs.append(_prep_tile((load(p) as Texture2D).get_image()))
-	imgs.append(_prep_tile((load("res://assets/tile_dirt.png") as Texture2D).get_image()))  # soil pattern
+	for p in TILES:
+		imgs.append(_prep_tile(Image.load_from_file(ProjectSettings.globalize_path(p))))
 	var arr := Texture2DArray.new()
 	arr.create_from_images(imgs)
 	return arr

@@ -833,10 +833,10 @@ func _build_environment() -> void:
 	# giving the soft misty vignette of the target instead of a hard board edge.
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_DEPTH
-	env.fog_light_color = Color("0e1512")    # fade toward the bg colour
+	env.fog_light_color = Color("16241a")    # very dark warm green (less gloomy than near-black)
 	env.fog_light_energy = 1.0
 	env.fog_sun_scatter = 0.0
-	env.fog_depth_begin = 26.0               # play area stays crisp; wilderness recedes
+	env.fog_depth_begin = 34.0               # more grass stays crisp; only the far edge recedes
 	env.fog_depth_end = 64.0
 	env.fog_depth_curve = 1.5
 	env.fog_density = 1.0
@@ -845,7 +845,7 @@ func _build_environment() -> void:
 	# Cool sky-ambient fill — kept LOW so shadows stay deep and colours stay rich.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color("cfe0ee")
-	env.ambient_light_energy = 0.30
+	env.ambient_light_energy = 0.40         # lift shadow sides toward the target's bright, airy grassland
 
 	# Filmic highlight rolloff. ACES keeps the punchy toy-colour saturation while
 	# rolling off highlights (AgX looked great but desaturated the candy palette).
@@ -886,7 +886,7 @@ func _build_environment() -> void:
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-50, -125, 0)
 	key.light_color = Color("ffeccd")        # ~5400K warm sunlight (less amber wash)
-	key.light_energy = 1.1                   # warm key (checked-in look)
+	key.light_energy = 1.25                  # brighter warm key — cheerful daylight grassland
 	key.shadow_enabled = true
 	key.shadow_opacity = 0.6
 	key.shadow_blur = 1.0                     # was 3.2 → far too mushy
@@ -921,7 +921,7 @@ func _build_ground() -> void:
 	pm.size = Vector2(wx + 300.0, wz + 300.0)
 	apron.mesh = pm
 	var gm := StandardMaterial3D.new()
-	gm.albedo_color = Color(0.26, 0.42, 0.17)   # deep wilderness green (recedes so plates pop)
+	gm.albedo_color = Color(0.30, 0.50, 0.19)   # lush grass mid-green — matches the in-grid wilderness, no seam
 	gm.roughness = 0.98
 	gm.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 	apron.material_override = gm
