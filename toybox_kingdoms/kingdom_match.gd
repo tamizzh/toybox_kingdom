@@ -959,10 +959,10 @@ func _build_hud(ui: CanvasLayer) -> void:
 	var kc: Color = _kid_color[_rulers[0].kid]
 
 	# ── top-left: your kingdom card (colour accent + big % + stat rows) ──
-	var stat := _hud_panel(Vector2(16, 16), Vector2(286, 176), 18)
+	var stat := _hud_panel(Vector2(16, 16), Vector2(232, 138), 16)
 	ui.add_child(stat)
 	var stat_h := HBoxContainer.new()
-	stat_h.add_theme_constant_override("separation", 12)
+	stat_h.add_theme_constant_override("separation", 9)
 	stat_h.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stat.add_child(stat_h)
 	stat_h.add_child(_accent_bar(kc))
@@ -971,8 +971,8 @@ func _build_hud(ui: CanvasLayer) -> void:
 	stat_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	stat_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stat_h.add_child(stat_v)
-	stat_v.add_child(_hud_text(_display_kingdom_name(_rulers[0].kid).to_upper(), 19, kc.lightened(0.35)))
-	_terr_label = _hud_text("0.0%", 46, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, true)
+	stat_v.add_child(_hud_text(_display_kingdom_name(_rulers[0].kid).to_upper(), 16, kc.lightened(0.35)))
+	_terr_label = _hud_text("0.0%", 36, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, true)
 	stat_v.add_child(_terr_label)
 	stat_v.add_child(_thin_rule())
 	var pr := _stat_row("people", HUD_BLUE, "Population")
@@ -981,48 +981,48 @@ func _build_hud(ui: CanvasLayer) -> void:
 	stat_v.add_child(ir["row"]); _income_label = ir["value"]
 
 	# ── top-centre: match countdown ──
-	_timer_panel = _hud_panel(Vector2(Palette.CENTER_X - 104, 14), Vector2(208, 64), 20)
+	_timer_panel = _hud_panel(Vector2(Palette.CENTER_X - 84, 14), Vector2(168, 52), 16)
 	ui.add_child(_timer_panel)
 	var th := _pill_row(_timer_panel)
-	th.add_theme_constant_override("separation", 9)
+	th.add_theme_constant_override("separation", 8)
 	th.alignment = BoxContainer.ALIGNMENT_CENTER
-	th.add_child(_glyph(GlyphIcon.new().setup("clock", HUD_GOLD, 26)))
-	_time_label = _hud_text("0:00", 38, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, true)
+	th.add_child(_glyph(GlyphIcon.new().setup("clock", HUD_GOLD, 22)))
+	_time_label = _hud_text("0:00", 30, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, true)
 	th.add_child(_time_label)
 
 	# ── top-right: coins + population pills, then settings ──
-	var coins := _hud_panel(Vector2(Palette.DESIGN_W - 446, 16), Vector2(196, 58), 16)
+	var coins := _hud_panel(Vector2(Palette.DESIGN_W - 374, 16), Vector2(158, 48), 14)
 	ui.add_child(coins)
 	var ch := _pill_row(coins); ch.alignment = BoxContainer.ALIGNMENT_CENTER
-	ch.add_child(_glyph(GlyphIcon.new().setup("coin", HUD_GOLD, 28)))
-	_coins_label = _hud_text("0", 26, HUD_GOLD, HORIZONTAL_ALIGNMENT_LEFT, true)
+	ch.add_child(_glyph(GlyphIcon.new().setup("coin", HUD_GOLD, 24)))
+	_coins_label = _hud_text("0", 22, HUD_GOLD, HORIZONTAL_ALIGNMENT_LEFT, true)
 	ch.add_child(_coins_label)
 
-	var pop := _hud_panel(Vector2(Palette.DESIGN_W - 238, 16), Vector2(160, 58), 16)
+	var pop := _hud_panel(Vector2(Palette.DESIGN_W - 204, 16), Vector2(132, 48), 14)
 	ui.add_child(pop)
 	var ph := _pill_row(pop); ph.alignment = BoxContainer.ALIGNMENT_CENTER
-	ph.add_child(_glyph(GlyphIcon.new().setup("people", HUD_BLUE, 28)))
-	_pop_pill_label = _hud_text("0", 26, HUD_BLUE, HORIZONTAL_ALIGNMENT_LEFT, true)
+	ph.add_child(_glyph(GlyphIcon.new().setup("people", HUD_BLUE, 24)))
+	_pop_pill_label = _hud_text("0", 22, HUD_BLUE, HORIZONTAL_ALIGNMENT_LEFT, true)
 	ph.add_child(_pop_pill_label)
 
 	var gear := Button.new()
 	gear.text = "SET"
-	gear.position = Vector2(Palette.DESIGN_W - 66, 16)
-	gear.size = Vector2(50, 58)
-	gear.custom_minimum_size = Vector2(50, 58)
+	gear.position = Vector2(Palette.DESIGN_W - 60, 16)
+	gear.size = Vector2(44, 48)
+	gear.custom_minimum_size = Vector2(44, 48)
 	gear.mouse_filter = Control.MOUSE_FILTER_STOP
 	_style_button(gear, HUD_INK_HI, 16)
 	_hover_lift(gear)
 	ui.add_child(gear)
 
 	# ── right: live leaderboard ──
-	var lb := _hud_panel(Vector2(Palette.DESIGN_W - 300, 90), Vector2(284, 350), 16)
+	var lb := _hud_panel(Vector2(Palette.DESIGN_W - 246, 78), Vector2(230, 286), 14)
 	ui.add_child(lb)
 	var lb_v := VBoxContainer.new()
-	lb_v.add_theme_constant_override("separation", 4)
+	lb_v.add_theme_constant_override("separation", 3)
 	lb_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	lb.add_child(lb_v)
-	var lb_title := _hud_text("LEADERBOARD", 18, HUD_DIM, HORIZONTAL_ALIGNMENT_CENTER)
+	var lb_title := _hud_text("LEADERBOARD", 16, HUD_DIM, HORIZONTAL_ALIGNMENT_CENTER)
 	lb_title.add_theme_constant_override("outline_size", 4)
 	lb_v.add_child(lb_title)
 	lb_v.add_child(_thin_rule())
@@ -1117,7 +1117,7 @@ func _build_scrims(ui: CanvasLayer) -> void:
 # Thin rounded colour bar — the kingdom's identity stripe down the stat card.
 func _accent_bar(color: Color) -> Panel:
 	var p := Panel.new()
-	p.custom_minimum_size = Vector2(6, 0)
+	p.custom_minimum_size = Vector2(5, 0)
 	p.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var st := StyleBoxFlat.new()
@@ -1146,11 +1146,11 @@ func _stat_row(glyph: String, color: Color, caption: String) -> Dictionary:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(_glyph(GlyphIcon.new().setup(glyph, color, 18)))
-	var cap := _hud_text(caption, 19, HUD_DIM)
+	row.add_child(_glyph(GlyphIcon.new().setup(glyph, color, 15)))
+	var cap := _hud_text(caption, 16, HUD_DIM)
 	cap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(cap)
-	var value := _hud_text("0", 21, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT, true)
+	var value := _hud_text("0", 18, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT, true)
 	row.add_child(value)
 	return {"row": row, "value": value}
 
@@ -1174,7 +1174,7 @@ func _hud_panel(pos: Vector2, min_size: Vector2, radius: int) -> PanelContainer:
 	st.border_color = Color(1, 1, 1, 0.10)
 	st.set_border_width_all(2)
 	st.set_corner_radius_all(radius)
-	st.set_content_margin_all(14)
+	st.set_content_margin_all(11)
 	# soft drop shadow lifts the panel off the busy 3D scene (the polish tell)
 	st.shadow_color = Color(0, 0, 0, 0.35)
 	st.shadow_size = 8
@@ -1188,7 +1188,7 @@ func _make_lb_row() -> Dictionary:
 	# Panel wrapper so the human's row (and the leader) can carry a tinted
 	# highlight behind the rank · chip · name · % layout.
 	var wrap := PanelContainer.new()
-	wrap.custom_minimum_size = Vector2(252, 32)
+	wrap.custom_minimum_size = Vector2(204, 27)
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var bg := StyleBoxFlat.new()
 	bg.bg_color = Color(0, 0, 0, 0)
@@ -1203,10 +1203,10 @@ func _make_lb_row() -> Dictionary:
 	row.add_theme_constant_override("separation", 8)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(row)
-	var rank := _hud_text("", 19, Color(1, 1, 1, 0.55))
-	rank.custom_minimum_size = Vector2(20, 0)
+	var rank := _hud_text("", 16, Color(1, 1, 1, 0.55))
+	rank.custom_minimum_size = Vector2(18, 0)
 	var dot := Panel.new()
-	dot.custom_minimum_size = Vector2(14, 14)
+	dot.custom_minimum_size = Vector2(12, 12)
 	dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var dst := StyleBoxFlat.new()
@@ -1215,7 +1215,7 @@ func _make_lb_row() -> Dictionary:
 	dst.border_color = Color(0, 0, 0, 0.45)
 	dst.set_border_width_all(1)
 	dot.add_theme_stylebox_override("panel", dst)
-	var nm := _hud_text("", 19, Color.WHITE)
+	var nm := _hud_text("", 16, Color.WHITE)
 	nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var you := _hud_text("YOU", 13, Color(0.06, 0.07, 0.10))
 	you.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -1233,8 +1233,8 @@ func _make_lb_row() -> Dictionary:
 	you_wrap.add_theme_stylebox_override("panel", yst)
 	you_wrap.add_child(you)
 	you_wrap.visible = false
-	var pct := _hud_text("", 19, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT)
-	pct.custom_minimum_size = Vector2(54, 0)
+	var pct := _hud_text("", 16, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT)
+	pct.custom_minimum_size = Vector2(48, 0)
 	row.add_child(rank)
 	row.add_child(dot)
 	row.add_child(nm)
@@ -1266,34 +1266,34 @@ func _thin_rule() -> ColorRect:
 
 func _build_action_stack(ui: CanvasLayer) -> void:
 	var actions := [
-		{"text": "BOOST", "glyph": "boost", "cost": 80, "y": 392, "color": Color("123c70")},
-		{"text": "SHIELD", "glyph": "shield", "cost": 120, "y": 488, "color": Color("174d7a")},
-		{"text": "MAP", "glyph": "map", "cost": 0, "y": 584, "color": Color("17191f")},
+		{"text": "BOOST", "glyph": "boost", "cost": 80, "y": 400, "color": Color("123c70")},
+		{"text": "SHIELD", "glyph": "shield", "cost": 120, "y": 480, "color": Color("174d7a")},
+		{"text": "MAP", "glyph": "map", "cost": 0, "y": 560, "color": Color("17191f")},
 	]
 	for a in actions:
 		var b := Button.new()
-		b.position = Vector2(26, int(a["y"]))
-		b.custom_minimum_size = Vector2(86, 82)
-		b.size = Vector2(86, 82)
-		_style_button(b, a["color"], 16)
+		b.position = Vector2(20, int(a["y"]))
+		b.custom_minimum_size = Vector2(72, 68)
+		b.size = Vector2(72, 68)
+		_style_button(b, a["color"], 14)
 		var vb := VBoxContainer.new()
 		vb.alignment = BoxContainer.ALIGNMENT_CENTER
 		vb.add_theme_constant_override("separation", 0)
 		vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		var icon: Control = GlyphIcon.new().setup(a["glyph"], Color.WHITE, 34)
+		var icon: Control = GlyphIcon.new().setup(a["glyph"], Color.WHITE, 28)
 		icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		vb.add_child(icon)
-		vb.add_child(_hud_text(a["text"], 16, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER))
+		vb.add_child(_hud_text(a["text"], 14, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER))
 		if int(a["cost"]) > 0:
-			vb.add_child(_hud_text(str(a["cost"]), 14, HUD_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
+			vb.add_child(_hud_text(str(a["cost"]), 12, HUD_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
 		b.add_child(vb)
 		_hover_lift(b)
 		ui.add_child(b)
 
 func _build_toolbar(ui: CanvasLayer) -> void:
 	var hb := HBoxContainer.new()
-	hb.position = Vector2(Palette.CENTER_X - 268, Palette.DESIGN_H - 118)
+	hb.position = Vector2(Palette.CENTER_X - 223, Palette.DESIGN_H - 102)
 	hb.add_theme_constant_override("separation", 10)
 	ui.add_child(hb)
 	_add_build_card(hb, "CASTLE", 500, "castle")
@@ -1311,8 +1311,8 @@ const BUILD_ACCENT := {
 func _add_build_card(parent: Node, label: String, cost: int, kind: String) -> void:
 	var accent: Color = BUILD_ACCENT.get(kind, HUD_GOLD)
 	var b := Button.new()
-	b.custom_minimum_size = Vector2(124, 106)
-	_style_button(b, Color("141b24"), 16)
+	b.custom_minimum_size = Vector2(104, 88)
+	_style_button(b, Color("141b24"), 14)
 	b.pressed.connect(func() -> void: _buy_building(kind, cost))
 	# coloured accent stripe pinned to the top edge of the card
 	var stripe := Panel.new()
@@ -1331,10 +1331,10 @@ func _add_build_card(parent: Node, label: String, cost: int, kind: String) -> vo
 	vb.add_theme_constant_override("separation", 1)
 	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var icon: Control = GlyphIcon.new().setup(kind, Color.WHITE, 44)
+	var icon: Control = GlyphIcon.new().setup(kind, Color.WHITE, 36)
 	icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	vb.add_child(icon)
-	vb.add_child(_hud_text(label, 16, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER))
+	vb.add_child(_hud_text(label, 14, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER))
 	var cr := _cost_row(cost)
 	vb.add_child(cr["row"])
 	b.add_child(vb)
@@ -1349,10 +1349,10 @@ func _cost_row(cost: int) -> Dictionary:
 	hb.alignment = BoxContainer.ALIGNMENT_CENTER
 	hb.add_theme_constant_override("separation", 4)
 	hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var c: Control = GlyphIcon.new().setup("coin", HUD_GOLD, 20)
+	var c: Control = GlyphIcon.new().setup("coin", HUD_GOLD, 17)
 	c.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hb.add_child(c)
-	var l := _hud_text(str(cost), 17, HUD_GOLD)
+	var l := _hud_text(str(cost), 14, HUD_GOLD)
 	hb.add_child(l)
 	return {"row": hb, "label": l}
 
