@@ -145,8 +145,12 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	var mesh := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
 	pm.size = Vector2(_w * p_cell, _h * p_cell)
-	pm.subdivide_width = _w           # one quad per cell -> per-cell clay bumps
-	pm.subdivide_depth = _h
+	# One quad per cell gives per-cell clay bumps; on mobile we halve the subdivision
+	# (~12k -> ~3k verts) — the ownership tint is sampled per-fragment from the texture
+	# so only the geometric relief softens, which is invisible at the play camera.
+	var sub_div: int = 2 if DeviceMode.is_mobile else 1
+	pm.subdivide_width = _w / sub_div
+	pm.subdivide_depth = _h / sub_div
 	mesh.mesh = pm
 
 	var mat := ShaderMaterial.new()
@@ -207,20 +211,29 @@ func _prep_tile(img: Image) -> Image:
 # Repaint the ownership texture from the grid (throttled dirty tick).
 # Writes a reused PackedByteArray and uploads once — ~10-50x cheaper than the
 # per-pixel set_pixel()/Color path, and allocation-free per tick.
-func update() -> void:
-	var n := _w * _h
-	for i in n:
-		var oid: int = grid.owner[i]
-		var o := i * 4
-		if oid == 0:
-			_buf[o] = 0
-			_buf[o + 1] = 0
-			_buf[o + 2] = 0
-			_buf[o + 3] = 0
-		else:
-			_buf[o] = oid - 1        # R: shader reads floor(R*255+0.5) == oid-1
-			_buf[o + 1] = 0
-			_buf[o + 2] = 0
-			_buf[o + 3] = 255        # A = claimed
+# Pass a dirty rect (x0,y0)..(x1,y1) to repaint only those rows; the default
+# (no rect) repaints the whole board. _buf persists between calls, so cells outside
+# the rect keep their last value and only the changed region is rewritten.
+func update(x0: int = 0, y0: int = 0, x1: int = -1, y1: int = -1) -> void:
+	if x1 < x0:
+		x0 = 0; y0 = 0; x1 = _w - 1; y1 = _h - 1
+	x0 = maxi(0, x0); y0 = maxi(0, y0)
+	x1 = mini(_w - 1, x1); y1 = mini(_h - 1, y1)
+	for cy in range(y0, y1 + 1):
+		var row := cy * _w
+		for cx in range(x0, x1 + 1):
+			var i := row + cx
+			var oid: int = grid.owner[i]
+			var o := i * 4
+			if oid == 0:
+				_buf[o] = 0
+				_buf[o + 1] = 0
+				_buf[o + 2] = 0
+				_buf[o + 3] = 0
+			else:
+				_buf[o] = oid - 1        # R: shader reads floor(R*255+0.5) == oid-1
+				_buf[o + 1] = 0
+				_buf[o + 2] = 0
+				_buf[o + 3] = 255        # A = claimed
 	_img.set_data(_w, _h, false, Image.FORMAT_RGBA8, _buf)
 	_tex.update(_img)

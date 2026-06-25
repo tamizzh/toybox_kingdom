@@ -13,6 +13,7 @@ var home: Vector2i = Vector2i.ZERO
 var last_cell: Vector2i = Vector2i.ZERO
 var alive: bool = true
 var eliminated: bool = false   # territory fully conquered -> out of the match
+var cached_dir: Vector2 = Vector2.ZERO   # last AI heading; reused between throttled decides
 var defense: int = 0           # towers/castle upgrades add here (raises conquest level-gate)
 
 # ── economy (per ruler; human spends via the panel, AI buys via a heuristic) ──

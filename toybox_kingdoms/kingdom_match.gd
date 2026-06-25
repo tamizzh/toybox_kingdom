@@ -39,6 +39,8 @@ const HUMAN_SPEED := 7.0          # human's base carve speed (faster than AI_SPE
 const BARRACKS_SPEED := 0.55      # each BARRACKS makes your king carve this much faster
 const SPEED_CAP := 11.0           # speed ceiling so boosts stay controllable
 const AI_SPEED := 6.3
+const AI_DECIDE_EVERY := 4        # re-run each AI brain every Nth physics frame (~15Hz),
+								  # staggered by kid so they never all decide on one frame
 const RESPAWN_TIME := 1.2
 const BLOB_SCALE := 0.62         # rival ruler blob size (incl. after respawn)
 const KING_SCALE := 0.75         # YOUR Crowned Toy King reads bigger than rivals
@@ -66,7 +68,6 @@ var _scatter
 var _ground
 var _flags
 var _windmills
-var _world_env: Environment      # the live board env; the minimap reuses a fog-free copy
 var _kingdom_t := 0.0
 var _terr_rebuild_t := 0.0
 var _minimap_t := 0.0           # rate-limits the minimap's full 2nd-scene render
@@ -76,6 +77,7 @@ var _minimap_pending := false   # board changed but its render is still throttle
 var _last_pop_version := -1
 var _last_flag_version := -1
 var _decor_phase := 0
+var _frame := 0                 # physics frame counter (drives staggered AI decides)
 
 var _ended := false
 var _match_t := MATCH_DURATION
@@ -104,6 +106,8 @@ var _last_secs := -1
 
 var _dbg := false
 var _dbg_t := 0.0
+var _fps_label: Label           # on-screen perf overlay (toggle with F3)
+var _fps_t := 0.0
 
 # ── campaign stage (read from SaveManager; falls back to the N_KINGDOMS default) ──
 var _stage := 0
@@ -123,6 +127,7 @@ func _ready() -> void:
 	_rival_diffs = Campaign.rival_diffs(_stage)
 	_n_kingdoms = 1 + _rival_diffs.size()
 	AudioManager.play_music("game")
+	_apply_render_scale()
 	_build_environment()
 	_build_ground()
 
@@ -191,6 +196,7 @@ func _ready() -> void:
 	_ui_layer.add_child(tc)
 	tc.setup([_player])
 	_build_hud(_ui_layer)
+	_build_fps_overlay(_ui_layer)
 
 func _spawn_kingdom(i: int) -> void:
 	var kid: int = i + 1
@@ -282,15 +288,41 @@ func _castle_radius(tier: int) -> int:
 	var scale := 0.86 + float(tier) * 0.12
 	return int(ceil(CASTLE_HALF_SPAN * scale / CELL))
 
+# Render the 3D board at a fraction of the screen resolution on phones and upscale
+# it — the blocky toybox art still reads cleanly while we reclaim a lot of fragment
+# load (the per-cell ground shader is fill-rate heavy). The 2D HUD/minimap is drawn
+# by CanvasLayers, so it stays at full crispness. Desktop renders at native scale;
+# set TBK_LOWRES=<0..1> to preview the mobile path on desktop.
+const MOBILE_RENDER_SCALE := 0.75
+
+func _apply_render_scale() -> void:
+	var scale := 1.0
+	if DeviceMode.is_mobile:
+		scale = MOBILE_RENDER_SCALE
+	var override := OS.get_environment("TBK_LOWRES")
+	if override != "":
+		scale = clampf(float(override), 0.25, 1.0)
+	if is_equal_approx(scale, 1.0):
+		return
+	var vp := get_viewport()
+	vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+	vp.scaling_3d_scale = scale
+
 func _physics_process(delta: float) -> void:
 	if _ended:
 		return
 	_match_t = maxf(0.0, _match_t - delta)
 
 	# 1. drive AI movement (humans move themselves in Avatar3D._physics_process)
+	# The AI brain (pathfinding/territory eval) is the heaviest per-frame CPU cost, so
+	# it's throttled to ~15Hz and staggered across rulers — the avatar still moves every
+	# frame on the last decided heading, so motion stays smooth. (mobile CPU safeguard)
+	_frame += 1
 	for a in _rulers:
 		if a.is_ai and a.alive:
-			var dir: Vector2 = a.ai.decide(a, self)
+			if (_frame + a.kid) % AI_DECIDE_EVERY == 0:
+				a.cached_dir = a.ai.decide(a, self)
+			var dir: Vector2 = a.cached_dir
 			a.avatar.velocity = Vector3(dir.x, 0.0, dir.y) * AI_SPEED
 			a.avatar.move_and_slide()
 			if dir.length() > 0.1:
@@ -317,8 +349,14 @@ func _physics_process(delta: float) -> void:
 	_terr_rebuild_t -= delta
 	_minimap_t -= delta
 	if grid.has_dirty() and _terr_rebuild_t <= 0.0:
-		_ground.update()
-		renderer.rebuild_borders()
+		# Only repaint the cells that actually changed since the last tick (the grid's
+		# dirty rect) instead of rescanning all 12k cells. A small capture touches a
+		# tiny rect; only a board-spanning event (a whole kingdom falling) approaches
+		# the old full-scan cost.
+		var dmin: Vector2i = grid.dirty_min
+		var dmax: Vector2i = grid.dirty_max
+		_ground.update(dmin.x, dmin.y, dmax.x, dmax.y)
+		renderer.rebuild_borders(dmin.x, dmin.y, dmax.x, dmax.y)
 		_minimap_pending = true     # board changed → queue an aerial refresh
 		grid.reset_dirty()
 		_terr_rebuild_t = 0.1
@@ -330,6 +368,11 @@ func _physics_process(delta: float) -> void:
 		_minimap_t = 0.33
 	_kingdom_tick(delta)
 	_hud_tick(delta)
+	if _fps_label and _fps_label.visible:
+		_fps_t -= delta
+		if _fps_t <= 0.0:
+			_fps_t = 0.25
+			_update_fps()
 	if _dbg:
 		_dbg_tick(delta)
 
@@ -813,8 +856,9 @@ func _build_environment() -> void:
 	env.set_glow_level(5, 0.6)
 
 	# Contact AO in cell seams + around castles/props = sculpted toybox depth.
-	# Forward+ only; silently ignored under the mobile render fallback.
-	env.ssao_enabled = true
+	# Forward+ only AND a heavy full-screen pass — off on mobile (where it's either
+	# ignored by the render fallback or, on a Forward+ phone, pure cost).
+	env.ssao_enabled = not DeviceMode.is_mobile
 	env.ssao_intensity = 2.4
 	env.ssao_radius = 0.6                    # tight — matches the 0.6 CELL size
 	env.ssao_power = 2.0
@@ -825,7 +869,6 @@ func _build_environment() -> void:
 	env.adjustment_brightness = 1.0
 	env.adjustment_contrast = 1.06
 	env.adjustment_saturation = 1.38         # deep, rich toy-plate colours (checked-in look)
-	_world_env = env                         # minimap mirrors this (fog-free) so it matches the board
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
@@ -841,6 +884,12 @@ func _build_environment() -> void:
 	key.shadow_normal_bias = 1.5             # kills peter-panning on the plateau
 	key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	key.directional_shadow_max_distance = 90.0
+	if DeviceMode.is_mobile:
+		# Phones: fewer cascades + a nearer shadow distance slashes shadow-pass draw
+		# calls (every caster is re-rendered once per cascade). The board still gets
+		# grounded contact shadows up close, where they actually read.
+		key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		key.directional_shadow_max_distance = 50.0
 	add_child(key)
 	# cool sky fill — no shadow, just lifts the shadow side toward blue
 	var fill := DirectionalLight3D.new()
@@ -975,17 +1024,9 @@ func _build_hud(ui: CanvasLayer) -> void:
 	_build_action_stack(ui)
 	_build_toolbar(ui)
 
-	# fog-free copy of the board environment → minimap matches the prewater look:
-	# the world's depth fog would black out its 100u-high top-down camera, and the
-	# hero view's low ambient (0.30) + extra contrast read too dark/moody from above.
-	# Brighten ambient + flatten contrast so the board is evenly lit and vivid like
-	# the prewater minimap (a clear top-down map, not the shadowed 3/4 hero shot).
-	var mm_env := _world_env.duplicate(true) as Environment
-	mm_env.fog_enabled = false
-	mm_env.ambient_light_energy = 0.6     # gentle lift over the hero view's 0.30 — bright but NOT washed
-	mm_env.adjustment_contrast = 1.0      # flatten the moody hero contrast; keep saturation 1.38 for vivid plates
+	# Minimap paints from grid data (no 3D render) — no environment needed.
 	_minimap = Minimap.new()
-	_minimap.setup(GW, GH, get_world_3d(), CELL, mm_env)   # live top-down render of the board
+	_minimap.setup(GW, GH)
 	_minimap.position = Vector2(Palette.DESIGN_W - 286, Palette.DESIGN_H - 202)
 	ui.add_child(_minimap)
 
@@ -1512,6 +1553,40 @@ func _hud_tick(delta: float) -> void:
 			"you": a == _rulers[0],
 		})
 	_minimap.set_markers(marks)
+
+# On-screen perf overlay: fps, CPU frame time, draw calls, and the live 3D render
+# scale (so you can confirm the mobile downscale is active). Default on; F3 toggles.
+func _build_fps_overlay(layer: CanvasLayer) -> void:
+	var l := Label.new()
+	l.add_theme_font_size_override("font_size", 17)
+	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	l.add_theme_constant_override("outline_size", 5)
+	l.position = Vector2(18, Palette.DESIGN_H - 32)
+	layer.add_child(l)
+	_fps_label = l
+
+func _toggle_fps() -> void:
+	if _fps_label:
+		_fps_label.visible = not _fps_label.visible
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F3:
+		_toggle_fps()
+
+func _update_fps() -> void:
+	var fps := Engine.get_frames_per_second()
+	var cpu := Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+	var phys := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+	var draws := int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
+	var scale: float = get_viewport().scaling_3d_scale
+	_fps_label.text = "%d fps   cpu %.1f ms (phys %.1f)   %d draws   3D %.0f%%" \
+		% [fps, cpu, phys, draws, scale * 100.0]
+	var col := Color(0.55, 1.0, 0.55)        # green: smooth
+	if fps < 30:
+		col = Color(1.0, 0.5, 0.5)           # red: janky
+	elif fps < 55:
+		col = Color(1.0, 0.92, 0.5)          # yellow: marginal
+	_fps_label.add_theme_color_override("font_color", col)
 
 func _dbg_tick(delta: float) -> void:
 	_dbg_t -= delta

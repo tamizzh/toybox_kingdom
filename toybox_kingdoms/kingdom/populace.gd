@@ -101,6 +101,12 @@ func _batch(mesh: Mesh, bob: bool) -> MultiMeshInstance3D:
 func rebuild() -> void:
 	var w: int = grid.w
 	var n: int = w * grid.h
+	# Phones thin the densest town layers (houses/citizens/towers) to keep vertex +
+	# overdraw cost down — the village still reads, just less crowded.
+	var cap_mul: float = 0.55 if DeviceMode.is_mobile else 1.0
+	var house_cap := int(HOUSE_CAP * cap_mul)
+	var cit_cap := int(CIT_CAP * cap_mul)
+	var tower_cap := int(TOWER_CAP * cap_mul)
 	# Packed arrays (not Variant Array) so this hot full-board rebuild stays
 	# allocation-light — no per-element Variant boxing or GC churn.
 	var house_pos := PackedVector3Array()
@@ -123,7 +129,7 @@ func rebuild() -> void:
 		# Sparse towers (separate hash) in the core/mid ring → studded skyline.
 		var tbucket: int = ((i * 2246822519) & 0x7fffffff) % 1000
 		var tower_thr: int = 14 if d <= CORE_R else (6 if d <= MID_R else 0)
-		if tbucket < tower_thr and tower_pos.size() < TOWER_CAP:
+		if tbucket < tower_thr and tower_pos.size() < tower_cap:
 			tower_pos.append(base)
 			tower_col.append(col)
 			continue
@@ -139,10 +145,10 @@ func rebuild() -> void:
 		if bucket >= cit_thr:
 			continue
 		if bucket < house_thr:
-			if house_pos.size() < HOUSE_CAP:
+			if house_pos.size() < house_cap:
 				house_pos.append(base)
 				house_col.append(col)
-		elif cit_pos.size() < CIT_CAP:
+		elif cit_pos.size() < cit_cap:
 			cit_pos.append(base)
 			cit_col.append(col)
 

@@ -46,7 +46,10 @@ func setup(p_grid, p_cell: float) -> void:
 	# Paint each mesh surface in code (one colour per material slot) so the props
 	# are 2-tone without depending on the GLB's own material colours importing.
 	for path in TREE_KINDS:
-		var mmi := _batch(_mesh_of(load(path)), TREE_COLORS)
+		# Flatten each tree's trunk+foliage surfaces into ONE vertex-coloured surface so
+		# a whole tree variant draws in a single call (was one draw call per surface).
+		var merged := _merge(_mesh_of(load(path)), TREE_COLORS)
+		var mmi := _batch_vc(merged)
 		_trees.append(mmi)
 		add_child(mmi)
 	_rock = _batch(_mesh_of(ROCK), [Color("9a9a9c")])
@@ -91,6 +94,19 @@ func _batch(mesh: Mesh, colors: Array) -> MultiMeshInstance3D:
 		mat.roughness = 0.62
 		mat.vertex_color_use_as_albedo = true
 		mesh.surface_set_material(i, mat)
+	return _make_mmi(mesh)
+
+# Batch a pre-merged single-surface mesh whose base colour is baked into vertex
+# colours (see _merge). One material, so the whole prop is one draw call; the
+# per-instance MultiMesh colour multiplies in for brightness variation.
+func _batch_vc(mesh: Mesh) -> MultiMeshInstance3D:
+	var mat := StandardMaterial3D.new()
+	mat.roughness = 0.62
+	mat.vertex_color_use_as_albedo = true
+	mesh.surface_set_material(0, mat)
+	return _make_mmi(mesh)
+
+func _make_mmi(mesh: Mesh) -> MultiMeshInstance3D:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
@@ -106,12 +122,41 @@ func _batch(mesh: Mesh, colors: Array) -> MultiMeshInstance3D:
 	mmi.custom_aabb = AABB(Vector3(-fw * 0.5, -1.0, -fz * 0.5), Vector3(fw, 8.0, fz))
 	return mmi
 
+# Flatten a multi-surface prop into ONE surface, baking each source surface's base
+# colour into vertex colours. Halves tree draw calls (trunk+foliage → one surface)
+# while preserving the exact 2-tone look (same surface→colour mapping as _batch).
+func _merge(mesh: Mesh, colors: Array) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for si in mesh.get_surface_count():
+		var base: Color = colors[mini(si, colors.size() - 1)]
+		var arrays: Array = mesh.surface_get_arrays(si)
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var norms = arrays[Mesh.ARRAY_NORMAL]
+		var indices = arrays[Mesh.ARRAY_INDEX]
+		var has_norm: bool = norms != null and norms.size() == verts.size()
+		if indices != null and indices.size() > 0:
+			for ii in indices:
+				if has_norm:
+					st.set_normal(norms[ii])
+				st.set_color(base)
+				st.add_vertex(verts[ii])
+		else:
+			for vi in verts.size():
+				if has_norm:
+					st.set_normal(norms[vi])
+				st.set_color(base)
+				st.add_vertex(verts[vi])
+	st.index()
+	return st.commit()
+
 # Place props on currently-neutral cells (hash-stable, capped for mobile).
 func rebuild() -> void:
 	if OS.get_environment("TBK_NOSCATTER") == "1":
 		return
-	# Desktop can afford a denser, more "alive" world than phones.
-	var dense: float = 1.0 if DeviceMode.is_mobile else 1.8
+	# Desktop can afford a denser, more "alive" world than phones; phones thin the
+	# forest hard (fewer instances = less vertex + overdraw cost).
+	var dense: float = 0.6 if DeviceMode.is_mobile else 1.8
 	var tree_cap := int(TREE_CAP * dense)
 	var rock_cap := int(ROCK_CAP * dense)
 	var bush_cap := int(BUSH_CAP * dense)

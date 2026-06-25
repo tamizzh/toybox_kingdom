@@ -16,6 +16,10 @@ var _hook_label: Label
 func _ready() -> void:
 	AudioManager.play_music("menu")
 
+	# Pre-compile the match's custom shaders while the player is on the menu, so the
+	# board's first frame doesn't stall compiling them (the main load hitch on mobile).
+	add_child(load("res://toybox_kingdoms/tools/shader_warmup.gd").new())
+
 	_build_background()
 
 	_build_top_buttons()

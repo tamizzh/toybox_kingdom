@@ -47,6 +47,7 @@ var _neutral: MultiMeshInstance3D
 var _terr: MultiMeshInstance3D
 var _trail: MultiMeshInstance3D
 var _border: MultiMeshInstance3D
+var _border_cells := {}           # cell index -> wall Color, only for owned border cells
 
 func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	grid = p_grid
@@ -110,27 +111,38 @@ func _extract_mesh(n: Node) -> Mesh:
 	return null
 
 # Place a 3D wall block on every border cell, tinted to the kingdom colour.
-func rebuild_borders() -> void:
+# Pass a dirty rect (x0,y0)..(x1,y1) to rescan only that region; the default (no
+# rect) rescans the whole board. The persistent _border_cells set carries border
+# state between calls, so a small capture only re-tests its own neighbourhood
+# instead of all 12k cells. The rect is expanded by 1 because changing one cell can
+# flip the border status of its 4 neighbours.
+func rebuild_borders(x0: int = 0, y0: int = 0, x1: int = -1, y1: int = -1) -> void:
 	var w: int = grid.w
 	var h: int = grid.h
-	var n: int = w * h
-	# Packed arrays keep this 10Hz full-board border scan allocation-light.
-	var pts := PackedVector3Array()
-	var cols := PackedColorArray()
-	for i in n:
-		var kid: int = grid.owner[i]
-		if kid == 0:
-			continue
-		var cx := i % w
-		var cy := i / w
-		if _is_border(i, cx, cy, w, h, kid):
-			pts.append(_c2w(cx, cy, 0.0))
-			cols.append((colors.get(kid, Color.WHITE) as Color).darkened(0.12))
+	if x1 < x0:
+		x0 = 0; y0 = 0; x1 = w - 1; y1 = h - 1
+	x0 = maxi(0, x0 - 1); y0 = maxi(0, y0 - 1)
+	x1 = mini(w - 1, x1 + 1); y1 = mini(h - 1, y1 + 1)
+	for cy in range(y0, y1 + 1):
+		var row := cy * w
+		for cx in range(x0, x1 + 1):
+			var i := row + cx
+			var kid: int = grid.owner[i]
+			if kid != 0 and _is_border(i, cx, cy, w, h, kid):
+				_border_cells[i] = (colors.get(kid, Color.WHITE) as Color).darkened(0.12)
+			else:
+				_border_cells.erase(i)
+	# Rebuild the compact instance buffer from the border-cell set (a few hundred
+	# entries — far cheaper than the 12k full-grid scan it replaces).
 	var mm := _border.multimesh
-	mm.instance_count = pts.size()
-	for k in pts.size():
-		mm.set_instance_transform(k, Transform3D(Basis(), pts[k]))
-		mm.set_instance_color(k, cols[k])
+	mm.instance_count = _border_cells.size()
+	var k := 0
+	for i in _border_cells:
+		var cx: int = int(i) % w
+		var cy: int = int(i) / w
+		mm.set_instance_transform(k, Transform3D(Basis(), _c2w(cx, cy, 0.0)))
+		mm.set_instance_color(k, _border_cells[i])
+		k += 1
 
 # Build the wilderness as a tiled patchwork of green shades (once at startup).
 # Claimed land is a separate, taller batch drawn on top, so we never rebuild this.

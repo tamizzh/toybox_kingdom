@@ -1,67 +1,55 @@
 extends Control
 
-# ── Whole-board minimap: a live top-down render of the ACTUAL 3D world ─────────
-# A SubViewport that shares the main World3D, viewed by an orthographic camera
-# looking straight down over the board, gives a real aerial view (plates, grass,
-# castles) instead of a pixel-painted blob. The heavy 3D render is throttled to a
-# few Hz; the ruler dots are drawn on top every frame.
+# ── Whole-board minimap: a painted ownership texture (no second scene render) ──
+# Instead of a SubViewport re-rendering the whole 3D world top-down (a full extra
+# scene pass every update), we paint ONE pixel per cell straight from the grid's
+# ownership data into a tiny 128x96 texture and let the GPU upscale it with bilinear
+# smoothing. Wilderness reads as a soft green patchwork; each kingdom is its own
+# colour; the ruler dots are drawn on top every frame. Repaint only when the board
+# actually changed (throttled by the match), so the per-frame cost is just the dots.
 
 const MAP := Vector2(230, 172)
-const VP := Vector2i(248, 186)      # ~4:3, matches the 128x96 board aspect
+
+# Two wilderness greens in coarse blocks → a soft patchwork (not a flat slab) once
+# the small texture is upscaled. BLOCK is in cells; ~8 keeps patches readable on map.
+const WILD_A := Color("3f6b2a")
+const WILD_B := Color("4d7e31")
+const BLOCK := 8
 
 var _markers: Array = []
-var _vp: SubViewport
-var _tex: Texture2D
-var _dirty := true        # re-render only when the board changed (capture/retint), not on a timer
+var _grid                         # TerritoryGrid (captured on first update_territory)
+var _colors := {}                 # kingdom id -> Color
+var _img: Image
+var _tex: ImageTexture
+var _buf: PackedByteArray         # reused RGBA8 scratch — allocation-free repaints
+var _gw := 0
+var _gh := 0
+var _dirty := true                # repaint only when ownership changed, not on a timer
 
-func setup(gw: int, gh: int, world: World3D, cell: float, cam_env: Environment = null) -> void:
+# world / cell / cam_env are accepted for call-site compatibility but unused now that
+# the minimap paints from data instead of rendering the 3D world.
+func setup(gw: int, gh: int, _world = null, _cell: float = 0.6, _cam_env = null) -> void:
+	_gw = gw
+	_gh = gh
 	custom_minimum_size = MAP
 	size = MAP
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR   # smooth the board upscale
 
-	_vp = SubViewport.new()
-	_vp.size = VP
-	_vp.world_3d = world                                  # share the main 3D world
-	_vp.transparent_bg = false
-	_vp.msaa_3d = Viewport.MSAA_DISABLED                  # MSAA on a shared-world SubViewport trips a mipmap/framebuffer bug
-	_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
-	add_child(_vp)
+	_img = Image.create(gw, gh, false, Image.FORMAT_RGBA8)
+	_img.fill(WILD_A)
+	_tex = ImageTexture.create_from_image(_img)
+	_buf = PackedByteArray()
+	_buf.resize(gw * gh * 4)
 
-	var cam := Camera3D.new()
-	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
-	cam.size = gh * cell * 1.06                           # board height fills the view (4:3)
-	cam.near = 1.0
-	cam.far = 220.0
-	cam.position = Vector3(0, 100, 0)
-	cam.rotation_degrees = Vector3(-90, 0, 0)             # straight down; +X right, +Z down
-	# Own environment: the world's depth fog (ends ~64u) would otherwise render this
-	# 100u-high top-down camera's whole view as solid dark fog (black map). Camera3D.environment
-	# overrides the WorldEnvironment for just this viewport. We use a fog-free COPY of the real
-	# board env (passed in) so the minimap matches the main view exactly — same ambient, ACES,
-	# saturation and glow. Fall back to a simple lit env if none is supplied.
-	if cam_env != null:
-		cam.environment = cam_env
-	else:
-		var menv := Environment.new()
-		menv.background_mode = Environment.BG_COLOR
-		menv.background_color = Color("0a0d12")
-		menv.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-		menv.ambient_light_color = Color("cfe0ee")
-		menv.ambient_light_energy = 0.55
-		menv.tonemap_mode = Environment.TONE_MAPPER_ACES
-		cam.environment = menv
-	_vp.add_child(cam)
-	cam.current = true
+# The match calls this when the board may have changed (capture/retint). We capture
+# the grid + palette and flag a repaint for the next _process tick.
+func update_territory(grid, colors: Dictionary) -> void:
+	_grid = grid
+	_colors = colors
+	_dirty = true
 
-	_tex = _vp.get_texture()
-
-# Kept for call-site compatibility — the live render replaces per-cell painting.
-func update_territory(_grid, _colors: Dictionary) -> void:
-	pass
-
-# Terrain is fixed; only ownership tinting changes. Call this when the board is
-# dirty (a plate was captured/retinted) so we re-render exactly then — not on a
-# blind timer. One extra render is queued for the next _process tick.
+# Board went dirty — queue a repaint (same effect as update_territory's flag).
 func request_render() -> void:
 	_dirty = true
 
@@ -69,12 +57,31 @@ func set_markers(m: Array) -> void:
 	_markers = m
 
 func _process(_delta: float) -> void:
-	# Re-render only when something changed; the dots on top redraw every frame.
-	if _dirty:
+	if _dirty and _grid != null:
 		_dirty = false
-		if _vp:
-			_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
-	queue_redraw()
+		_repaint()
+	queue_redraw()   # the ruler dots redraw every frame on top of the static texture
+
+# Paint one pixel per cell: a soft green patchwork for wilderness, the kingdom colour
+# for owned land. Writes the reused buffer and uploads once (no per-pixel set_pixel).
+func _repaint() -> void:
+	var n := _gw * _gh
+	for i in n:
+		var oid: int = _grid.owner[i]
+		var col: Color
+		if oid == 0:
+			var cx := i % _gw
+			var cy := i / _gw
+			col = WILD_A if (((cx / BLOCK) ^ (cy / BLOCK)) & 1) == 0 else WILD_B
+		else:
+			col = (_colors.get(oid, Color.WHITE) as Color).lightened(0.06)
+		var o := i * 4
+		_buf[o] = int(col.r * 255.0)
+		_buf[o + 1] = int(col.g * 255.0)
+		_buf[o + 2] = int(col.b * 255.0)
+		_buf[o + 3] = 255
+	_img.set_data(_gw, _gh, false, Image.FORMAT_RGBA8, _buf)
+	_tex.update(_img)
 
 func _draw() -> void:
 	draw_rect(Rect2(Vector2(-4, -4), MAP + Vector2(8, 8)), Color(0.05, 0.07, 0.12, 0.92), true)
