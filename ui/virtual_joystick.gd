@@ -2,17 +2,31 @@ extends Control
 
 # On-screen analog stick. Feeds InputManager.set_move each frame.
 # Styled to match the toy-box reference: player-coloured knob + dark-outlined ring.
+#
+# Two layouts:
+#   dynamic = false  → fixed stick drawn at the node's own rect (multiplayer corners).
+#   dynamic = true   → floating stick: the control fills the screen and the stick
+#                      pops up wherever the finger first touches, following the drag.
 
 var player_id: int = 0
 var radius: float = 110.0
 var player_color: Color = Color("f02828")   # set by touch_controls
+var dynamic: bool = false
 var _touch_index: int = -1
 var _value: Vector2 = Vector2.ZERO
+var _origin: Vector2 = Vector2.ZERO          # stick centre (dynamic mode)
+var _active: bool = false
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(radius * 2.0, radius * 2.0)
-	size = custom_minimum_size
-	mouse_filter = Control.MOUSE_FILTER_STOP
+	if dynamic:
+		# Fill whatever rect the parent gives us so we can catch a touch anywhere.
+		mouse_filter = Control.MOUSE_FILTER_STOP
+	else:
+		custom_minimum_size = Vector2(radius * 2.0, radius * 2.0)
+		size = custom_minimum_size
+		_origin = size * 0.5
+		_active = true   # fixed stick is always visible
+		mouse_filter = Control.MOUSE_FILTER_STOP
 
 func _process(_delta: float) -> void:
 	InputManager.set_move(player_id, _value)
@@ -21,6 +35,9 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		if event.pressed and _touch_index == -1:
 			_touch_index = event.index
+			if dynamic:
+				_origin = event.position
+				_active = true
 			_set_from(event.position)
 		elif not event.pressed and event.index == _touch_index:
 			_reset()
@@ -28,7 +45,7 @@ func _gui_input(event: InputEvent) -> void:
 		_set_from(event.position)
 
 func _set_from(pos: Vector2) -> void:
-	var off := pos - size * 0.5
+	var off := pos - _origin
 	if off.length() > radius:
 		off = off.normalized() * radius
 	_value = off / radius
@@ -37,10 +54,14 @@ func _set_from(pos: Vector2) -> void:
 func _reset() -> void:
 	_touch_index = -1
 	_value = Vector2.ZERO
+	if dynamic:
+		_active = false
 	queue_redraw()
 
 func _draw() -> void:
-	var c := size * 0.5
+	if dynamic and not _active:
+		return   # nothing on screen until the finger lands
+	var c := _origin if dynamic else size * 0.5
 	var ring_col := player_color
 
 	# Drop shadow under base

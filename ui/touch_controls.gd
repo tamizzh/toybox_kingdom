@@ -34,22 +34,16 @@ func setup(players: Array) -> void:
 		for p in humans:
 			_make_pair(p.id, p.color, vp)
 
-func _make_solo(pid: int, color: Color, vp: Vector2) -> void:
+func _make_solo(pid: int, color: Color, _vp: Vector2) -> void:
+	# Solo: a single floating joystick that pops up wherever the player touches.
+	# No action button — movement is the only on-screen control.
 	var joy = Joy.new()
 	joy.player_id    = pid
 	joy.player_color = color
-	var btn = Btn.new()
-	btn.radius       = 88.0
-	btn.player_id    = pid
-	btn.player_color = Color("1878f0")
-	btn.caption      = "ACTION"
+	joy.dynamic      = true
 	add_child(joy)
-	add_child(btn)
-	joy.position = Vector2(52, vp.y - joy.radius * 2.0 - 52)               # bottom-left
-	btn.position = Vector2(vp.x - btn.radius * 2.0 - 70, vp.y - btn.radius * 2.0 - 70)  # bottom-right
+	joy.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)   # catch a touch anywhere
 	_nodes.append(joy)
-	_nodes.append(btn)
-	_buttons.append(btn)
 
 func _make_pair(pid: int, color: Color, vp: Vector2) -> void:
 	var w := vp.x
