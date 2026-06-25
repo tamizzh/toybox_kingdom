@@ -42,6 +42,12 @@ const AI_SPEED := 5.04            # 20% slower
 const AI_DECIDE_EVERY := 4        # re-run each AI brain every Nth physics frame (~15Hz),
 								  # staggered by kid so they never all decide on one frame
 const RESPAWN_TIME := 1.2
+# Claimed cells rise into a raised plateau in the ground shader (territory_ground.gd
+# `plateau`). Avatars sit at Y=0, so without this lift their feet + the king's ground
+# ring sink into owned tiles. Raise the avatar by the plateau height while it stands
+# on claimed land (smoothly, so the step on/off the plate isn't a pop).
+const CLAIMED_LIFT := 0.115      # must track territory_ground.gd `plateau`
+const GROUND_LERP := 12.0        # how fast the avatar settles to the new ground height
 const BLOB_SCALE := 0.93         # rival ruler blob size (incl. after respawn) — 1.5× base
 const KING_SCALE := 1.125        # YOUR Crowned Toy King reads bigger than rivals — 1.5× base
 const MATCH_DURATION := 300.0   # seconds (5 min — long enough for the castle-war to play out)
@@ -339,6 +345,10 @@ func _physics_process(delta: float) -> void:
 			continue
 		_clamp(a.avatar)
 		var c := _w2c(a.avatar.global_position)
+		# Ride on top of the raised plateau on claimed land (feet + ring otherwise sink in).
+		var ground_y := CLAIMED_LIFT if grid.get_owner(c.x, c.y) != 0 else 0.0
+		a.avatar.global_position.y = lerpf(a.avatar.global_position.y, ground_y,
+			clampf(delta * GROUND_LERP, 0.0, 1.0))
 		if c != a.last_cell:
 			_advance_agent(a, c)
 
