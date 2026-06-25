@@ -121,6 +121,30 @@ func spend_coins(n: int) -> bool:
 	coins_changed.emit(coins())
 	return true
 
+# ── progression: campaign ladder ─────────────────────────────────────────────────
+const Campaign := preload("res://toybox_kingdoms/data/campaign.gd")
+
+# Number of campaign stages the player has beaten (0 = none yet).
+func campaign_cleared() -> int:
+	return int(_cfg.get_value("progress", "campaign_cleared", 0))
+
+# The stage the player should play next: their frontier, clamped to the last stage
+# so a finished campaign keeps replaying the finale.
+func active_stage() -> int:
+	return mini(campaign_cleared(), Campaign.count() - 1)
+
+func campaign_complete() -> bool:
+	return campaign_cleared() >= Campaign.count()
+
+# Beating the current frontier stage advances the ladder. Returns true only when
+# this win actually unlocked new ground (replaying a cleared stage doesn't).
+func clear_stage(idx: int) -> bool:
+	if idx >= campaign_cleared() and not campaign_complete():
+		_cfg.set_value("progress", "campaign_cleared", campaign_cleared() + 1)
+		_save()
+		return true
+	return false
+
 # ── progression: XP / level ──────────────────────────────────────────────────────
 func xp() -> int:
 	return int(_cfg.get_value("progress", "xp", 0))

@@ -14,13 +14,15 @@ var dead: bool = false
 
 var _visual: Node3D
 var _last_dir: Vector2 = Vector2.RIGHT
-var _body_mats: Array[ShaderMaterial] = []
+var _body_mats: Array[Material] = []
 
 # Glossy designer-vinyl body shader (half-lambert + fake SSS + rim).
 const _VINYL_SHADER := preload("res://shaders/vinyl_toy.gdshader")
 
 var _bob_t: float = 0.0
 var _dust_t: float = 0.0
+var _anim: AnimationPlayer = null
+const ANIM_WALK := "ArmatureAction"   # rename if a different action is the walk cycle
 
 static var _capsule_shape: CapsuleShape3D
 static var _dust_mesh: CylinderMesh
@@ -49,46 +51,52 @@ func setup(p: PlayerData) -> void:
 const MASCOT := preload("res://assets/mascot.glb")
 
 func _build_default_visual(c: Color) -> void:
-	# Scale 1.6 (the new mascot reads better at double size). It's modelled around
-	# its centre (AABB min_y ≈ -0.557), so lift it by -min_y*scale (≈0.891) to seat
-	# the feet on Y=0 / the ground. +90° Y so its face points along travel.
-	set_model(MASCOT, 1.6, 0.891, 90.0)
+	# y=0.578 lifts feet to Y=0 (GLB min_y=-0.578 at scale 1.0).
+	# z=-1.613 corrects the GLB's X-center offset (-1.613 local X) which becomes
+	# a +1.613 world-Z offset after the 90° Y rotation, shifting the model forward.
+	set_model(MASCOT, 1.0, 0.578, 90.0)
+	if _visual.get_child_count() > 0:
+		_visual.get_child(0).position.z = -1.613
 	_recolor_mascot(_visual, c)
+	_anim = _find_anim_player(_visual)
+	if _anim:
+		_anim.speed_scale = 1.5
+		_anim.play(ANIM_WALK)
+		_anim.seek(randf() * _anim.current_animation_length, true)
+
+func _find_anim_player(node: Node) -> AnimationPlayer:
+	if node is AnimationPlayer:
+		return node as AnimationPlayer
+	for child in node.get_children():
+		var r := _find_anim_player(child)
+		if r:
+			return r
+	return null
+
+# Parts that must keep their own GLB materials (not recolored).
+const _KEEP_PARTS := ["crown", "eye", "mouth", "pupil", "iris", "white"]
 
 func _recolor_mascot(node: Node, c: Color) -> void:
 	for child in node.get_children():
 		if child is MeshInstance3D:
 			var n := child.name.to_lower()
-			# Skip small detail meshes — eyes, pupils, cheek blush keep their own colors.
-			# NOTE: cheeks are intentionally recolored with the body so the pink
-			# blush doesn't wash the body toward pink/purple (esp. on the blue ball).
-			var is_detail := "eye" in n or "pupil" in n \
-							 or "iris" in n or "shine" in n or "highlight" in n \
-							 or "white" in n or "face" in n or "crown" in n
-			# The new mascot.glb uses generic "Sphere_NNN" part names, so the name
-			# check above can't spot its accents — also keep any part that's near-white
-			# in the source art (eye/face/belly), which the kingdom colour would flood.
-			if not is_detail:
-				var src: Material = child.get_surface_override_material(0)
-				if src == null and child.mesh != null:
-					src = child.mesh.surface_get_material(0)
-				if src is StandardMaterial3D:
-					var a: Color = (src as StandardMaterial3D).albedo_color
-					if a.r > 0.85 and a.g > 0.85 and a.b > 0.85:
-						is_detail = true
-			if not is_detail:
-				# Deepen + saturate the base so the bright high-key lighting reads it
-				# as vivid red/blue (raw palette colors wash out to pastel under fill).
-				var deep := c
-				deep.s = clampf(deep.s * 1.12, 0.0, 1.0)
-				deep.v = deep.v * 0.82
-				var mat := ShaderMaterial.new()
-				mat.shader = _VINYL_SHADER
-				mat.set_shader_parameter("base_color", deep)
-				mat.set_shader_parameter("roughness", 0.20)
-				mat.set_shader_parameter("wrap", 0.28)  # more shading contrast → deeper, truer red/blue
-				mat.set_shader_parameter("sss_strength", 0.10)  # subtle warmth only — keeps red red and blue blue
+			var keep := false
+			for kw in _KEEP_PARTS:
+				if kw in n:
+					keep = true
+					break
+			if not keep:
+				# Boost saturation slightly so colors stay vivid under the ambient fill.
+				var vivid := c
+				vivid.s = clampf(vivid.s * 1.1, 0.0, 1.0)
+				vivid.v = clampf(vivid.v * 0.88, 0.0, 1.0)
+				var mat := StandardMaterial3D.new()
+				mat.albedo_color      = vivid
+				mat.roughness         = 0.18   # glossy soft-plastic, matches reference
+				mat.metallic          = 0.0
+				mat.specular_mode     = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 				child.material_override = mat
+				# Store as a ShaderMaterial-compatible ref so set_body_color still works
 				_body_mats.append(mat)
 		_recolor_mascot(child, c)
 
@@ -107,8 +115,10 @@ func set_model(scene: PackedScene, model_scale: float = 1.0, y: float = 0.0, y_r
 func _process(delta: float) -> void:
 	if dead or not _visual:
 		return
-	_bob_t += delta * 2.8
-	_visual.position.y = sin(_bob_t) * 0.048
+	# Bob is suppressed when the walk anim is running (the anim already moves the body)
+	if not _anim or not _anim.is_playing():
+		_bob_t += delta * 2.8
+		_visual.position.y = sin(_bob_t) * 0.048
 
 func _physics_process(_dt: float) -> void:
 	if dead or not auto_input:
@@ -120,14 +130,29 @@ func _physics_process(_dt: float) -> void:
 	else:
 		velocity = target
 	move_and_slide()
-	if mv.length() > 0.1:
+
+	var moving := mv.length() > 0.1
+	if moving:
 		face(mv)
+		_set_walking(true)
+	else:
+		_set_walking(false)
 
 	# Dust puff while running
 	_dust_t -= _dt
 	if velocity.length() > 2.8 and _dust_t <= 0.0:
 		_dust_t = 0.2
 		_spawn_dust()
+
+func _set_walking(walking: bool) -> void:
+	if not _anim:
+		return
+	if walking:
+		if not _anim.is_playing() or _anim.current_animation != ANIM_WALK:
+			_anim.play(ANIM_WALK)
+	else:
+		if _anim.is_playing():
+			_anim.stop(true)   # keep pose at last frame rather than snapping to rest
 
 func _spawn_dust() -> void:
 	var parent := get_parent()
@@ -149,7 +174,10 @@ func _spawn_dust() -> void:
 # ──────────────────────────────────────────────────── API ──
 func set_body_color(c: Color) -> void:
 	for mat in _body_mats:
-		mat.set_shader_parameter("base_color", c)
+		if mat is StandardMaterial3D:
+			(mat as StandardMaterial3D).albedo_color = c
+		elif mat is ShaderMaterial:
+			(mat as ShaderMaterial).set_shader_parameter("base_color", c)
 
 func set_body_scale(s: float) -> void:
 	if _visual:

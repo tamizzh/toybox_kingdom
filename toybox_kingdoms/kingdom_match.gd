@@ -20,11 +20,14 @@ const KingdomAI := preload("res://toybox_kingdoms/ai/kingdom_ai.gd")
 const Castle := preload("res://toybox_kingdoms/kingdom/castle.gd")
 const Populace := preload("res://toybox_kingdoms/kingdom/populace.gd")
 const Roster := preload("res://toybox_kingdoms/data/roster.gd")
+const Campaign := preload("res://toybox_kingdoms/data/campaign.gd")
 const Minimap := preload("res://toybox_kingdoms/ui/minimap.gd")
 const GlyphIcon := preload("res://toybox_kingdoms/ui/glyph_icon.gd")
 const Scatter := preload("res://toybox_kingdoms/env/scatter.gd")
 const GrassTexture := preload("res://toybox_kingdoms/env/grass_texture.gd")
 const TerritoryGround := preload("res://toybox_kingdoms/grid/territory_ground.gd")
+const Flags := preload("res://toybox_kingdoms/kingdom/flags.gd")
+const Windmills := preload("res://toybox_kingdoms/kingdom/windmills.gd")
 
 const GW := 128
 const GH := 96
@@ -32,12 +35,19 @@ const CELL := 0.6
 const HOME_R := 5
 const N_KINGDOMS := 8           # 1 human + 7 AI
 const HUMAN_INPUT_ID := 0
-const HUMAN_SPEED := 7.0
+const HUMAN_SPEED := 7.0          # human's base carve speed (faster than AI_SPEED 6.3)
+const BARRACKS_SPEED := 0.55      # each BARRACKS makes your king carve this much faster
+const SPEED_CAP := 11.0           # speed ceiling so boosts stay controllable
 const AI_SPEED := 6.3
 const RESPAWN_TIME := 1.2
-const BLOB_SCALE := 0.62         # every ruler blob is this size (incl. after respawn)
-const MATCH_DURATION := 150.0   # seconds
-const WIN_PCT := 0.40           # rule 40% of the toybox = instant domination win
+const BLOB_SCALE := 0.62         # rival ruler blob size (incl. after respawn)
+const KING_SCALE := 0.75         # YOUR Crowned Toy King reads bigger than rivals
+const MATCH_DURATION := 300.0   # seconds (5 min — long enough for the castle-war to play out)
+# A match ends ONLY two ways: every rival is conquered (last kingdom standing), or
+# the timer runs out. There is NO instant land-threshold win — you play the full
+# clock unless you wipe everyone out. At timeout you WIN only if you hold at least
+# WIN_PCT of the toybox; otherwise you lose.
+const WIN_PCT := 0.50           # land you must hold AT TIMEOUT to win
 
 var grid
 var renderer
@@ -54,9 +64,18 @@ var _minimap
 var _populace
 var _scatter
 var _ground
+var _flags
+var _windmills
 var _world_env: Environment      # the live board env; the minimap reuses a fog-free copy
 var _kingdom_t := 0.0
 var _terr_rebuild_t := 0.0
+var _minimap_t := 0.0           # rate-limits the minimap's full 2nd-scene render
+var _minimap_pending := false   # board changed but its render is still throttled
+# Decoration rebuilds (full-board scans) only re-run when ownership actually changed
+# since they last ran, and populace/flags alternate ticks so they never spike together.
+var _last_pop_version := -1
+var _last_flag_version := -1
+var _decor_phase := 0
 
 var _ended := false
 var _match_t := MATCH_DURATION
@@ -79,16 +98,30 @@ var _towers := 0
 var _barracks := 0
 var _castle_floor := 1          # min castle level bought via the CASTLE button
 var _coins_label: Label
-var _build_btns := {}           # kind -> Button
+var _build_btns := {}           # kind -> {"btn","cost","cost_label","icon","title"}
+var _timer_panel: PanelContainer
+var _last_secs := -1
 
 var _dbg := false
 var _dbg_t := 0.0
+
+# ── campaign stage (read from SaveManager; falls back to the N_KINGDOMS default) ──
+var _stage := 0
+var _n_kingdoms := N_KINGDOMS    # this match's kingdom count (1 human + rivals)
+var _rival_diffs: Array = []     # per-rival AI difficulty for this stage
+var _stage_msg := ""             # results banner ("Stage cleared!" / "Campaign complete!")
 
 func _ready() -> void:
 	_dbg = OS.get_environment("TBK_DEBUG") == "1"
 	var fast := OS.get_environment("TBK_FASTMATCH")
 	if fast != "":
 		_match_t = float(fast)
+
+	# Load this match's stage from the campaign ladder. Rival count + AI difficulty
+	# escalate per stage; the human is always kingdom 0.
+	_stage = SaveManager.active_stage()
+	_rival_diffs = Campaign.rival_diffs(_stage)
+	_n_kingdoms = 1 + _rival_diffs.size()
 	AudioManager.play_music("game")
 	_build_environment()
 	_build_ground()
@@ -97,20 +130,25 @@ func _ready() -> void:
 	grid.setup(GW, GH)
 
 	# colors first so the renderer can draw every kingdom
-	for i in N_KINGDOMS:
+	for i in _n_kingdoms:
 		var kid := i + 1
 		_kids.append(kid)
-		_kid_color[kid] = _kingdom_color(i, N_KINGDOMS)
+		_kid_color[kid] = _kingdom_color(i, _n_kingdoms)
 
 	renderer = GridRenderer.new()
 	add_child(renderer)
 	renderer.setup(grid, CELL, _kid_color)   # trails + flash only now (cube fill removed)
 
 	# spawn kingdoms
-	for i in N_KINGDOMS:
+	for i in _n_kingdoms:
 		_spawn_kingdom(i)
 
-	# NEW painted-ground territory (replaces the territory cubes)
+	# castle homes drive road hubs (ground), village clustering (populace) and flags.
+	var homes := {}
+	for a in _rulers:
+		homes[a.kid] = a.home
+
+	# painted-ground territory (checked-in look: green wilderness + raised plates)
 	_ground = TerritoryGround.new()
 	add_child(_ground)
 	_ground.setup(grid, CELL, _kid_color)
@@ -120,11 +158,18 @@ func _ready() -> void:
 	# the town layer: houses + citizens rising from claimed land
 	_populace = Populace.new()
 	add_child(_populace)
-	var homes := {}
-	for a in _rulers:
-		homes[a.kid] = a.home
 	_populace.setup(grid, CELL, _kid_color, homes)
 	_populace.rebuild()
+
+	# windmills + border flags: the "living kingdom" dressing
+	_windmills = Windmills.new()
+	add_child(_windmills)
+	_windmills.setup(grid, CELL, _kid_color, homes)
+	_windmills.rebuild()
+	_flags = Flags.new()
+	add_child(_flags)
+	_flags.setup(grid, CELL, _kid_color)
+	_flags.rebuild()
 
 	# lush wilderness: trees / rocks / bushes on neutral land
 	_scatter = Scatter.new()
@@ -134,7 +179,7 @@ func _ready() -> void:
 
 	# camera follows the human
 	camera = KingdomCamera.new()
-	camera.offset = Vector3(0.0, 15.5, 14.0)   # pulled-back toy-board view
+	camera.offset = Vector3(0.0, 12.6, 15.2)   # lower, more cinematic 3/4 diorama framing
 	add_child(camera)
 	camera.target = _rulers[0].avatar
 
@@ -151,7 +196,7 @@ func _spawn_kingdom(i: int) -> void:
 	var kid: int = i + 1
 	var info: Dictionary = Roster.info(i)
 	_kid_name[kid] = info["name"]
-	var home := _home_anchor(i, N_KINGDOMS)
+	var home := _home_anchor(i, _n_kingdoms)
 	grid.seed_kingdom(kid, home.x, home.y, HOME_R)
 
 	var a := RulerAgent.new()
@@ -166,7 +211,7 @@ func _spawn_kingdom(i: int) -> void:
 	var av = Avatar.new()
 	add_child(av)
 	av.setup(pdata)
-	av.set_body_scale(BLOB_SCALE)            # smaller toy blob (reads better up close)
+	av.set_body_scale(KING_SCALE if i == 0 else BLOB_SCALE)
 	# spawn to the RIGHT of the castle so the blob is visible, not hidden inside the
 	# keep. Still on home soil (within HOME_R) so no trail starts.
 	var spawn_cell := Vector2i(mini(home.x + 4, GW - 1), home.y)
@@ -180,10 +225,17 @@ func _spawn_kingdom(i: int) -> void:
 	if a.is_ai:
 		av.auto_input = false
 		a.ai = KingdomAI.new()
-		a.ai.setup(int(info["diff"]), 1000 + i * 7)   # personality drives behaviour
+		# Stage sets each rival's difficulty (escalating ladder); fall back to the
+		# roster's personality diff if this stage doesn't specify one for this rival.
+		var diff: int = int(info["diff"])
+		if i - 1 < _rival_diffs.size():
+			diff = int(_rival_diffs[i - 1])
+		a.ai.setup(diff, 1000 + i * 7)
 	else:
 		_player = pdata
 		av.auto_input = true                # human reads InputManager id 0
+		av.speed = HUMAN_SPEED              # base carve speed (BARRACKS stacks on top)
+		_attach_king_aura(av, _kid_color[kid])   # glowing ground ring → never lose your king
 
 	# castle at home, starts as a lone keep and grows with the realm
 	var castle = Castle.new()
@@ -263,11 +315,19 @@ func _physics_process(delta: float) -> void:
 	# Throttle full territory rebuilds to <=10/s — mobile safeguard (claims still
 	# show instantly via the flash; the slab catches up within 0.1s).
 	_terr_rebuild_t -= delta
+	_minimap_t -= delta
 	if grid.has_dirty() and _terr_rebuild_t <= 0.0:
 		_ground.update()
 		renderer.rebuild_borders()
+		_minimap_pending = true     # board changed → queue an aerial refresh
 		grid.reset_dirty()
 		_terr_rebuild_t = 0.1
+	# The minimap is a full SECOND scene render, so cap it to ~3/s and always render
+	# the latest state — far cheaper than firing it on every 10Hz territory tick.
+	if _minimap_pending and _minimap_t <= 0.0:
+		_minimap.request_render()
+		_minimap_pending = false
+		_minimap_t = 0.33
 	_kingdom_tick(delta)
 	_hud_tick(delta)
 	if _dbg:
@@ -279,7 +339,20 @@ func _kingdom_tick(delta: float) -> void:
 	if _kingdom_t > 0.0:
 		return
 	_kingdom_t = 0.4
-	_populace.rebuild()
+	# Populace + flags are full-board scans. Skip them when no land changed since the
+	# last build, and alternate them across ticks so only one runs per 0.4s spike.
+	var v: int = grid.version
+	if _decor_phase == 0:
+		if v != _last_pop_version:
+			_populace.rebuild()
+			_last_pop_version = v
+		_decor_phase = 1
+	else:
+		if v != _last_flag_version:
+			_flags.rebuild()
+			_last_flag_version = v
+		_decor_phase = 0
+	_windmills.rebuild()
 	_minimap.update_territory(grid, _kid_color)
 	for a in _rulers:
 		if a.eliminated:
@@ -410,12 +483,10 @@ func _check_match_end() -> void:
 			alive += 1
 	if human.eliminated:
 		_end_match(false, "conquered")
-	elif human_pct >= WIN_PCT:
-		_end_match(true, "domination")
 	elif alive == 1:
-		_end_match(true, "conquest")
+		_end_match(true, "conquest")               # win: last kingdom standing
 	elif _match_t <= 0.0:
-		_end_match(_human_rank() == 1, "timeout")
+		_end_match(human_pct >= WIN_PCT, "timeout")  # win only if holding >=50% at the buzzer
 
 func _human_rank() -> int:
 	var mine: int = grid.territory_count(_rulers[0].kid)
@@ -436,8 +507,17 @@ func _end_match(win: bool, reason: String) -> void:
 		_rulers[0].avatar.auto_input = false   # freeze the human (AI halts via the early return)
 	var pct: float = float(grid.territory_count(_rulers[0].kid)) / float(GW * GH)
 	var rank := _human_rank()
-	var coins: int = int(pct * 300.0) + maxi(0, N_KINGDOMS - rank) * 15 + (60 if win else 0)
+	var coins: int = int(pct * 300.0) + maxi(0, _n_kingdoms - rank) * 15 + (60 if win else 0)
 	SaveManager.add_coins(coins)
+	# Advance the campaign ladder on a win (only the frontier stage unlocks new ground).
+	if win:
+		if SaveManager.clear_stage(_stage):
+			if SaveManager.campaign_complete():
+				_stage_msg = "Campaign complete!  You rule the toybox 👑"
+			else:
+				_stage_msg = "Stage cleared!  Next: %s" % Campaign.title(SaveManager.active_stage())
+		else:
+			_stage_msg = "Stage replayed  ·  %s" % Campaign.title(_stage)
 	AudioManager.play("round_win" if win else "eliminate")
 	if _dbg:
 		print("[end] win=%s reason=%s rank=%d pct=%.1f coins=%d" % [win, reason, rank, pct * 100.0, coins])
@@ -473,11 +553,19 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 		Palette.WARN if win else Palette.DANGER)
 	var sub := ""
 	match reason:
-		"domination": sub = "You ruled %.0f%% of the toybox!" % (pct * 100.0)
 		"conquest": sub = "You conquered every rival kingdom!"
 		"conquered": sub = "Your kingdom was wiped off the map."
-		_: sub = "You finished #%d of %d." % [rank, N_KINGDOMS]
+		"timeout":
+			if win:
+				sub = "Time's up — you ruled %.0f%% of the toybox!" % (pct * 100.0)
+			else:
+				sub = "Time's up — you held %.0f%% (need 50%%), #%d of %d." % [pct * 100.0, rank, _n_kingdoms]
+		_: sub = "You finished #%d of %d." % [rank, _n_kingdoms]
 	_result_label(vb, sub, 26, Color.WHITE)
+
+	# Campaign ladder banner (stage cleared / campaign complete / replayed).
+	if _stage_msg != "":
+		_result_label(vb, _stage_msg, 24, Palette.SAFE if win else Color.WHITE)
 
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, 8)
@@ -616,7 +704,7 @@ func _respawn(a) -> void:
 			best_d = d
 			spawn = c["cell"]
 	a.avatar.revive(_c2w(spawn.x, spawn.y, 0.0))
-	a.avatar.set_body_scale(BLOB_SCALE)      # revive() resets visual scale — re-apply so all blobs match
+	a.avatar.set_body_scale(BLOB_SCALE if a.is_ai else KING_SCALE)   # revive() resets scale — re-apply
 	a.avatar.collision_layer = 0
 	a.avatar.collision_mask = 0
 	a.last_cell = spawn
@@ -686,7 +774,7 @@ func _kingdom_color(i: int, n: int) -> Color:
 func _build_environment() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("0e1512")   # dark frame → saturated plates pop (target look)
+	env.background_color = Color("0e1512")   # dark frame → saturated plates pop (checked-in look)
 
 	# Distance fog fades the grass continent + forest border into the dark frame,
 	# giving the soft misty vignette of the target instead of a hard board edge.
@@ -702,7 +790,6 @@ func _build_environment() -> void:
 	env.fog_sky_affect = 1.0
 
 	# Cool sky-ambient fill — kept LOW so shadows stay deep and colours stay rich.
-	# (High ambient floods the shadows → SSAO/directional shadow vanish + pastel wash.)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color("cfe0ee")
 	env.ambient_light_energy = 0.30
@@ -737,7 +824,7 @@ func _build_environment() -> void:
 	env.adjustment_enabled = true
 	env.adjustment_brightness = 1.0
 	env.adjustment_contrast = 1.06
-	env.adjustment_saturation = 1.38         # deep, rich toy-plate colours (target look)
+	env.adjustment_saturation = 1.38         # deep, rich toy-plate colours (checked-in look)
 	_world_env = env                         # minimap mirrors this (fog-free) so it matches the board
 	var we := WorldEnvironment.new()
 	we.environment = env
@@ -746,7 +833,7 @@ func _build_environment() -> void:
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-50, -125, 0)
 	key.light_color = Color("ffeccd")        # ~5400K warm sunlight (less amber wash)
-	key.light_energy = 1.1                   # was 1.4 → high energy blew colours to pastel
+	key.light_energy = 1.1                   # warm key (checked-in look)
 	key.shadow_enabled = true
 	key.shadow_opacity = 0.6
 	key.shadow_blur = 1.0                     # was 3.2 → far too mushy
@@ -795,55 +882,92 @@ func _box_part(pos: Vector3, size: Vector3, color: Color) -> void:
 	mi.position = pos
 	add_child(mi)
 
+# ── HUD design tokens ─────────────────────────────────────────────────────────
+# One palette + a couple of helpers so every panel, pill and card reads as one
+# cohesive UI instead of a pile of one-off magic colours.
+const HUD_INK     := Color(0.05, 0.06, 0.09, 0.90)   # default panel fill
+const HUD_INK_HI  := Color(0.10, 0.12, 0.17, 0.94)   # raised / interactive fill
+const HUD_STROKE  := Color(1, 1, 1, 0.12)            # hairline border
+const HUD_GOLD    := Color("ffd34d")
+const HUD_BLUE    := Color("7cb6ff")
+const HUD_DIM     := Color(0.74, 0.78, 0.84)         # secondary / caption text
+
 # ── HUD: territory readout + live leaderboard ─────────────────────────────────
 func _build_hud(ui: CanvasLayer) -> void:
 	_lb_rows.clear()
+	_build_scrims(ui)                       # top/bottom gradients lift the HUD off the board
 
-	var stat := _hud_panel(Vector2(16, 16), Vector2(270, 172), 16)
+	var kc: Color = _kid_color[_rulers[0].kid]
+
+	# ── top-left: your kingdom card (colour accent + big % + stat rows) ──
+	var stat := _hud_panel(Vector2(16, 16), Vector2(286, 176), 18)
 	ui.add_child(stat)
+	var stat_h := HBoxContainer.new()
+	stat_h.add_theme_constant_override("separation", 12)
+	stat_h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stat.add_child(stat_h)
+	stat_h.add_child(_accent_bar(kc))
 	var stat_v := VBoxContainer.new()
-	stat_v.add_theme_constant_override("separation", 4)
-	stat.add_child(stat_v)
-	stat_v.add_child(_hud_text(_display_kingdom_name(_rulers[0].kid).to_upper(), 20, Color.WHITE))
-	_terr_label = _hud_text("0.0%", 44, _kid_color[_rulers[0].kid].lightened(0.25),
-		HORIZONTAL_ALIGNMENT_LEFT, true)
+	stat_v.add_theme_constant_override("separation", 3)
+	stat_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stat_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stat_h.add_child(stat_v)
+	stat_v.add_child(_hud_text(_display_kingdom_name(_rulers[0].kid).to_upper(), 19, kc.lightened(0.35)))
+	_terr_label = _hud_text("0.0%", 46, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, true)
 	stat_v.add_child(_terr_label)
 	stat_v.add_child(_thin_rule())
-	_pop_label = _hud_text("Population        0", 22, Color.WHITE)
-	stat_v.add_child(_pop_label)
-	_income_label = _hud_text("Coins / min       0", 22, Color.WHITE)
-	stat_v.add_child(_income_label)
+	var pr := _stat_row("people", HUD_BLUE, "Population")
+	stat_v.add_child(pr["row"]); _pop_label = pr["value"]
+	var ir := _stat_row("coin", HUD_GOLD, "Coins / min")
+	stat_v.add_child(ir["row"]); _income_label = ir["value"]
 
-	var timer := _hud_panel(Vector2(Palette.CENTER_X - 96, 14), Vector2(192, 62), 18)
-	ui.add_child(timer)
+	# ── top-centre: match countdown ──
+	_timer_panel = _hud_panel(Vector2(Palette.CENTER_X - 104, 14), Vector2(208, 64), 20)
+	ui.add_child(_timer_panel)
+	var th := _pill_row(_timer_panel)
+	th.add_theme_constant_override("separation", 9)
+	th.alignment = BoxContainer.ALIGNMENT_CENTER
+	th.add_child(_glyph(GlyphIcon.new().setup("clock", HUD_GOLD, 26)))
 	_time_label = _hud_text("0:00", 38, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, true)
-	timer.add_child(_time_label)
+	th.add_child(_time_label)
 
-	var coins := _hud_panel(Vector2(Palette.DESIGN_W - 430, 16), Vector2(190, 56), 14)
+	# ── top-right: coins + population pills, then settings ──
+	var coins := _hud_panel(Vector2(Palette.DESIGN_W - 446, 16), Vector2(196, 58), 16)
 	ui.add_child(coins)
-	_coins_label = _hud_text("COINS  0", 25, Color("ffd34d"), HORIZONTAL_ALIGNMENT_CENTER, true)
-	coins.add_child(_coins_label)
+	var ch := _pill_row(coins); ch.alignment = BoxContainer.ALIGNMENT_CENTER
+	ch.add_child(_glyph(GlyphIcon.new().setup("coin", HUD_GOLD, 28)))
+	_coins_label = _hud_text("0", 26, HUD_GOLD, HORIZONTAL_ALIGNMENT_LEFT, true)
+	ch.add_child(_coins_label)
 
-	var pop := _hud_panel(Vector2(Palette.DESIGN_W - 226, 16), Vector2(150, 56), 14)
+	var pop := _hud_panel(Vector2(Palette.DESIGN_W - 238, 16), Vector2(160, 58), 16)
 	ui.add_child(pop)
-	_pop_pill_label = _hud_text("POP  0", 25, Color("62a8ff"), HORIZONTAL_ALIGNMENT_CENTER, true)
-	pop.add_child(_pop_pill_label)
+	var ph := _pill_row(pop); ph.alignment = BoxContainer.ALIGNMENT_CENTER
+	ph.add_child(_glyph(GlyphIcon.new().setup("people", HUD_BLUE, 28)))
+	_pop_pill_label = _hud_text("0", 26, HUD_BLUE, HORIZONTAL_ALIGNMENT_LEFT, true)
+	ph.add_child(_pop_pill_label)
 
 	var gear := Button.new()
 	gear.text = "SET"
-	gear.position = Vector2(Palette.DESIGN_W - 64, 16)
-	gear.size = Vector2(48, 56)
+	gear.position = Vector2(Palette.DESIGN_W - 66, 16)
+	gear.size = Vector2(50, 58)
+	gear.custom_minimum_size = Vector2(50, 58)
 	gear.mouse_filter = Control.MOUSE_FILTER_STOP
-	_style_button(gear, Color("17191f"), 14)
+	_style_button(gear, HUD_INK_HI, 16)
+	_hover_lift(gear)
 	ui.add_child(gear)
 
-	var lb := _hud_panel(Vector2(Palette.DESIGN_W - 292, 88), Vector2(276, 336), 12)
+	# ── right: live leaderboard ──
+	var lb := _hud_panel(Vector2(Palette.DESIGN_W - 300, 90), Vector2(284, 350), 16)
 	ui.add_child(lb)
 	var lb_v := VBoxContainer.new()
-	lb_v.add_theme_constant_override("separation", 6)
+	lb_v.add_theme_constant_override("separation", 4)
+	lb_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	lb.add_child(lb_v)
-	lb_v.add_child(_hud_text("LEADERBOARD", 21, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER))
-	for i in N_KINGDOMS:
+	var lb_title := _hud_text("LEADERBOARD", 18, HUD_DIM, HORIZONTAL_ALIGNMENT_CENTER)
+	lb_title.add_theme_constant_override("outline_size", 4)
+	lb_v.add_child(lb_title)
+	lb_v.add_child(_thin_rule())
+	for i in _n_kingdoms:
 		var rr := _make_lb_row()
 		lb_v.add_child(rr["row"])
 		_lb_rows.append(rr)
@@ -851,14 +975,143 @@ func _build_hud(ui: CanvasLayer) -> void:
 	_build_action_stack(ui)
 	_build_toolbar(ui)
 
-	# fog-free copy of the board environment → minimap matches the main view exactly
-	# (the world's depth fog would otherwise black out its 100u-high top-down camera).
+	# fog-free copy of the board environment → minimap matches the prewater look:
+	# the world's depth fog would black out its 100u-high top-down camera, and the
+	# hero view's low ambient (0.30) + extra contrast read too dark/moody from above.
+	# Brighten ambient + flatten contrast so the board is evenly lit and vivid like
+	# the prewater minimap (a clear top-down map, not the shadowed 3/4 hero shot).
 	var mm_env := _world_env.duplicate(true) as Environment
 	mm_env.fog_enabled = false
+	mm_env.ambient_light_energy = 0.6     # gentle lift over the hero view's 0.30 — bright but NOT washed
+	mm_env.adjustment_contrast = 1.0      # flatten the moody hero contrast; keep saturation 1.38 for vivid plates
 	_minimap = Minimap.new()
 	_minimap.setup(GW, GH, get_world_3d(), CELL, mm_env)   # live top-down render of the board
 	_minimap.position = Vector2(Palette.DESIGN_W - 286, Palette.DESIGN_H - 202)
 	ui.add_child(_minimap)
+
+# A glowing, gently-pulsing ground ring fixed under the human's Crowned Toy King so
+# you can always pick yourself out of a crowded board. Emissive + additive so it
+# reads as light, not a painted decal. Cheap: one mesh, one looping tween.
+func _attach_king_aura(av, color: Color) -> void:
+	var ring := MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = 0.62
+	torus.outer_radius = 0.80
+	ring.mesh = torus
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(color, 0.85)
+	m.emission_enabled = true
+	m.emission = color.lightened(0.25)
+	m.emission_energy_multiplier = 2.2
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring.material_override = m
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ring.position = Vector3(0, 0.07, 0)
+	av.add_child(ring)
+	var tw := ring.create_tween().set_loops()
+	tw.tween_property(ring, "scale", Vector3(1.14, 1.0, 1.14), 0.9).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(ring, "scale", Vector3.ONE, 0.9).set_trans(Tween.TRANS_SINE)
+
+# Radial vignette over the 3D view (under the HUD). Darkens the busy edges so the
+# eye lands on the centre of the action — the cheapest "premium screenshot" trick.
+func _build_vignette(ui: CanvasLayer) -> void:
+	var grad := Gradient.new()
+	grad.set_color(0, Color(0, 0, 0, 0.0))
+	grad.set_color(1, Color(0.05, 0.03, 0.02, 0.20))   # gentle warm corner falloff, not a dim
+	grad.set_offset(0, 0.72)
+	grad.set_offset(1, 1.0)
+	var tex := GradientTexture2D.new()
+	tex.gradient = grad
+	tex.width = 256
+	tex.height = 256
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(1.0, 0.5)
+	var tr := TextureRect.new()
+	tr.texture = tex
+	tr.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	tr.stretch_mode = TextureRect.STRETCH_SCALE
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(tr)
+
+# Soft top + bottom gradient scrims. They darken the busy 3D board behind the
+# HUD just enough that white text + panels always read — the single biggest
+# "polished" tell, and it costs almost nothing.
+func _build_scrims(ui: CanvasLayer) -> void:
+	for top in [true, false]:
+		var grad := Gradient.new()
+		grad.set_color(0, Color(0, 0, 0, 0.40 if top else 0.34))
+		grad.set_color(1, Color(0, 0, 0, 0.0))
+		var tex := GradientTexture2D.new()
+		tex.gradient = grad
+		tex.width = 4
+		tex.height = 256
+		tex.fill_from = Vector2(0, 0)
+		tex.fill_to = Vector2(0, 1)
+		var tr := TextureRect.new()
+		tr.texture = tex
+		tr.stretch_mode = TextureRect.STRETCH_SCALE
+		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if top:
+			tr.set_anchors_preset(Control.PRESET_TOP_WIDE)
+			tr.offset_bottom = 150.0
+		else:
+			tr.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+			tr.offset_top = -148.0
+			tr.flip_v = true
+		ui.add_child(tr)
+
+# Thin rounded colour bar — the kingdom's identity stripe down the stat card.
+func _accent_bar(color: Color) -> Panel:
+	var p := Panel.new()
+	p.custom_minimum_size = Vector2(6, 0)
+	p.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = color.lightened(0.1)
+	st.set_corner_radius_all(3)
+	p.add_theme_stylebox_override("panel", st)
+	return p
+
+# Wrap a GlyphIcon so it sits nicely (vertically centred) inside an HBox.
+func _glyph(icon: Control) -> Control:
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return icon
+
+# An HBox that fills a pill panel, used to lay an icon beside a value label.
+func _pill_row(panel: PanelContainer) -> HBoxContainer:
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 8)
+	hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(hb)
+	return hb
+
+# One stat line in the kingdom card: icon · caption (left) · value (right). The
+# returned "value" label is what _hud_tick repaints each refresh.
+func _stat_row(glyph: String, color: Color, caption: String) -> Dictionary:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(_glyph(GlyphIcon.new().setup(glyph, color, 18)))
+	var cap := _hud_text(caption, 19, HUD_DIM)
+	cap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(cap)
+	var value := _hud_text("0", 21, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT, true)
+	row.add_child(value)
+	return {"row": row, "value": value}
+
+# Hover/press feel for a button: a gentle scale lift on hover, settle on exit.
+# Scales around the centre so HBox-laid cards don't shove their neighbours.
+func _hover_lift(b: Button, lift := 1.06) -> void:
+	b.pivot_offset = b.custom_minimum_size * 0.5
+	b.mouse_entered.connect(func() -> void:
+		b.pivot_offset = b.size * 0.5
+		b.create_tween().tween_property(b, "scale", Vector2(lift, lift), 0.10).set_trans(Tween.TRANS_BACK))
+	b.mouse_exited.connect(func() -> void:
+		b.create_tween().tween_property(b, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_BACK))
 
 func _hud_panel(pos: Vector2, min_size: Vector2, radius: int) -> PanelContainer:
 	var p := PanelContainer.new()
@@ -881,10 +1134,24 @@ func _hud_panel(pos: Vector2, min_size: Vector2, radius: int) -> PanelContainer:
 # One leaderboard row: rank · colour chip · kingdom name · right-aligned %.
 # Returns the parts so _hud_tick can repaint them each refresh.
 func _make_lb_row() -> Dictionary:
+	# Panel wrapper so the human's row (and the leader) can carry a tinted
+	# highlight behind the rank · chip · name · % layout.
+	var wrap := PanelContainer.new()
+	wrap.custom_minimum_size = Vector2(252, 32)
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0, 0, 0, 0)
+	bg.set_corner_radius_all(8)
+	bg.content_margin_left = 6
+	bg.content_margin_right = 6
+	bg.content_margin_top = 1
+	bg.content_margin_bottom = 1
+	wrap.add_theme_stylebox_override("panel", bg)
+
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
-	row.custom_minimum_size = Vector2(248, 30)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(row)
 	var rank := _hud_text("", 19, Color(1, 1, 1, 0.55))
 	rank.custom_minimum_size = Vector2(20, 0)
 	var dot := Panel.new()
@@ -899,13 +1166,30 @@ func _make_lb_row() -> Dictionary:
 	dot.add_theme_stylebox_override("panel", dst)
 	var nm := _hud_text("", 19, Color.WHITE)
 	nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var you := _hud_text("YOU", 13, Color(0.06, 0.07, 0.10))
+	you.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	you.add_theme_constant_override("outline_size", 0)
+	var you_wrap := PanelContainer.new()
+	you_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	you_wrap.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var yst := StyleBoxFlat.new()
+	yst.bg_color = HUD_GOLD
+	yst.set_corner_radius_all(6)
+	yst.content_margin_left = 6
+	yst.content_margin_right = 6
+	yst.content_margin_top = 1
+	yst.content_margin_bottom = 1
+	you_wrap.add_theme_stylebox_override("panel", yst)
+	you_wrap.add_child(you)
+	you_wrap.visible = false
 	var pct := _hud_text("", 19, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT)
 	pct.custom_minimum_size = Vector2(54, 0)
 	row.add_child(rank)
 	row.add_child(dot)
 	row.add_child(nm)
+	row.add_child(you_wrap)
 	row.add_child(pct)
-	return {"row": row, "rank": rank, "chip": dst, "name": nm, "pct": pct}
+	return {"row": wrap, "bg": bg, "rank": rank, "chip": dst, "name": nm, "you": you_wrap, "pct": pct}
 
 func _hud_text(text: String, size: int, color: Color,
 		align = HORIZONTAL_ALIGNMENT_LEFT, heavy := false) -> Label:
@@ -951,8 +1235,9 @@ func _build_action_stack(ui: CanvasLayer) -> void:
 		vb.add_child(icon)
 		vb.add_child(_hud_text(a["text"], 16, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER))
 		if int(a["cost"]) > 0:
-			vb.add_child(_hud_text(str(a["cost"]), 14, Color("ffd34d"), HORIZONTAL_ALIGNMENT_CENTER))
+			vb.add_child(_hud_text(str(a["cost"]), 14, HUD_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
 		b.add_child(vb)
+		_hover_lift(b)
 		ui.add_child(b)
 
 func _build_toolbar(ui: CanvasLayer) -> void:
@@ -965,37 +1250,60 @@ func _build_toolbar(ui: CanvasLayer) -> void:
 	_add_build_card(hb, "FARM", 200, "farm")
 	_add_build_card(hb, "BARRACKS", 350, "barracks")
 
+# Per-building accent — a colour-coded top stripe so the four cards read apart
+# at a glance instead of being four identical dark boxes.
+const BUILD_ACCENT := {
+	"castle": Color("ffd34d"), "tower": Color("7cb6ff"),
+	"farm": Color("64d77a"), "barracks": Color("f06a5a"),
+}
+
 func _add_build_card(parent: Node, label: String, cost: int, kind: String) -> void:
+	var accent: Color = BUILD_ACCENT.get(kind, HUD_GOLD)
 	var b := Button.new()
-	b.custom_minimum_size = Vector2(124, 104)
-	_style_button(b, Color("111820"), 14)
+	b.custom_minimum_size = Vector2(124, 106)
+	_style_button(b, Color("141b24"), 16)
 	b.pressed.connect(func() -> void: _buy_building(kind, cost))
+	# coloured accent stripe pinned to the top edge of the card
+	var stripe := Panel.new()
+	stripe.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	stripe.offset_left = 10; stripe.offset_right = -10
+	stripe.offset_top = 7; stripe.offset_bottom = 12
+	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sst := StyleBoxFlat.new()
+	sst.bg_color = accent
+	sst.set_corner_radius_all(3)
+	stripe.add_theme_stylebox_override("panel", sst)
+	b.add_child(stripe)
 	# sticker icon + name + coin-cost, stacked and centred inside the card
 	var vb := VBoxContainer.new()
 	vb.alignment = BoxContainer.ALIGNMENT_CENTER
 	vb.add_theme_constant_override("separation", 1)
 	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var icon: Control = GlyphIcon.new().setup(kind, Color.WHITE, 46)
+	var icon: Control = GlyphIcon.new().setup(kind, Color.WHITE, 44)
 	icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	vb.add_child(icon)
 	vb.add_child(_hud_text(label, 16, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER))
-	vb.add_child(_cost_row(cost))
+	var cr := _cost_row(cost)
+	vb.add_child(cr["row"])
 	b.add_child(vb)
+	_hover_lift(b, 1.05)
 	parent.add_child(b)
-	_build_btns[kind] = b
+	_build_btns[kind] = {"btn": b, "cost": cost, "cost_label": cr["label"]}
 
-# Centred "🪙 250" cost row using the DrawKit coin glyph.
-func _cost_row(cost: int) -> Control:
+# Centred "🪙 250" cost row using the DrawKit coin glyph. Returns the row and its
+# value Label so affordability can recolour the number.
+func _cost_row(cost: int) -> Dictionary:
 	var hb := HBoxContainer.new()
 	hb.alignment = BoxContainer.ALIGNMENT_CENTER
 	hb.add_theme_constant_override("separation", 4)
 	hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var c: Control = GlyphIcon.new().setup("coin", Color("ffc31f"), 20)
+	var c: Control = GlyphIcon.new().setup("coin", HUD_GOLD, 20)
 	c.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hb.add_child(c)
-	hb.add_child(_hud_text(str(cost), 17, Color("ffd34d")))
-	return hb
+	var l := _hud_text(str(cost), 17, HUD_GOLD)
+	hb.add_child(l)
+	return {"row": hb, "label": l}
 
 func _style_button(b: Button, color: Color, radius: int) -> void:
 	var st := StyleBoxFlat.new()
@@ -1023,20 +1331,34 @@ func _buy_building(kind: String, cost: int) -> void:
 		_toast("Need more coins", Palette.WARN)
 		return
 	_coins -= cost
+	# Every building boosts YOUR own conquest — the economy fuels expansion instead of
+	# sitting on the side. The toast names the effect so the payoff is legible.
+	var fx := ""
 	match kind:
 		"castle":
 			_castle_floor = mini(_castle_floor + 1, 4)
 			for c in _rulers[0].castles:
 				if c["node"] != null:
 					c["node"].update_tier(maxi(c["node"].tier, _castle_floor))
+			fx = "Castle Lv %d — siege bigger keeps" % _castle_floor
 		"tower":
 			_towers += 1
 			_rulers[0].defense += 1
+			fx = "Defense +1 — harder to conquer (×%d)" % _towers
 		"farm":
 			_farms += 1
+			fx = "Coins/min up — more to spend (×%d)" % _farms
 		"barracks":
 			_barracks += 1
-	_toast("%s built" % kind.capitalize(), _kid_color[_rulers[0].kid])
+			_apply_human_speed()
+			fx = "Faster carve — claim more, faster (×%d)" % _barracks
+	_toast(fx, _kid_color[_rulers[0].kid])
+
+# Recompute the human king's carve speed from the base + BARRACKS owned (capped).
+func _apply_human_speed() -> void:
+	if _rulers.is_empty() or _rulers[0].avatar == null:
+		return
+	_rulers[0].avatar.speed = minf(HUMAN_SPEED + float(_barracks) * BARRACKS_SPEED, SPEED_CAP)
 
 func _display_kingdom_name(kid: int) -> String:
 	return KINGDOM_LABELS[(kid - 1) % KINGDOM_LABELS.size()]
@@ -1128,32 +1450,55 @@ func _hud_tick(delta: float) -> void:
 	var pct := 100.0 * owned / total
 	var pop := _population_estimate(owned)
 	_terr_label.text = "%.1f%%" % pct
-	_pop_label.text = "Population        %d" % pop
-	_income_label.text = "Coins / min       %d" % int(round(_income))
-	_coins_label.text = "COINS  %d" % _coins
-	_pop_pill_label.text = "POP  %d" % pop
+	_pop_label.text = "%d" % pop
+	_income_label.text = "%d" % int(round(_income))
+	_coins_label.text = "%d" % _coins
+	_pop_pill_label.text = "%d" % pop
+
+	# affordability: dim build cards you can't afford, gold→red on the cost.
+	for kind in _build_btns:
+		var bd: Dictionary = _build_btns[kind]
+		var afford: bool = _coins >= int(bd["cost"])
+		bd["btn"].modulate = Color(1, 1, 1, 1.0) if afford else Color(0.78, 0.80, 0.84, 0.92)
+		bd["cost_label"].add_theme_color_override("font_color", HUD_GOLD if afford else Palette.DANGER)
 
 	var secs := int(ceil(_match_t))
 	_time_label.text = "%d:%02d" % [secs / 60, secs % 60]
+	# final-15s urgency: tick red and punch the pill once per second.
+	if secs != _last_secs:
+		_last_secs = secs
+		if secs <= 15 and secs > 0 and _timer_panel != null:
+			_time_label.add_theme_color_override("font_color", Palette.DANGER.lightened(0.15))
+			_timer_panel.pivot_offset = _timer_panel.size * 0.5
+			var tw := _timer_panel.create_tween()
+			tw.tween_property(_timer_panel, "scale", Vector2(1.12, 1.12), 0.10).set_trans(Tween.TRANS_BACK)
+			tw.tween_property(_timer_panel, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK)
+		elif secs > 15:
+			_time_label.add_theme_color_override("font_color", Color.WHITE)
 
 	var standings: Array = []
 	for kid in _kids:
 		standings.append({"kid": kid, "n": grid.territory_count(kid)})
 	standings.sort_custom(func(x, y): return x["n"] > y["n"])
+	var human_kid: int = _rulers[0].kid
 	for r in _lb_rows.size():
 		var e: Dictionary = standings[r]
 		var rr: Dictionary = _lb_rows[r]
 		var kc: Color = _kid_color[e["kid"]]
 		var lead := r == 0
+		var mine: bool = e["kid"] == human_kid
 		rr["rank"].text = "%d" % (r + 1)
 		rr["chip"].bg_color = kc
 		rr["name"].text = _display_kingdom_name(e["kid"])
 		rr["name"].add_theme_color_override("font_color",
-			Color.WHITE if lead else Color(0.86, 0.88, 0.92))
+			Color.WHITE if (lead or mine) else Color(0.84, 0.87, 0.91))
 		rr["name"].add_theme_font_override("font",
-			ArcadeTheme.font_heavy if lead else ArcadeTheme.font)
+			ArcadeTheme.font_heavy if (lead or mine) else ArcadeTheme.font)
+		rr["you"].visible = mine
+		# tint your own row so you can find yourself at a glance; leader gets a faint gold wash.
+		rr["bg"].bg_color = (Color(kc, 0.22) if mine else (Color(HUD_GOLD, 0.08) if lead else Color(0, 0, 0, 0)))
 		rr["pct"].text = "%.1f%%" % (100.0 * e["n"] / total)
-		rr["pct"].add_theme_color_override("font_color", kc.lightened(0.25) if lead else Color(0.86, 0.88, 0.92))
+		rr["pct"].add_theme_color_override("font_color", kc.lightened(0.3) if (lead or mine) else Color(0.84, 0.87, 0.91))
 
 	# minimap ruler dots
 	var marks: Array = []

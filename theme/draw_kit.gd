@@ -235,6 +235,8 @@ static func hud_glyph(ci: CanvasItem, center: Vector2, r: float, kind: String, c
 		"shield": shield(ci, center, r, col)
 		"map", "pin": pin(ci, center, r, col)
 		"coin": coin(ci, center, r, col)
+		"clock", "time": clock(ci, center, r, col)
+		"pop", "people", "villager": people(ci, center, r, col)
 		_: action_glyph(ci, center, r, kind, col)
 
 # ── Castle: crenellated keep with a central gate. ──
@@ -350,3 +352,25 @@ static func coin(ci: CanvasItem, center: Vector2, r: float, col: Color = Color("
 	# upper-left catch-light + a tiny sparkle pip in the middle
 	ci.draw_circle(center + Vector2(-r * 0.32, -r * 0.34), r * 0.20, col.lightened(0.5))
 	ci.draw_circle(center, r * 0.16, col.lightened(0.4))
+
+# ── People: two overlapping head+shoulders silhouettes (population readout). ──
+static func people(ci: CanvasItem, center: Vector2, r: float, col: Color = Color.WHITE) -> void:
+	# back figure (smaller, offset right) then front figure (larger, offset left)
+	for fig in [{"o": Vector2(r * 0.46, r * 0.06), "s": 0.82}, {"o": Vector2(-r * 0.34, 0.0), "s": 1.0}]:
+		var o: Vector2 = center + fig["o"]
+		var s: float = fig["s"]
+		var hr := r * 0.34 * s
+		var head := o + Vector2(0, -r * 0.40 * s)
+		# shoulders = a capsule-ish rounded body
+		var bw := r * 0.62 * s
+		var btop := o + Vector2(0, r * 0.02 * s)
+		var bbot := o + Vector2(0, r * 0.66 * s)
+		ci.draw_circle(head + Vector2(0, 3), hr, SHADOW)
+		# body
+		ci.draw_rect(Rect2(btop.x - bw * 0.5, btop.y, bw, bbot.y - btop.y), col)
+		ci.draw_circle(Vector2(btop.x - bw * 0.5, bbot.y), bw * 0.5, col)
+		ci.draw_circle(Vector2(btop.x + bw * 0.5, bbot.y), bw * 0.5, col)
+		ci.draw_rect(Rect2(btop.x - bw * 0.5, bbot.y - bw * 0.5, bw, bw * 0.5), col)
+		# head
+		ci.draw_circle(head, hr, OUTLINE)
+		ci.draw_circle(head, hr - 2.5, col)

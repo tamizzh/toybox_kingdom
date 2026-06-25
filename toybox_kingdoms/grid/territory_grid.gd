@@ -33,6 +33,11 @@ var _trail := {}     # id -> Array[int]   ordered trail cell indices
 var dirty_min := Vector2i(0, 0)
 var dirty_max := Vector2i(-1, -1)   # empty when max < min
 
+# Monotonic ownership version: bumped on every actual cell-owner change. Decoration
+# layers (populace/flags/borders) compare against their last-built value so they can
+# skip a full rebuild entirely when no land changed since they last ran.
+var version: int = 0
+
 # Bounding box of the most recent capture (for the claim-flash VFX).
 var _last_cap_min := Vector2i(0, 0)
 var _last_cap_max := Vector2i(-1, -1)
@@ -276,6 +281,7 @@ func _set_owner(x: int, y: int, new_id: int) -> void:
 	owner[idx] = new_id
 	if new_id != NEUTRAL:
 		_count[new_id] = int(_count.get(new_id, 0)) + 1
+	version += 1
 	_mark_dirty(x, y)
 
 func _mark_dirty(x: int, y: int) -> void:

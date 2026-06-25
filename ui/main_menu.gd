@@ -36,6 +36,35 @@ func _ready() -> void:
 	# First launch: show the how-to-play tutorial (marks onboarding done when finished).
 	if not SaveManager.onboarding_done():
 		_open_overlay(load("res://ui/onboarding_screen.gd").new())
+	else:
+		# Returning player: grant the once-a-day login bonus (a reason to come back).
+		var bonus := SaveManager.claim_daily_if_due(50)
+		if bonus > 0:
+			_show_daily(bonus)
+
+
+# Floating "welcome back" reward toast, centred near the top, that rises and fades.
+func _show_daily(bonus: int) -> void:
+	var l := Label.new()
+	l.text = "Daily reward!  +%d coins" % bonus
+	l.add_theme_font_size_override("font_size", 30)
+	l.add_theme_color_override("font_color", Palette.WARN)
+	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
+	l.add_theme_constant_override("outline_size", 8)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	l.offset_top = 96
+	l.z_index = 20
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.modulate.a = 0.0
+	add_child(l)
+	AudioManager.play("collect")
+	var tw := l.create_tween()
+	tw.tween_property(l, "modulate:a", 1.0, 0.25)
+	tw.parallel().tween_property(l, "offset_top", 72.0, 0.25).set_trans(Tween.TRANS_BACK)
+	tw.tween_interval(1.6)
+	tw.tween_property(l, "modulate:a", 0.0, 0.6)
+	tw.tween_callback(l.queue_free)
 
 
 # Open a full-screen overlay in its own high CanvasLayer so it sits ABOVE all menu
@@ -258,7 +287,7 @@ func _play_row() -> Control:
 	wrap.add_child(play)
 
 	var hint := Label.new()
-	hint.text = "Claim land · grow your kingdom · outlast 7 rival rulers"
+	hint.text = "Claim land · conquer every rival · or hold 50% at the buzzer"
 	hint.add_theme_font_size_override("font_size", 16)
 	hint.add_theme_color_override("font_color", Color(Palette.NEUTRAL, 0.9))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -278,19 +307,22 @@ func _play_row() -> Control:
 
 func _on_play() -> void:
 	AudioManager.play("tap")
-	get_tree().change_scene_to_file(KINGDOM_MATCH)
+	# PLAY opens the campaign map — the conquest ladder is the spine; the player
+	# launches their current stage from there (CONQUER button).
+	_open_overlay(load("res://ui/campaign_screen.gd").new())
 
 
 func _refresh_hook() -> void:
 	if not _hook_label:
 		return
-	var next_pack := SaveManager.next_unlock_pack_id()
-	if next_pack != "":
-		var remaining := SaveManager.next_unlock_pack_remaining()
-		_hook_label.text = "%d more coins unlock %s colors" % [remaining, Cosmetics.name_of(next_pack)]
+	# The campaign ladder is the headline pull — show where the player is on it.
+	var Campaign := preload("res://toybox_kingdoms/data/campaign.gd")
+	if SaveManager.campaign_complete():
+		_hook_label.text = "Campaign complete!  You rule the toybox 👑"
 		return
-	var progress := int(round(SaveManager.level_progress() * 100.0))
-	_hook_label.text = "Rule 40%% of the toybox to win   ·   Level %d %d%%" % [SaveManager.level(), progress]
+	var stage := SaveManager.active_stage()
+	_hook_label.text = "CONQUEST  %d/%d   ·   Next: %s" % [
+		stage + 1, Campaign.count(), Campaign.title(stage)]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────────

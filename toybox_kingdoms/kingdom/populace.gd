@@ -45,11 +45,10 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> 
 	var body_mesh := BoxMesh.new()
 	body_mesh.size = Vector3(cell * 0.74, 0.58, cell * 0.74)
 	_body = _batch(body_mesh, false)
-	var roof_mesh := CylinderMesh.new()
-	roof_mesh.top_radius = 0.0
-	roof_mesh.bottom_radius = cell * 0.68
-	roof_mesh.height = 0.50
-	roof_mesh.radial_segments = 4
+	# Overhanging gable roof (triangular prism) reads as a real little house far better
+	# than the old squat 4-sided cone; it overhangs the body on all sides.
+	var roof_mesh := PrismMesh.new()
+	roof_mesh.size = Vector3(cell * 0.90, 0.38, cell * 0.94)
 	_roof = _batch(roof_mesh, false)
 	var cit_mesh := SphereMesh.new()    # cute low-poly blob citizen (mobile-cheap)
 	cit_mesh.radius = 0.24
@@ -84,7 +83,10 @@ func _batch(mesh: Mesh, bob: bool) -> MultiMeshInstance3D:
 	else:
 		var st := StandardMaterial3D.new()
 		st.vertex_color_use_as_albedo = true
-		st.roughness = 0.48
+		# Matte clay to match the painted ground/plate (was 0.48 = plastic gloss, which
+		# made houses + towers read as a different art language sitting ON the board).
+		st.roughness = 0.82
+		st.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 		mat = st
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -99,12 +101,14 @@ func _batch(mesh: Mesh, bob: bool) -> MultiMeshInstance3D:
 func rebuild() -> void:
 	var w: int = grid.w
 	var n: int = w * grid.h
-	var house_pos: Array = []
-	var house_col: Array = []
-	var cit_pos: Array = []
-	var cit_col: Array = []
-	var tower_pos: Array = []
-	var tower_col: Array = []
+	# Packed arrays (not Variant Array) so this hot full-board rebuild stays
+	# allocation-light — no per-element Variant boxing or GC churn.
+	var house_pos := PackedVector3Array()
+	var house_col := PackedColorArray()
+	var cit_pos := PackedVector3Array()
+	var cit_col := PackedColorArray()
+	var tower_pos := PackedVector3Array()
+	var tower_col := PackedColorArray()
 	for i in n:
 		var oid: int = grid.owner[i]
 		if oid == 0:
@@ -144,14 +148,14 @@ func rebuild() -> void:
 
 	# House body = constant cream; roof = kingdom colour; citizens = kingdom colour.
 	_fill(_body, house_pos, house_col, Vector3(0, PROP_Y + 0.29, 0), Color("f1d8a0"), true)
-	_fill(_roof, house_pos, house_col, Vector3(0, PROP_Y + 0.58 + 0.25, 0), Color.WHITE, false)
+	_fill(_roof, house_pos, house_col, Vector3(0, PROP_Y + 0.76, 0), Color.WHITE, false)
 	_fill(_cit, cit_pos, cit_col, Vector3(0, PROP_Y + 0.25, 0), Color.WHITE, false)
 	# Tower keep = cream stone; spire = kingdom colour, perched on top.
 	_fill(_tower, tower_pos, tower_col, Vector3(0, PROP_Y + 0.65, 0), Color("e9d6ad"), true)
 	_fill(_tower_roof, tower_pos, tower_col, Vector3(0, PROP_Y + 1.61, 0), Color.WHITE, false)
 
-func _fill(mmi: MultiMeshInstance3D, positions: Array, cols: Array, y_off: Vector3,
-		const_col: Color, use_const: bool) -> void:
+func _fill(mmi: MultiMeshInstance3D, positions: PackedVector3Array, cols: PackedColorArray,
+		y_off: Vector3, const_col: Color, use_const: bool) -> void:
 	var mm := mmi.multimesh
 	mm.instance_count = positions.size()
 	for k in positions.size():

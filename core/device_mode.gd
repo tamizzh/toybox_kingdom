@@ -37,6 +37,12 @@ func _ready() -> void:
 	_apply_window.call_deferred()
 
 func _apply_window() -> void:
+	# Force VSync ON at runtime. The project.godot window/vsync/vsync_mode key is
+	# not always honored (editor "Play", some D3D12 paths), so we set it explicitly
+	# here — this is the real fix for the screen tearing. ENABLED = the GPU presents
+	# in lock-step with the monitor refresh, so a frame is never torn mid-scanout.
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
+
 	# Desktop: project.godot window/size/mode=2 already starts maximized; no
 	# code needed. Mobile fullscreen is set here because the export templates
 	# handle the window differently on Android/iOS.

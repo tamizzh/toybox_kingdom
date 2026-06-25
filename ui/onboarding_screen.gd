@@ -23,7 +23,7 @@ const PAGES := [
 	},
 	{
 		"title": "RULE THE TOYBOX",
-		"body": "Claim 40% of the map, or be biggest when time runs out.\nGood luck, ruler!",
+		"body": "Conquer every rival kingdom — or hold 50% of the map when time runs out.\nGood luck, ruler!",
 	},
 ]
 
@@ -181,11 +181,11 @@ class _Illo extends Control:
 				_castle(Vector2(cx + 110, cy), 0.95, BLUE)
 				draw_string(ArcadeTheme.font, Vector2(cx + 70, cy - 70),
 					"Lv ≥", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Palette.WARN)
-			4:  # rule the toybox: crown + 40%
+			4:  # rule the toybox: crown + 50%
 				DrawKit.crown(self, Vector2(cx, cy - 30), 110.0)
 				DrawKit.star(self, Vector2(cx - 120, cy + 55), 30.0)
 				DrawKit.star(self, Vector2(cx + 120, cy + 55), 30.0)
-				var s := "40%"
+				var s := "50%"
 				var tw := ArcadeTheme.font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, 64).x
 				draw_string(ArcadeTheme.font, Vector2(cx - tw * 0.5, cy + 90), s,
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 64, Palette.WARN)

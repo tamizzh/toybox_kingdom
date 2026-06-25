@@ -114,8 +114,9 @@ func rebuild_borders() -> void:
 	var w: int = grid.w
 	var h: int = grid.h
 	var n: int = w * h
-	var pts: Array = []
-	var cols: Array = []
+	# Packed arrays keep this 10Hz full-board border scan allocation-light.
+	var pts := PackedVector3Array()
+	var cols := PackedColorArray()
 	for i in n:
 		var kid: int = grid.owner[i]
 		if kid == 0:

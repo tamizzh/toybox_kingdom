@@ -23,12 +23,14 @@ uniform vec3 kcolors[8];
 uniform vec2 grid_size = vec2(128.0, 96.0);
 // Wilderness uses the authored grass (0-3) + soil (4) TILES, one per cell.
 uniform sampler2DArray terrain_tex : filter_linear_mipmap;
-// The tile supplies only light/dark DETAIL; hue comes from these real green shades
-// (so grass is controllably natural-green, not the tiles' fixed yellow-green).
-uniform vec3 grass_a = vec3(0.20, 0.38, 0.15);       // deep green
-uniform vec3 grass_b = vec3(0.32, 0.51, 0.20);       // mid green
-uniform vec3 grass_c = vec3(0.47, 0.64, 0.26);       // light green
-uniform vec3 soil_col = vec3(0.44, 0.33, 0.20);      // earthy brown
+// Wilderness samples the authored tiles (7 grass variants + the dirt tile's
+// cracked-stone pattern) for their bevel + DETAIL only, then drives the hue from
+// these clean colours — so it reads as grass/soil tiles with the tile grid intact,
+// without the tiles' wrong raw hues (yellow grass, blue "dirt").
+uniform vec3 grass_a = vec3(0.22, 0.42, 0.16);       // deep green
+uniform vec3 grass_b = vec3(0.34, 0.54, 0.20);       // mid green
+uniform vec3 grass_c = vec3(0.48, 0.64, 0.26);       // light green
+uniform vec3 soil_col = vec3(0.47, 0.34, 0.21);      // earthy brown
 uniform vec3 sand_col = vec3(0.34, 0.30, 0.20);      // muted coast, doesn't glow
 uniform float bump_amp = 0.045;
 uniform float plateau = 0.115;                // claimed land rises into thicker toy-board plates
@@ -92,29 +94,30 @@ void fragment(){
 		ROUGHNESS = 0.62;
 		SPECULAR = 0.06;
 	} else {
-		// Tiled wilderness: one authored grass tile per cell (4 variants by hash),
-		// with SOIL tiles forming organic CLUMPS via low-freq noise (not random
-		// salt-and-pepper). Tinted + tonally varied so it doesn't read as a flat
-		// repeating quilt.
+		// Tiled wilderness: the AUTHORED grass/soil tiles, one per cell (bevel + grain
+		// + the tile grid kept intact = the target's tiled-board look). 4 grass
+		// variants by hash; SOIL tiles form big organic clumps via low-freq noise.
+		// Only a light per-channel recolour to de-yellow grass / warm the soil.
 		vec2 tuv = fract(uv * grid_size);
 		float gh = hash(floor(uv * grid_size) + 0.37);
-		// plenty of soil now: large organic earthy clumps (~45%), grass between
-		float soil = smoothstep(0.47, 0.59, vnoise(v_world.xz * 0.5 + 19.0));
+		float soil = smoothstep(0.42, 0.56, vnoise(v_world.xz * 0.5 + 19.0));  // ~50% soil clumps
 		bool is_soil = soil > 0.5;
-		float layer = is_soil ? 4.0 : floor(gh * 4.0);
+		// sample a tile (7 grass variants 0-6, soil pattern = layer 7) for DETAIL
+		float layer = is_soil ? 7.0 : floor(gh * 7.0);
 		vec3 t = texture(terrain_tex, vec3(tuv, layer)).rgb;
-		float d = dot(t, vec3(0.299, 0.587, 0.114));      // tile luminance = bevel/blade detail
-		// hue from real green shades (multiple tones blended by large-scale noise)
+		float d = dot(t, vec3(0.299, 0.587, 0.114));      // tile luminance = bevel + pattern detail
+		// multiple grass shades (large-scale noise); soil = brown
 		float sn = vnoise(v_world.xz * 0.32 + 7.0);
 		vec3 shade = mix(grass_a, grass_b, smoothstep(0.20, 0.55, sn));
 		shade = mix(shade, grass_c, smoothstep(0.55, 0.88, sn));
-		vec3 base_col = is_soil ? soil_col : shade;
-		vec3 g = base_col * (0.55 + d * 1.05);            // tile detail modulates brightness
+		vec3 target = is_soil ? soil_col : shade;
+		// STRONG detail contrast → tile bevel grid + cracked-stone pattern read clearly
+		vec3 g = target * (0.38 + d * 1.42);
 		g *= seam_ao;                                     // gap shadow next to a plate
 		g = mix(sand_col, g, coast);                      // sandy coast
 		ALBEDO = g;
 		ROUGHNESS = 0.85;
-		SPECULAR = 0.1;
+		SPECULAR = 0.12;
 	}
 }
 """
@@ -165,30 +168,32 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	mesh.position = Vector3(0, TOP_Y, 0)
 	add_child(mesh)
 
-# Pack the authored grass/soil tiles into a Texture2DArray the shader samples
-# per-cell (layers 0-3 = grass variants, 4 = soil). All are 128x128; mipmaps must
-# match across layers, so we (re)generate them consistently.
+# Pack the AUTHENTIC authored tiles into a Texture2DArray the shader samples
+# per-cell: layers 0-6 = the seven grass variants, layer 7 = the brown soil tile.
+# The standalone tile_dirt.png is a blue cobble tile, so the soil is cropped from
+# the rightmost cell of the _row_grass atlas instead. All forced to 128x128 with
+# matching mipmaps (the array requires consistent mipmap usage across layers).
 func _build_terrain_array() -> Texture2DArray:
-	const PATHS := [
-		"res://assets/tile_grass_0.png",
-		"res://assets/tile_grass_1.png",
-		"res://assets/tile_grass_2.png",
-		"res://assets/tile_grass_3.png",
-		"res://assets/tile_dirt.png",
-	]
 	var imgs: Array[Image] = []
-	for p in PATHS:
-		var tex: Texture2D = load(p)
-		var img := tex.get_image()
-		if img.is_compressed():
-			img.decompress()
-		img.convert(Image.FORMAT_RGBA8)
-		img.clear_mipmaps()
-		img.generate_mipmaps()
-		imgs.append(img)
+	for i in 7:
+		imgs.append(_prep_tile((load("res://assets/tile_grass_%d.png" % i) as Texture2D).get_image()))
+	# soil DETAIL = tile_dirt's cracked-stone pattern (its blue colour is irrelevant;
+	# the shader recolours the wilderness from luminance only).
+	imgs.append(_prep_tile((load("res://assets/tile_dirt.png") as Texture2D).get_image()))
 	var arr := Texture2DArray.new()
 	arr.create_from_images(imgs)
 	return arr
+
+# Normalise a tile image for the array: RGBA8, 128x128, with mipmaps.
+func _prep_tile(img: Image) -> Image:
+	if img.is_compressed():
+		img.decompress()
+	img.convert(Image.FORMAT_RGBA8)
+	if img.get_width() != 128 or img.get_height() != 128:
+		img.resize(128, 128, Image.INTERPOLATE_BILINEAR)
+	img.clear_mipmaps()
+	img.generate_mipmaps()
+	return img
 
 # Repaint the ownership texture from the grid (throttled dirty tick).
 # Writes a reused PackedByteArray and uploads once — ~10-50x cheaper than the
