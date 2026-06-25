@@ -35,15 +35,15 @@ const CELL := 0.6
 const HOME_R := 5
 const N_KINGDOMS := 8           # 1 human + 7 AI
 const HUMAN_INPUT_ID := 0
-const HUMAN_SPEED := 7.0          # human's base carve speed (faster than AI_SPEED 6.3)
-const BARRACKS_SPEED := 0.55      # each BARRACKS makes your king carve this much faster
-const SPEED_CAP := 11.0           # speed ceiling so boosts stay controllable
-const AI_SPEED := 6.3
+const HUMAN_SPEED := 5.6          # human's base carve speed (faster than AI_SPEED 5.04) — 20% slower
+const BARRACKS_SPEED := 0.44      # each BARRACKS makes your king carve this much faster — 20% slower
+const SPEED_CAP := 8.8            # speed ceiling so boosts stay controllable — 20% slower
+const AI_SPEED := 5.04            # 20% slower
 const AI_DECIDE_EVERY := 4        # re-run each AI brain every Nth physics frame (~15Hz),
 								  # staggered by kid so they never all decide on one frame
 const RESPAWN_TIME := 1.2
-const BLOB_SCALE := 0.62         # rival ruler blob size (incl. after respawn)
-const KING_SCALE := 0.75         # YOUR Crowned Toy King reads bigger than rivals
+const BLOB_SCALE := 0.93         # rival ruler blob size (incl. after respawn) — 1.5× base
+const KING_SCALE := 1.125        # YOUR Crowned Toy King reads bigger than rivals — 1.5× base
 const MATCH_DURATION := 300.0   # seconds (5 min — long enough for the castle-war to play out)
 # A match ends ONLY two ways: every rival is conquered (last kingdom standing), or
 # the timer runs out. There is NO instant land-threshold win — you play the full
