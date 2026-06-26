@@ -24,7 +24,7 @@ uniform vec2 grid_size = vec2(128.0, 96.0);
 // PAPER look: every surface is flat matte cardstock. No tile texture, no grass
 // detail — just clean saturated colour with a soft bevel + a lighter ribbon where
 // two regions meet, exactly like simple_target.png.
-uniform vec3 paper_neutral = vec3(0.24, 0.65, 0.15); // unclaimed wilderness — spring lawn green; desaturated ~12%, dimmed ~5%, hue shifted ~4° toward yellow vs the prior neon green
+uniform vec3 paper_neutral = vec3(0.24, 0.65, 0.13); // spring lawn green — B pulled −0.02 lifts sat from 77%→80% without touching brightness; hue moves 2° warmer
 uniform vec3 sand_col = vec3(0.88, 0.79, 0.55);       // warm sandy BEACH where the island meets the sea
 uniform float bump_amp = 0.045;
 uniform float plateau = 0.115;                // claimed land rises into thicker toy-board plates
@@ -87,18 +87,23 @@ void fragment(){
 		// Border ribbon removed: the perimeter wall blocks already separate regions,
 		// so the claimed surface stays a uniform colour right up to the wall.
 	} else {
-		// Unclaimed wilderness: flat matte paper green with the faintest tonal drift
-		// so a large open field isn't a single dead flat colour.
-		float sn = vnoise(v_world.xz * 0.22 + 7.0);
-		float ch = hash(floor(uv * grid_size) * 1.7 + 3.0);
-			// Most cells stay the base green. Rare micro-patches add just enough variety
-			// to break monotony without competing with gameplay elements.
-			base = paper_neutral;
-			if      (ch > 0.985) base = paper_neutral * 0.82;                                // ~1.5% soft dark patch
-			else if (ch > 0.970) base = paper_neutral * 1.07;                                // ~1.5% soft light patch
-			else if (ch > 0.955) base = mix(paper_neutral, vec3(0.16, 0.60, 0.22), 0.12);   // ~1.5% clover tint (cooler green)
-			else if (ch > 0.940) base = mix(paper_neutral, vec3(0.38, 0.58, 0.07), 0.09);   // ~1.5% dry grass tint (warmer)
-			base *= (0.98 + sn * 0.04);
+		// Unclaimed wilderness: smooth warm/cool tonal field + rare per-cell micro-patches.
+		float sn  = vnoise(v_world.xz * 0.22 + 7.0);   // large-scale tonal drift (≈5-unit period)
+		float sn2 = vnoise(v_world.xz * 0.55 + 19.3);  // medium-scale warm/cool gradient (≈2-unit period)
+		float ch  = hash(floor(uv * grid_size) * 1.7 + 3.0);
+
+		// Primary richness layer: smooth warm↔cool field, ≈±3% on R and ±10% on B.
+		// Barely visible individually; together they make the lawn read as handcrafted.
+		vec3 warm = paper_neutral * vec3(1.03, 1.00, 0.90);
+		vec3 cool = paper_neutral * vec3(0.97, 1.00, 1.10);
+		base = mix(cool, warm, sn2);
+
+		// Per-cell micro-patches: ~6% of cells get a subtle accent on top.
+		if      (ch > 0.985) base *= 0.82;                                          // soft dark patch
+		else if (ch > 0.970) base *= 1.07;                                          // soft light patch
+		else if (ch > 0.955) base = mix(base, vec3(0.16, 0.60, 0.22), 0.12);       // clover tint
+		else if (ch > 0.940) base = mix(base, vec3(0.38, 0.58, 0.07), 0.09);       // dry grass tint
+		base *= (0.97 + sn * 0.05);   // large-scale brightness drift ±2.5%
 		// soft pale rim against any claimed neighbour (the target's light divider)
 		base = mix(base, mix(paper_neutral, vec3(1.0), 0.4), rim * 0.5);
 	}

@@ -12,7 +12,7 @@ const TREE_KINDS := [
 	"res://assets/models/tree-round.glb",
 	"res://assets/models/tree-spreading.glb",
 ]
-const TREE_COLORS := [Color("775123"), Color("33a23a")]  # [0]=trunk brown, [1]=foliage = the green kingdom/castle-roof green
+const TREE_COLORS := [Color("775123"), Color("39a23f")]  # [0]=trunk brown, [1]=foliage — sat reduced ~5% (#33a23a→#39a23f) to sit closer to the grass without losing readability
 const ROCK := preload("res://assets/models/rock.glb")
 
 # Base caps (desktop multiplies these — see rebuild()).
