@@ -11,7 +11,7 @@ extends Node3D
 # 1 draw call. The only per-tick cost is repainting the 128x96 ownership image.
 
 const TOP_Y := 0.04          # clay surface height (props sit here); base slab is flush under it
-const BUMP := 0.035          # soft board relief; props stay grounded and readable
+const BUMP := 0.014          # near-flat board relief (target reads handcrafted-flat, not bumpy clay); plateau still gives the silhouette
 
 const SHADER_CODE := """
 shader_type spatial;
@@ -71,7 +71,7 @@ void fragment(){
 	seam += float(texture(own, uv - vec2(px.x, 0)).r != here.r);
 	seam += float(texture(own, uv + vec2(0, px.y)).r != here.r);
 	seam += float(texture(own, uv - vec2(0, px.y)).r != here.r);
-	float seam_ao = mix(1.0, 0.72, clamp(seam, 0.0, 1.0));
+	float seam_ao = mix(1.0, 0.86, clamp(seam, 0.0, 1.0));   // softer plate gap; TIER 1 adds the crisp light border
 
 	// per-cell bevel normal (claimed plates only)
 	vec2 fc = abs(cuv - 0.5);
@@ -131,7 +131,7 @@ void fragment(){
 		}
 		// subtle large-scale brightness variation so the open field has gentle tonal movement
 		float sn = vnoise(v_world.xz * 0.30 + 7.0);
-		g *= (0.88 + sn * 0.16);
+		g *= (0.93 + sn * 0.09);                          // gentle tonal drift only; flatter, cleaner meadow
 		g *= seam_ao;                                     // gap shadow next to a plate
 		g = mix(sand_col, g, coast);                      // sandy coast
 		ALBEDO = g;

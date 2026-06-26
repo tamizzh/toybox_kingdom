@@ -905,19 +905,19 @@ func _build_environment() -> void:
 	# giving the soft misty vignette of the target instead of a hard board edge.
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_DEPTH
-	env.fog_light_color = Color("16241a")    # very dark warm green (less gloomy than near-black)
+	env.fog_light_color = Color("3a5440")    # brighter mossy haze → airy vignette, not gloom
 	env.fog_light_energy = 1.0
 	env.fog_sun_scatter = 0.0
-	env.fog_depth_begin = 34.0               # more grass stays crisp; only the far edge recedes
-	env.fog_depth_end = 64.0
+	env.fog_depth_begin = 48.0               # play area never hazes; only the far border recedes
+	env.fog_depth_end = 74.0
 	env.fog_depth_curve = 1.5
 	env.fog_density = 1.0
 	env.fog_sky_affect = 1.0
 
 	# Cool sky-ambient fill — kept LOW so shadows stay deep and colours stay rich.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color("cfe0ee")
-	env.ambient_light_energy = 0.40         # lift shadow sides toward the target's bright, airy grassland
+	env.ambient_light_color = Color("e8f0ff")
+	env.ambient_light_energy = 0.55         # brighter, airier shadow sides → the target's open grassland
 
 	# Filmic highlight rolloff. ACES keeps the punchy toy-colour saturation while
 	# rolling off highlights (AgX looked great but desaturated the candy palette).
@@ -928,10 +928,10 @@ func _build_environment() -> void:
 	# Subtle bloom on bright clay + emissive trails/rings/capture flashes.
 	# Glow is supported on Mobile too, so it survives the mobile fallback.
 	env.glow_enabled = true
-	env.glow_intensity = 0.5
+	env.glow_intensity = 0.35
 	env.glow_strength = 0.9
-	env.glow_bloom = 0.10
-	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
+	env.glow_bloom = 0.08
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE   # clean halo on trail/crown/coins, no muddy softlight
 	env.glow_hdr_threshold = 1.05            # only the brightest pixels bloom
 	env.set_glow_level(3, 1.0)
 	env.set_glow_level(4, 1.0)
@@ -943,17 +943,17 @@ func _build_environment() -> void:
 	# a stronger, tighter contact ring is what grounds each house/tower as a real
 	# object resting ON the board (the "miniature under a lamp" read).
 	env.ssao_enabled = not DeviceMode.is_mobile
-	env.ssao_intensity = 3.2
-	env.ssao_radius = 0.45                   # tighter than CELL → a crisp base-of-prop ring
-	env.ssao_power = 2.4                      # more contrast in the contact crevice
-	env.ssao_detail = 0.7
-	env.ssao_horizon = 0.08
+	env.ssao_intensity = 1.4                 # faint grounding shadow, not a carved crevice
+	env.ssao_radius = 0.9                     # soft, wide occlusion → toy-soft, not realistic
+	env.ssao_power = 1.6
+	env.ssao_detail = 0.5
+	env.ssao_horizon = 0.10
 
 	# Gentle grade — materials + glow carry the vibrancy now, so the acid is gone.
 	env.adjustment_enabled = true
-	env.adjustment_brightness = 1.0
-	env.adjustment_contrast = 1.06
-	env.adjustment_saturation = 1.38         # deep, rich toy-plate colours (checked-in look)
+	env.adjustment_brightness = 1.03
+	env.adjustment_contrast = 1.05
+	env.adjustment_saturation = 1.18         # bright candy colours without the acid over-saturation
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
@@ -963,8 +963,8 @@ func _build_environment() -> void:
 	key.light_color = Color("ffe6c0")        # a touch warmer → sunny toy-diorama key
 	key.light_energy = 1.32
 	key.shadow_enabled = true
-	key.shadow_opacity = 0.82                 # deeper, more grounded contact shadows
-	key.shadow_blur = 0.7                      # crisper edge → reads as a hard tabletop shadow
+	key.shadow_opacity = 0.55                 # soft toy shadow, not a hard tabletop slab
+	key.shadow_blur = 1.3                      # diffuse edge → plastic-soft contact shadow
 	key.shadow_bias = 0.03
 	key.shadow_normal_bias = 1.5             # kills peter-panning on the plateau
 	key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
