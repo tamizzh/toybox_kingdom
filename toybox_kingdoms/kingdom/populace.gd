@@ -95,11 +95,11 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> 
 		s.free()
 	if body_mesh == null:
 		var bm := BoxMesh.new()
-		bm.size = Vector3(cell * 0.74, 0.58, cell * 0.74)
+		bm.size = Vector3(cell * 0.76, 0.64, cell * 0.76)
 		body_mesh = bm
 	if roof_mesh == null:
 		var pm := PrismMesh.new()
-		pm.size = Vector3(cell * 0.90, 0.38, cell * 0.94)
+		pm.size = Vector3(cell * 0.96, 0.42, cell * 1.00)
 		roof_mesh = pm
 	_body = _batch(body_mesh, 0.0, true)   # houses cast shadow → grounded on the board
 	# Glossier roof (rough 0.8) + sRGB->linear conversion matches windmill cap finish.
@@ -241,8 +241,9 @@ func rebuild(tiers: Dictionary = {}) -> void:
 			cit_spawn.append(_spawn_for(i, now))
 
 	# House body = constant cream; roof = kingdom colour; citizens = kingdom colour.
-	_fill(_body, house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.29, 0), Color("f1d8a0"), true)
-	_fill(_roof, house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.76, 0), Color.WHITE, false)
+	# body half-height = 0.32 → centre at +0.32; roof half-height = 0.21 → centre at 0.64+0.21 = 0.85
+	_fill(_body, house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.32, 0), Color("f1d8a0"), true)
+	_fill(_roof, house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.85, 0), Color.WHITE, false)
 	_fill(_cit, cit_pos, cit_col, cit_spawn, Vector3(0, PROP_Y + 0.25, 0), Color.WHITE, false)
 	# Tower keep = cream stone; spire = kingdom colour, perched on top.
 	_fill(_tower, tower_pos, tower_col, tower_spawn, Vector3(0, PROP_Y + 0.65, 0), Color("e9d6ad"), true)
