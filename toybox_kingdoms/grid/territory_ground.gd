@@ -24,7 +24,7 @@ uniform vec2 grid_size = vec2(128.0, 96.0);
 // PAPER look: every surface is flat matte cardstock. No tile texture, no grass
 // detail — just clean saturated colour with a soft bevel + a lighter ribbon where
 // two regions meet, exactly like simple_target.png.
-uniform vec3 paper_neutral = vec3(0.126, 0.224, 0.049);  // unclaimed wilderness = flat saturated paper green, darkened ~30% from the original (0.18,0.32,0.07)
+uniform vec3 paper_neutral = vec3(0.16, 0.68, 0.09); // unclaimed wilderness = flat saturated paper green, darkened ~30% from the original (0.18,0.32,0.07)
 uniform vec3 sand_col = vec3(0.88, 0.79, 0.55);       // warm sandy BEACH where the island meets the sea
 uniform float bump_amp = 0.045;
 uniform float plateau = 0.115;                // claimed land rises into thicker toy-board plates
@@ -66,11 +66,12 @@ void fragment(){
 	border += float(texture(own, uv - vec2(0, px.y)).r != here.r);
 	float rim = clamp(border, 0.0, 1.0);
 
-	// per-cell bevel normal (claimed plates only) — the soft paper-board edge
+	// per-cell bevel normal — the soft paper-board edge that reads as subtle tiles.
+		// Claimed plates get the full bevel; unclaimed grass a gentler one (same tile read, softer).
 	vec2 fc = abs(cuv - 0.5);
 	vec2 tilt = vec2(smoothstep(0.35, 0.5, fc.x), smoothstep(0.35, 0.5, fc.y));
 	vec2 sgn = sign(cuv - 0.5);
-	vec3 nrm = normalize(vec3(tilt.x * sgn.x * 0.18 * claimed, 1.0, tilt.y * sgn.y * 0.18 * claimed));
+	vec3 nrm = normalize(vec3(tilt.x * sgn.x * mix(0.09, 0.18, claimed), 1.0, tilt.y * sgn.y * mix(0.09, 0.18, claimed)));
 	NORMAL = normalize((VIEW_MATRIX * vec4(nrm, 0.0)).xyz);
 
 	// sandy BEACH around the whole island before it drops to the sea — a wider warm
@@ -83,12 +84,19 @@ void fragment(){
 		// Flat saturated paper plate. A lighter ribbon of the SAME hue marks the
 		// boundary with any neighbour of a different owner.
 		base = kcolors[idx];
-		base = mix(base, mix(kcolors[idx], vec3(1.0), 0.55), rim * 0.7);
+		// Border ribbon removed: the perimeter wall blocks already separate regions,
+		// so the claimed surface stays a uniform colour right up to the wall.
 	} else {
 		// Unclaimed wilderness: flat matte paper green with the faintest tonal drift
 		// so a large open field isn't a single dead flat colour.
 		float sn = vnoise(v_world.xz * 0.22 + 7.0);
-		base = paper_neutral * (0.97 + sn * 0.05);
+		float ch = hash(floor(uv * grid_size) * 1.7 + 3.0);
+			// Most cells stay the light base green; only the occasional cell drops to a
+			// different shade so the field is mostly uniform with rare patches of variety.
+			base = paper_neutral;
+			if (ch > 0.985) base = paper_neutral * 0.78;       // ~1.5% darker patch
+			else if (ch > 0.97) base = paper_neutral * 1.12;   // ~1.5% lighter patch
+			base *= (0.98 + sn * 0.04);
 		// soft pale rim against any claimed neighbour (the target's light divider)
 		base = mix(base, mix(paper_neutral, vec3(1.0), 0.4), rim * 0.5);
 	}

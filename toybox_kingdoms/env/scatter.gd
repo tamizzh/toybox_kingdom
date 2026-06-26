@@ -10,20 +10,14 @@ extends Node3D
 # every one. Mixing them is what makes the forest read as alive, not stamped.
 const TREE_KINDS := [
 	"res://assets/models/tree-round.glb",
-	"res://assets/models/tree-conical.glb",
-	"res://assets/models/tree-oval.glb",
-	"res://assets/models/tree-pyramidal.glb",
 	"res://assets/models/tree-spreading.glb",
-	"res://assets/models/tree-vase.glb",
 ]
-const TREE_COLORS := [Color("775123"), Color("3f8d2a")]
+const TREE_COLORS := [Color("775123"), Color("1f8a1f")]
 const ROCK := preload("res://assets/models/rock.glb")
-const BUSH := preload("res://assets/models/bush.glb")
 
 # Base caps (desktop multiplies these — see rebuild()).
 const TREE_CAP := 1500
 const ROCK_CAP := 520
-const BUSH_CAP := 900
 
 # Forest border: trees keep going past the play grid (off-grid "apron" cells),
 # dense at the board edge and thinning out into the fog. Own budget so the
@@ -38,7 +32,6 @@ var cell: float = 0.6
 
 var _trees: Array = []          # Array[MultiMeshInstance3D] — one per canopy shape
 var _rock: MultiMeshInstance3D
-var _bush: MultiMeshInstance3D
 
 func setup(p_grid, p_cell: float) -> void:
 	grid = p_grid
@@ -53,9 +46,7 @@ func setup(p_grid, p_cell: float) -> void:
 		_trees.append(mmi)
 		add_child(mmi)
 	_rock = _batch(_mesh_of(ROCK), [Color("9a9a9c")])
-	_bush = _batch(_mesh_of(BUSH), [Color("4f9b30")])
 	add_child(_rock)
-	add_child(_bush)
 
 func _mesh_of(scene: PackedScene) -> Mesh:
 	var inst := scene.instantiate()
@@ -159,7 +150,6 @@ func rebuild() -> void:
 	var dense: float = 0.6 if DeviceMode.is_mobile else 1.8
 	var tree_cap := int(TREE_CAP * dense)
 	var rock_cap := int(ROCK_CAP * dense)
-	var bush_cap := int(BUSH_CAP * dense)
 	var w: int = grid.w
 	var n: int = w * grid.h
 	var tree_buckets: Array = []          # one transform list per canopy shape
@@ -167,12 +157,11 @@ func rebuild() -> void:
 		tree_buckets.append([])
 	var tree_total := 0
 	var rocks: Array = []
-	var bushes: Array = []
 	var gh: int = grid.h
 	# Shore zone (within 12 cells of edge) gets more trees; interior stays sparse.
 	const SHORE_DEPTH  := 12
-	const TREE_SHORE   := 16   # ~1.6% of shore cells get a tree
-	const TREE_INLAND  := 4    # ~0.4% of interior cells get a tree
+	const TREE_SHORE   := 8    # ~0.8% of shore cells get a tree
+	const TREE_INLAND  := 2    # ~0.2% of interior cells get a tree
 	for i in n:
 		if grid.owner[i] != 0:
 			continue
@@ -188,15 +177,12 @@ func rebuild() -> void:
 			tree_total += 1
 		elif bucket < tree_thresh + 3 and rocks.size() < rock_cap:
 			rocks.append(_xform(cx, cy, bucket, 1.0))
-		elif bucket < tree_thresh + 10 and bushes.size() < bush_cap:
-			bushes.append(_xform(cx, cy, bucket, 1.08))
 	# (Forest apron retired — the board is now an ISLAND ringed by open sea, so there is
 	#  no off-grid land to plant. Trees only grow on the grid; the on-grid shore pass
 	#  above already lines the coast densely, framing the island against the water.)
 	for k in TREE_KINDS.size():
 		_fill(_trees[k], tree_buckets[k], true)
 	_fill(_rock, rocks, false)
-	_fill(_bush, bushes, true)
 
 func _xform(cx: int, cy: int, seed: int, base: float) -> Transform3D:
 	# jitter position within the cell so the wilderness doesn't read as a grid

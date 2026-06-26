@@ -198,11 +198,11 @@ func rebuild(tiers: Dictionary = {}) -> void:
 		var house_thr: int
 		var cit_thr: int
 		if d <= CORE_R:
-			house_thr = 110; cit_thr = 340       # dense village core
+			house_thr = 66; cit_thr = 340        # dense village core
 		elif d <= MID_R:
-			house_thr = 52; cit_thr = 180
+			house_thr = 32; cit_thr = 180
 		else:
-			house_thr = 14; cit_thr = 56         # sparse outskirts
+			house_thr = 9; cit_thr = 56          # sparse outskirts
 		# Town crowds up as the kingdom levels (Outpost sparse → Capital busy).
 		house_thr = int(house_thr * dens)
 		cit_thr = int(cit_thr * dens)

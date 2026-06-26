@@ -56,7 +56,13 @@ render_mode cull_back;
 """ + SRGB_FN + """
 void vertex(){}
 void fragment(){
-	ALBEDO = to_lin(COLOR.rgb);
+	vec3 lin = to_lin(COLOR.rgb);
+	ALBEDO = lin;
+	// Small self-colour floor: the camera mostly sees the bricks' vertical SIDE faces,
+	// which sit in key-light shadow and are lit only by the blue fill. A pure red can't
+	// reflect blue, so those faces crater to near-black; this lifts them back toward the
+	// true kingdom colour (the up-facing roofs catch the key light, so they don't need it).
+	EMISSION = lin * 0.22;
 	ROUGHNESS = 0.8;
 	SPECULAR = 0.5;
 }

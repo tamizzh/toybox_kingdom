@@ -31,7 +31,6 @@ const Flags := preload("res://toybox_kingdoms/kingdom/flags.gd")
 const Windmills := preload("res://toybox_kingdoms/kingdom/windmills.gd")
 const Decor := preload("res://toybox_kingdoms/kingdom/decorations.gd")
 const CaptureFX := preload("res://toybox_kingdoms/fx/capture_fx.gd")
-const IslandBlur := preload("res://toybox_kingdoms/fx/island_blur.gd")
 const Ocean := preload("res://toybox_kingdoms/env/ocean.gd")
 
 const GW := 128
@@ -221,13 +220,6 @@ func _ready() -> void:
 	add_child(camera)
 	_apply_camera_mode(SaveManager.camera_mode())
 	camera.target = _rulers[0].avatar
-
-	# Soft-focus everything outside the island so the board pops (skip on mobile —
-	# the fullscreen depth pass + blur is a Forward+ desktop-only luxury, like SSAO).
-	if not DeviceMode.is_mobile:
-		var blur := IslandBlur.new()
-		camera.add_child(blur)
-		blur.setup(Vector2(GW * CELL * 0.5, GH * CELL * 0.5))
 
 	# input + HUD
 	_ui_layer = CanvasLayer.new()
