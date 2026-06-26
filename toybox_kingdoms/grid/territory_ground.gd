@@ -208,11 +208,14 @@ func _build_terrain_array() -> Texture2DArray:
 		"res://assets/ground_dirt_1.png",
 	]
 	# Texture2DArray needs every layer in the same format with matching mipmaps.
-	# Imported tiles are VRAM-compressed → load the raw PNGs off disk instead so
-	# convert()/generate_mipmaps() can run (see the FIXED note in memory).
+	# Load the imported textures via load() and pull their Image — _prep_tile()
+	# decompresses + reformats as needed. (The earlier Image.load_from_file on a
+	# globalized path read the raw PNG off disk, which works in-editor but fails on
+	# exported iOS builds where only the imported .ctex is packed, not the source PNG.)
 	var imgs: Array[Image] = []
 	for p in TILES:
-		imgs.append(_prep_tile(Image.load_from_file(ProjectSettings.globalize_path(p))))
+		var tex: Texture2D = load(p)
+		imgs.append(_prep_tile(tex.get_image()))
 	var arr := Texture2DArray.new()
 	arr.create_from_images(imgs)
 	return arr

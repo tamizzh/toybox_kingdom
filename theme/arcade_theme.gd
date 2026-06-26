@@ -21,10 +21,16 @@ func _ready() -> void:
 	var theme := _build()
 	get_tree().root.theme = theme
 
-# Load the variable Fredoka TTF straight from disk (no import step needed).
+# Load the variable Fredoka TTF through the resource system. Using load() (not
+# FontFile.load_dynamic_font, which reads the raw .ttf off disk) is essential on
+# exported builds — iOS only packs the *imported* font resource, not the source
+# .ttf, so a direct disk read fails with "Can't open file ...Fredoka-Variable.ttf".
 func _load_base() -> FontFile:
-	var base := FontFile.new()
-	base.load_dynamic_font(FONT_PATH)
+	var base: FontFile = load(FONT_PATH)
+	if base == null:
+		# Fallback for the (unexpected) case the import is missing.
+		base = FontFile.new()
+		base.load_dynamic_font(FONT_PATH)
 	base.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
 	return base
 
