@@ -24,8 +24,8 @@ uniform vec2 grid_size = vec2(128.0, 96.0);
 // PAPER look: every surface is flat matte cardstock. No tile texture, no grass
 // detail — just clean saturated colour with a soft bevel + a lighter ribbon where
 // two regions meet, exactly like simple_target.png.
-uniform vec3 paper_neutral = vec3(0.21, 0.37, 0.10);  // unclaimed wilderness = flat saturated paper green; tuned so the lit open field lands on the target's (158,192,76)
-uniform vec3 sand_col = vec3(0.80, 0.82, 0.74);       // soft pale rim before the table/water
+uniform vec3 paper_neutral = vec3(0.126, 0.224, 0.049);  // unclaimed wilderness = flat saturated paper green, darkened ~30% from the original (0.18,0.32,0.07)
+uniform vec3 sand_col = vec3(0.88, 0.79, 0.55);       // warm sandy BEACH where the island meets the sea
 uniform float bump_amp = 0.045;
 uniform float plateau = 0.115;                // claimed land rises into thicker toy-board plates
 
@@ -73,9 +73,10 @@ void fragment(){
 	vec3 nrm = normalize(vec3(tilt.x * sgn.x * 0.18 * claimed, 1.0, tilt.y * sgn.y * 0.18 * claimed));
 	NORMAL = normalize((VIEW_MATRIX * vec4(nrm, 0.0)).xyz);
 
-	// pale rim around the whole continent before the table/water
+	// sandy BEACH around the whole island before it drops to the sea — a wider warm
+	// band so the coast reads as a real shore, not a thin pale line.
 	float edge = min(min(uv.x, 1.0 - uv.x) * grid_size.x, min(uv.y, 1.0 - uv.y) * grid_size.y);
-	float coast = smoothstep(0.0, 3.0, edge);
+	float coast = smoothstep(0.0, 5.0, edge);
 
 	vec3 base;
 	if (is_claimed) {
@@ -137,6 +138,9 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	mat.set_shader_parameter("own_l", _tex)
 	mat.set_shader_parameter("grid_size", Vector2(_w, _h))
 	mat.set_shader_parameter("bump_amp", BUMP)
+	# Claimed land is now raised by the separate slab layer (territory_slabs.gd), so the
+	# plane stays flat — no plateau ramp poking through the slab edges.
+	mat.set_shader_parameter("plateau", 0.0)
 	# Kingdom tiles use the exact same base colour as castle roofs.
 	var pal := PackedVector3Array()
 	pal.resize(8)

@@ -17,7 +17,7 @@ func _ready() -> void:
 	# let the AI expand into a MATURE match (kingdoms fill the continent like target)
 	await get_tree().create_timer(90.0).timeout
 
-	# close 3/4 hero framing like target_art.png (not a far top-down)
+	# 3/4 hero overview framing (the angle preferred over a flat top-down)
 	if m.camera:
 		m.camera.target = null
 		m.camera.global_position = Vector3(0, 30, 30)

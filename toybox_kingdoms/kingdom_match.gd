@@ -26,10 +26,13 @@ const GlyphIcon := preload("res://toybox_kingdoms/ui/glyph_icon.gd")
 const Scatter := preload("res://toybox_kingdoms/env/scatter.gd")
 const GrassTexture := preload("res://toybox_kingdoms/env/grass_texture.gd")
 const TerritoryGround := preload("res://toybox_kingdoms/grid/territory_ground.gd")
+const TerritorySlabs := preload("res://toybox_kingdoms/grid/territory_slabs.gd")
 const Flags := preload("res://toybox_kingdoms/kingdom/flags.gd")
 const Windmills := preload("res://toybox_kingdoms/kingdom/windmills.gd")
 const Decor := preload("res://toybox_kingdoms/kingdom/decorations.gd")
 const CaptureFX := preload("res://toybox_kingdoms/fx/capture_fx.gd")
+const IslandBlur := preload("res://toybox_kingdoms/fx/island_blur.gd")
+const Ocean := preload("res://toybox_kingdoms/env/ocean.gd")
 
 const GW := 128
 const GH := 96
@@ -48,7 +51,7 @@ const RESPAWN_TIME := 1.2
 # `plateau`). Avatars sit at Y=0, so without this lift their feet + the king's ground
 # ring sink into owned tiles. Raise the avatar by the plateau height while it stands
 # on claimed land (smoothly, so the step on/off the plate isn't a pop).
-const CLAIMED_LIFT := 0.115      # must track territory_ground.gd `plateau`
+const CLAIMED_LIFT := 0.20       # must track territory_slabs.gd SLAB_H (avatars ride the slab top)
 const GROUND_LERP := 12.0        # how fast the avatar settles to the new ground height
 const BLOB_SCALE := 0.93         # rival ruler blob size (incl. after respawn) — 1.5× base
 const KING_SCALE := 1.125        # YOUR Crowned Toy King reads bigger than rivals — 1.5× base
@@ -75,6 +78,7 @@ var _minimap
 var _populace
 var _scatter
 var _ground
+var _slabs
 var _flags
 var _windmills
 var _decor
@@ -167,30 +171,37 @@ func _ready() -> void:
 	for a in _rulers:
 		homes[a.kid] = a.home
 
-	# painted-ground territory (checked-in look: green wilderness + raised plates)
+	# painted-ground territory: flat wilderness plane (territory_ground) + thick raised
+	# colour slabs on claimed land (territory_slabs) → the paper-cutout look of the target
 	_ground = TerritoryGround.new()
 	add_child(_ground)
 	_ground.setup(grid, CELL, _kid_color)
 	_ground.update()
-	renderer.rebuild_borders()   # raised kingdom-coloured walls ring each territory
+	# Walls-only: territory_slabs draws just the perimeter wall blocks (no raised slab
+	# plates), sitting on the flat ground so claimed land stays flat.
+	_slabs = TerritorySlabs.new()
+	add_child(_slabs)
+	_slabs.setup(grid, CELL, _kid_color)
+	_slabs.rebuild()
 
-	# the town layer: houses + citizens rising from claimed land
+	# the town layer: houses + citizens rising from claimed land. All these props sit on
+	# claimed cells, so the whole layer is lifted onto the slab top (CLAIMED_LIFT).
 	_populace = Populace.new()
 	add_child(_populace)
+	_populace.position.y = CLAIMED_LIFT
 	_populace.setup(grid, CELL, _kid_color, homes)
 	_populace.rebuild()
 
 	# windmills + border flags: the "living kingdom" dressing
 	_windmills = Windmills.new()
 	add_child(_windmills)
+	_windmills.position.y = CLAIMED_LIFT
 	_windmills.setup(grid, CELL, _kid_color, homes)
 	_windmills.rebuild()
-	_flags = Flags.new()
-	add_child(_flags)
-	_flags.setup(grid, CELL, _kid_color)
-	_flags.rebuild()
+	# (Border flags removed — user request; the brick walls now read the frontier.)
 	_decor = Decor.new()
 	add_child(_decor)
+	_decor.position.y = CLAIMED_LIFT
 	_decor.setup(grid, CELL, homes)
 	_decor.rebuild()
 
@@ -204,11 +215,19 @@ func _ready() -> void:
 	_fx = CaptureFX.new()
 	add_child(_fx)
 
-	# camera follows the human
+	# camera follows the human — framing is a player setting (SaveManager.camera_mode):
+	#   "hero" = cinematic 3/4 diorama (default), "map" = steep near-top-down flat-paper view
 	camera = KingdomCamera.new()
-	camera.offset = Vector3(0.0, 12.6, 15.2)   # lower, more cinematic 3/4 diorama framing
 	add_child(camera)
+	_apply_camera_mode(SaveManager.camera_mode())
 	camera.target = _rulers[0].avatar
+
+	# Soft-focus everything outside the island so the board pops (skip on mobile —
+	# the fullscreen depth pass + blur is a Forward+ desktop-only luxury, like SSAO).
+	if not DeviceMode.is_mobile:
+		var blur := IslandBlur.new()
+		camera.add_child(blur)
+		blur.setup(Vector2(GW * CELL * 0.5, GH * CELL * 0.5))
 
 	# input + HUD
 	_ui_layer = CanvasLayer.new()
@@ -269,7 +288,7 @@ func _spawn_kingdom(i: int) -> void:
 	# castle at home, starts as a lone keep and grows with the realm
 	var castle = Castle.new()
 	add_child(castle)
-	castle.position = _c2w(home.x, home.y, 0.0)
+	castle.position = _c2w(home.x, home.y, CLAIMED_LIFT)   # rest on the raised home slab
 	castle.set_color(_kid_color[kid])
 	castle.update_tier(_castle_tier(grid.territory_count(kid)))
 	a.castle = castle
@@ -384,7 +403,8 @@ func _physics_process(delta: float) -> void:
 		var dmin: Vector2i = grid.dirty_min
 		var dmax: Vector2i = grid.dirty_max
 		_ground.update(dmin.x, dmin.y, dmax.x, dmax.y)
-		renderer.rebuild_borders(dmin.x, dmin.y, dmax.x, dmax.y)
+		if _slabs:
+			_slabs.rebuild()   # raised colour cutouts catch up with the new ownership
 		_minimap_pending = true     # board changed → queue an aerial refresh
 		grid.reset_dirty()
 		_terr_rebuild_t = 0.1
@@ -420,11 +440,6 @@ func _kingdom_tick(delta: float) -> void:
 			_populace.rebuild(_kid_tier)
 			_last_pop_version = v
 		_decor_phase = 1
-	elif _decor_phase == 1:
-		if v != _last_flag_version:
-			_flags.rebuild()
-			_last_flag_version = v
-		_decor_phase = 2
 	else:
 		if v != _last_decor_version:
 			_decor.rebuild(_kid_tier)
@@ -896,10 +911,22 @@ func _kingdom_color(i: int, n: int) -> Color:
 	return KINGDOM_COLORS[i % KINGDOM_COLORS.size()]
 
 # ── world dressing ────────────────────────────────────────────────────────────
+# Camera framing presets (player setting). "hero" = cinematic 3/4 diorama;
+# "map" = steep, near-top-down long lens → the flat paper-map read of simple_target.png.
+func _apply_camera_mode(mode: String) -> void:
+	if camera == null:
+		return
+	if mode == "map":
+		camera.offset = Vector3(0.0, 24.0, 14.0)   # pitch ≈ 60°
+		camera.fov = 32.0                            # long lens flattens perspective
+	else:
+		camera.offset = Vector3(0.0, 12.6, 15.2)   # cinematic 3/4 diorama framing
+		camera.fov = 46.0
+
 func _build_environment() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("c4d2dc")   # soft airy blue-grey table → the bright paper-diorama surround
+	env.background_color = Color("1d5b86")   # deep sea blue → the open ocean melts into the horizon past the island
 
 	# No fog — simple_target.png is a clean bright diorama on a light table, with no
 	# atmospheric haze. The light background + the ground's pale coast rim carry the
@@ -908,13 +935,13 @@ func _build_environment() -> void:
 
 	# Cool sky-ambient fill — kept LOW so shadows stay deep and colours stay rich.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color("eef2f6")
-	env.ambient_light_energy = 0.30         # lower + less blue → open field stays a saturated paper green instead of washing to pale chartreuse
+	env.ambient_light_color = Color("f4f3ee")
+	env.ambient_light_energy = 0.45         # even flat fill → near-shadowless paper look (replaces shadow contrast); neutral (not blue) so greens don't lift toward mint
 
 	# Filmic highlight rolloff. ACES keeps the punchy toy-colour saturation while
 	# rolling off highlights (AgX looked great but desaturated the candy palette).
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 0.84              # pull back so bright matte surfaces stay saturated, not blown to cream
+	env.tonemap_exposure = 0.78              # pull back so the bright matte floor stays saturated, not blown to pale lime
 	env.tonemap_white = 1.0
 
 	# Subtle bloom on bright clay + emissive trails/rings/capture flashes.
@@ -935,7 +962,7 @@ func _build_environment() -> void:
 	# a stronger, tighter contact ring is what grounds each house/tower as a real
 	# object resting ON the board (the "miniature under a lamp" read).
 	env.ssao_enabled = not DeviceMode.is_mobile
-	env.ssao_intensity = 1.4                 # faint grounding shadow, not a carved crevice
+	env.ssao_intensity = 0.6                 # barely-there grounding; flat paper has almost no AO
 	env.ssao_radius = 0.9                     # soft, wide occlusion → toy-soft, not realistic
 	env.ssao_power = 1.6
 	env.ssao_detail = 0.5
@@ -944,19 +971,19 @@ func _build_environment() -> void:
 	# Gentle grade — materials + glow carry the vibrancy now, so the acid is gone.
 	env.adjustment_enabled = true
 	env.adjustment_brightness = 1.03
-	env.adjustment_contrast = 1.05
-	env.adjustment_saturation = 1.18         # bright candy colours without the acid over-saturation
+	env.adjustment_contrast = 1.06           # a little punch so the flat paper colours read crisp
+	env.adjustment_saturation = 1.28         # vibrant candy colours, but not so high the lit floor washes to pale lime
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
 	# warm key sun — crisp but soft-edged shadows sell the clay relief
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-50, -125, 0)
-	key.light_color = Color("ffe9c8")        # sunny toy-diorama key, a hair less orange
-	key.light_energy = 1.15                   # pulled back so the open paper field stays saturated (G off the clip), not limey
+	key.light_color = Color("fff6ee")        # near-neutral white → flat even paper light, no warm cast
+	key.light_energy = 1.0                     # calm key; ambient now carries the flat fill
 	key.shadow_enabled = true
-	key.shadow_opacity = 0.55                 # soft toy shadow, not a hard tabletop slab
-	key.shadow_blur = 1.3                      # diffuse edge → plastic-soft contact shadow
+	key.shadow_opacity = 0.18                 # barely-there shadow → the target's near-shadowless look
+	key.shadow_blur = 3.0                      # very soft, diffuse edge
 	key.shadow_bias = 0.03
 	key.shadow_normal_bias = 1.5             # kills peter-panning on the plateau
 	key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
@@ -988,24 +1015,13 @@ func _build_environment() -> void:
 	add_child(rim)
 
 func _build_ground() -> void:
-	var wx := GW * CELL
-	var wz := GH * CELL
-
-	# The play board sits on a large GRASS continent that runs well past the grid
-	# and fades into mist (Environment fog) at the edges — no water, no void.
-	# One big matte plane; the forest border (scatter.gd) + fog do the framing.
-	var apron := MeshInstance3D.new()
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(wx + 300.0, wz + 300.0)
-	apron.mesh = pm
-	var gm := StandardMaterial3D.new()
-	gm.albedo_color = Color(0.30, 0.50, 0.19)   # lush grass mid-green — matches the in-grid wilderness, no seam
-	gm.roughness = 0.98
-	gm.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-	apron.material_override = gm
-	apron.position = Vector3(0, 0.02, 0)         # just under the clay board so its edge tucks in
-	apron.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(apron)
+	# The play board is an ISLAND: everything outside the grid rectangle is open sea.
+	# One big animated ocean plane sits just below the board (the island is opaque and
+	# drawn on top, so water only shows past the coast). The ground shader's coast rim
+	# reads as the sandy beach where land meets the surf.
+	var ocean := Ocean.new()
+	add_child(ocean)
+	ocean.setup(Vector2(GW * CELL * 0.5, GH * CELL * 0.5))
 
 func _box_part(pos: Vector3, size: Vector3, color: Color) -> void:
 	var mi := MeshInstance3D.new()

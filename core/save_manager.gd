@@ -37,6 +37,15 @@ func set_sfx_volume(v: float) -> void:
 	AudioManager.set_sfx_volume(v)
 	_save()
 
+# Camera framing: "hero" = cinematic 3/4 (default), "map" = steep near-top-down
+# flat-paper view. Read by KingdomMatch when it builds the follow camera.
+func camera_mode() -> String:
+	return str(_cfg.get_value("settings", "camera_mode", "hero"))
+
+func set_camera_mode(mode: String) -> void:
+	_cfg.set_value("settings", "camera_mode", mode)
+	_save()
+
 # ── consent (GDPR / ATT) ─────────────────────────────────────────────────────
 func consent_done() -> bool:
 	return bool(_cfg.get_value("settings", "consent_done", false))

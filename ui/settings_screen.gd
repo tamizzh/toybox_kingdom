@@ -29,6 +29,7 @@ func _ready() -> void:
 	col.add_child(_slider_row("Music", SaveManager.music_volume(), SaveManager.set_music_volume))
 	col.add_child(_slider_row("Sound FX", SaveManager.sfx_volume(),
 		func(v): SaveManager.set_sfx_volume(v); AudioManager.play("tap")))
+	col.add_child(_camera_row())
 
 	col.add_child(_btn("Restore Purchases", Palette.PLAYER_COLORS[1],
 		func(): MonetizationManager.restore()))
@@ -68,6 +69,58 @@ func _slider_row(label: String, value: float, on_change: Callable) -> Control:
 	s.custom_minimum_size = Vector2(500, 28)
 	s.value_changed.connect(func(v): on_change.call(v))
 	row.add_child(s)
+	return row
+
+# Camera framing toggle: "3/4 View" (cinematic) vs "Top-Down" (flat paper map).
+# Two segmented buttons; the active mode is highlighted. Persisted via SaveManager
+# and read by KingdomMatch the next time a match starts.
+func _camera_row() -> Control:
+	var row := VBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	var l := Label.new()
+	l.text = "Camera View"
+	l.add_theme_font_size_override("font_size", 18)
+	l.add_theme_color_override("font_color", Color(Palette.ACCENT, 0.9))
+	row.add_child(l)
+
+	var seg := HBoxContainer.new()
+	seg.add_theme_constant_override("separation", 10)
+	row.add_child(seg)
+
+	var modes := [["3/4 View", "hero"], ["Top-Down", "map"]]
+	var buttons := {}
+	var refresh := func() -> void:
+		var cur := SaveManager.camera_mode()
+		for id in buttons:
+			var on: bool = (id == cur)
+			var c: Color = Palette.SAFE if on else Palette.NEUTRAL
+			var b: Button = buttons[id]
+			b.add_theme_stylebox_override("normal", _panel(Color(c, 0.40 if on else 0.16), c))
+			b.add_theme_stylebox_override("hover", _panel(Color(c, 0.50 if on else 0.28), c))
+			b.add_theme_stylebox_override("pressed", _panel(Color(c, 0.55), c))
+
+	for m in modes:
+		var label: String = m[0]
+		var id: String = m[1]
+		var b := Button.new()
+		b.text = label
+		b.add_theme_font_size_override("font_size", 20)
+		b.add_theme_color_override("font_color", Color.WHITE)
+		b.custom_minimum_size = Vector2(245, 50)
+		b.pressed.connect(func() -> void:
+			AudioManager.play("tap")
+			SaveManager.set_camera_mode(id)
+			refresh.call())
+		buttons[id] = b
+		seg.add_child(b)
+	refresh.call()
+
+	var hint := Label.new()
+	hint.text = "Top-Down shows the flat paper-map look. Applies on your next match."
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", Color(Palette.NEUTRAL, 0.85))
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	row.add_child(hint)
 	return row
 
 func _btn(text: String, color: Color, cb: Callable) -> Button:

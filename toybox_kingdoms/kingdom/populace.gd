@@ -36,6 +36,9 @@ shader_type spatial;
 render_mode cull_back;
 uniform float bob_amt = 0.0;
 uniform float pop_dur = 0.30;
+uniform float rough = 0.9;
+uniform float spec = 0.1;
+uniform float to_linear = 0.0;   // 1.0 = convert COLOR sRGB->linear (matches StandardMaterial3D albedo)
 void vertex() {
 	// pop-in: custom-data .r holds the spawn time (sec). 0 = pre-existing, no pop.
 	float spawn = INSTANCE_CUSTOM.r;
@@ -53,9 +56,13 @@ void vertex() {
 	}
 }
 void fragment() {
-	ALBEDO = COLOR.rgb;
-	ROUGHNESS = 0.9;        // matte clay to match the painted ground/plate
-	SPECULAR = 0.1;
+	vec3 c = COLOR.rgb;
+	// StandardMaterial3D converts albedo sRGB->linear; the windmill cap does too. The roof
+	// opts in (to_linear=1) so its kingdom colour lands on the exact same tone as the cap.
+	vec3 lin = mix(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, step(c, vec3(0.04045)));
+	ALBEDO = mix(c, lin, to_linear);
+	ROUGHNESS = rough;      // matte clay by default; roof overrides to the windmill-cap finish
+	SPECULAR = spec;
 }
 """
 
@@ -77,7 +84,9 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> 
 	# than the old squat 4-sided cone; it overhangs the body on all sides.
 	var roof_mesh := PrismMesh.new()
 	roof_mesh.size = Vector3(cell * 0.90, 0.38, cell * 0.94)
-	_roof = _batch(roof_mesh, 0.0)
+	# Match the windmill cap exactly: glossier (rough 0.8), default spec highlight, and the
+	# same sRGB->linear albedo conversion StandardMaterial3D applies (to_linear=1).
+	_roof = _batch(roof_mesh, 0.0, false, 0.8, 0.5, 1.0)
 	var cit_mesh := SphereMesh.new()    # cute low-poly blob citizen (mobile-cheap)
 	cit_mesh.radius = 0.24
 	cit_mesh.height = 0.40
@@ -100,13 +109,16 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> 
 	add_child(_tower)
 	add_child(_tower_roof)
 
-func _batch(mesh: Mesh, bob: float, cast: bool = false) -> MultiMeshInstance3D:
+func _batch(mesh: Mesh, bob: float, cast: bool = false, rough: float = 0.9, spec: float = 0.1, to_linear: float = 0.0) -> MultiMeshInstance3D:
 	var sh := Shader.new()
 	sh.code = BUILD_SHADER
 	var sm := ShaderMaterial.new()
 	sm.shader = sh
 	sm.set_shader_parameter("bob_amt", bob)
 	sm.set_shader_parameter("pop_dur", POP_DUR)
+	sm.set_shader_parameter("rough", rough)
+	sm.set_shader_parameter("spec", spec)
+	sm.set_shader_parameter("to_linear", to_linear)
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true

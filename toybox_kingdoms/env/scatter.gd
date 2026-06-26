@@ -190,44 +190,9 @@ func rebuild() -> void:
 			rocks.append(_xform(cx, cy, bucket, 1.0))
 		elif bucket < tree_thresh + 10 and bushes.size() < bush_cap:
 			bushes.append(_xform(cx, cy, bucket, 1.08))
-	# ── Forest apron: scatter onto the off-grid ring framing the board ──────────
-	# Dense at the board edge, thinning out with distance; the fog swallows the
-	# far rows so we don't need to place trees all the way to the plane edge.
-	var apron_tree_cap := int(APRON_TREE_CAP * dense)
-	var apron_rock_cap := int(APRON_ROCK_CAP * dense)
-	var apron_bush_cap := int(APRON_BUSH_CAP * dense)
-	var apron_trees := 0
-	var apron_rocks := 0
-	var apron_bushes := 0
-	for ay in range(-APRON_CELLS, gh + APRON_CELLS):
-		var dy: int = 0
-		if ay < 0:
-			dy = -ay
-		elif ay >= gh:
-			dy = ay - (gh - 1)
-		for ax in range(-APRON_CELLS, w + APRON_CELLS):
-			if ax >= 0 and ax < w and ay >= 0 and ay < gh:
-				continue   # inside the play grid → handled by the pass above
-			var dx: int = 0
-			if ax < 0:
-				dx = -ax
-			elif ax >= w:
-				dx = ax - (w - 1)
-			var d: int = maxi(dx, dy)             # Chebyshev distance outside the board
-			var frac: float = 1.0 - float(d) / float(APRON_CELLS)
-			var thresh: int = int(26.0 * frac * frac)   # dense at the edge, thinning out
-			var hh: int = ((ax * 73856093) ^ (ay * 19349663)) & 0x7fffffff
-			var bucket: int = hh % 1000
-			if bucket < thresh and apron_trees < apron_tree_cap:
-				var kind: int = (((ax * 49157) ^ (ay * 98317)) & 0x7fffffff) % TREE_KINDS.size()
-				tree_buckets[kind].append(_xform(ax, ay, bucket, 0.58))
-				apron_trees += 1
-			elif bucket < thresh + 8 and apron_rocks < apron_rock_cap:
-				rocks.append(_xform(ax, ay, bucket, 1.0))
-				apron_rocks += 1
-			elif bucket < thresh + 18 and apron_bushes < apron_bush_cap:
-				bushes.append(_xform(ax, ay, bucket, 1.08))
-				apron_bushes += 1
+	# (Forest apron retired — the board is now an ISLAND ringed by open sea, so there is
+	#  no off-grid land to plant. Trees only grow on the grid; the on-grid shore pass
+	#  above already lines the coast densely, framing the island against the water.)
 	for k in TREE_KINDS.size():
 		_fill(_trees[k], tree_buckets[k], true)
 	_fill(_rock, rocks, false)
