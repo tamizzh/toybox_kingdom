@@ -11,11 +11,12 @@ var cell: float = 0.6
 var colors := {}
 var _homes := {}
 var _blades: Array = []          # blade-hub Node3Ds to spin
-var _built := false
+var _built := {}                 # kid -> true once its windmills exist
 
 # fixed offsets (in cells) from the castle so the windmills frame the keep
 const OFFSETS := [Vector2i(8, 5), Vector2i(-7, 6), Vector2i(6, -7)]
 const PER_KINGDOM := 2
+const MIN_TIER := 2              # windmills are a Village (T2) landmark, not an Outpost's
 
 func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> void:
 	grid = p_grid
@@ -23,11 +24,15 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> 
 	colors = p_colors
 	_homes = p_homes
 
-func rebuild() -> void:
-	if _built:
-		return
-	_built = true
+# Build each kingdom's windmills the first tick it reaches T2 (they're fixed
+# landmarks, so once built they stay — never rebuilt as the realm grows).
+func rebuild(tiers: Dictionary = {}) -> void:
 	for kid in _homes:
+		if _built.get(kid, false):
+			continue
+		if int(tiers.get(kid, 1)) < MIN_TIER:
+			continue
+		_built[kid] = true
 		var home: Vector2i = _homes[kid]
 		var col: Color = colors.get(kid, Color.WHITE)
 		for n in mini(PER_KINGDOM, OFFSETS.size()):

@@ -67,6 +67,8 @@ func _ready() -> void:
 		av.auto_input = false
 		av.global_position = Vector3(0, 0, (i - 1) * 1.8)
 		av.face(Vector2.RIGHT)
+		if i == 1:
+			av.make_royal(p.color)   # middle one = The Toy King (crown + cape)
 		# Stop walk anim for the static preview so blobs stand in rest pose
 		var ap := av._anim
 		if ap:

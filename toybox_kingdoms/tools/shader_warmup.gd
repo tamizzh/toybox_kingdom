@@ -38,7 +38,7 @@ func _ready() -> void:
 	_add_multimesh(RendererScript.TRAIL_SHADER)
 	_add_multimesh(CastleScript.ROOF_SHADER)
 	_add_multimesh(FlagsScript.BANNER_SHADER)
-	_add_multimesh(PopScript.CIT_SHADER)
+	_add_multimesh(PopScript.BUILD_SHADER)
 
 func _shader_mat(code: String) -> ShaderMaterial:
 	var sh := Shader.new()

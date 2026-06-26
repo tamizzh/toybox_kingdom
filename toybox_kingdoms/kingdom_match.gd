@@ -28,6 +28,8 @@ const GrassTexture := preload("res://toybox_kingdoms/env/grass_texture.gd")
 const TerritoryGround := preload("res://toybox_kingdoms/grid/territory_ground.gd")
 const Flags := preload("res://toybox_kingdoms/kingdom/flags.gd")
 const Windmills := preload("res://toybox_kingdoms/kingdom/windmills.gd")
+const Decor := preload("res://toybox_kingdoms/kingdom/decorations.gd")
+const CaptureFX := preload("res://toybox_kingdoms/fx/capture_fx.gd")
 
 const GW := 128
 const GH := 96
@@ -67,6 +69,7 @@ var _kid_to_agent := {}
 var _kids: Array = []
 var _kid_color := {}
 var _kid_name := {}
+var _kid_tier := {}        # kid -> castle tier (1..4); gates which decorations unlock
 var _minimap
 
 var _populace
@@ -74,6 +77,7 @@ var _scatter
 var _ground
 var _flags
 var _windmills
+var _decor
 var _kingdom_t := 0.0
 var _terr_rebuild_t := 0.0
 var _minimap_t := 0.0           # rate-limits the minimap's full 2nd-scene render
@@ -82,6 +86,7 @@ var _minimap_pending := false   # board changed but its render is still throttle
 # since they last ran, and populace/flags alternate ticks so they never spike together.
 var _last_pop_version := -1
 var _last_flag_version := -1
+var _last_decor_version := -1
 var _decor_phase := 0
 var _frame := 0                 # physics frame counter (drives staggered AI decides)
 
@@ -106,6 +111,9 @@ var _towers := 0
 var _barracks := 0
 var _castle_floor := 1          # min castle level bought via the CASTLE button
 var _coins_label: Label
+var _coins_chip: Control        # the top-right coins pill (pops when you earn land)
+var _fx                         # CaptureFX node (confetti + coin bursts)
+var _fx_cooldown := 0.0         # rate-limit player capture bursts
 var _build_btns := {}           # kind -> {"btn","cost","cost_label","icon","title"}
 var _timer_panel: PanelContainer
 var _last_secs := -1
@@ -181,12 +189,20 @@ func _ready() -> void:
 	add_child(_flags)
 	_flags.setup(grid, CELL, _kid_color)
 	_flags.rebuild()
+	_decor = Decor.new()
+	add_child(_decor)
+	_decor.setup(grid, CELL, homes)
+	_decor.rebuild()
 
 	# lush wilderness: trees / rocks / bushes on neutral land
 	_scatter = Scatter.new()
 	add_child(_scatter)
 	_scatter.setup(grid, CELL)
 	_scatter.rebuild()
+
+	# capture-celebration particles (confetti + coins), fired on the player's claims
+	_fx = CaptureFX.new()
+	add_child(_fx)
 
 	# camera follows the human
 	camera = KingdomCamera.new()
@@ -247,6 +263,7 @@ func _spawn_kingdom(i: int) -> void:
 		_player = pdata
 		av.auto_input = true                # human reads InputManager id 0
 		av.speed = HUMAN_SPEED              # base carve speed (BARRACKS stacks on top)
+		av.make_royal(_kid_color[kid])      # gold crown + cape → you ARE the Toy King
 		_attach_king_aura(av, _kid_color[kid])   # glowing ground ring → never lose your king
 
 	# castle at home, starts as a lone keep and grows with the realm
@@ -318,6 +335,7 @@ func _physics_process(delta: float) -> void:
 	if _ended:
 		return
 	_match_t = maxf(0.0, _match_t - delta)
+	_fx_cooldown = maxf(0.0, _fx_cooldown - delta)
 
 	# 1. drive AI movement (humans move themselves in Avatar3D._physics_process)
 	# The AI brain (pathfinding/territory eval) is the heaviest per-frame CPU cost, so
@@ -395,17 +413,24 @@ func _kingdom_tick(delta: float) -> void:
 	# Populace + flags are full-board scans. Skip them when no land changed since the
 	# last build, and alternate them across ticks so only one runs per 0.4s spike.
 	var v: int = grid.version
+	# Rotate the three full-board scans (town / flags / countryside) across ticks so
+	# only one spikes per 0.4s; each skips if no land changed since it last ran.
 	if _decor_phase == 0:
 		if v != _last_pop_version:
-			_populace.rebuild()
+			_populace.rebuild(_kid_tier)
 			_last_pop_version = v
 		_decor_phase = 1
-	else:
+	elif _decor_phase == 1:
 		if v != _last_flag_version:
 			_flags.rebuild()
 			_last_flag_version = v
+		_decor_phase = 2
+	else:
+		if v != _last_decor_version:
+			_decor.rebuild(_kid_tier)
+			_last_decor_version = v
 		_decor_phase = 0
-	_windmills.rebuild()
+	_windmills.rebuild(_kid_tier)
 	_minimap.update_territory(grid, _kid_color)
 	for a in _rulers:
 		if a.eliminated:
@@ -416,6 +441,13 @@ func _kingdom_tick(delta: float) -> void:
 			if c["node"] != null and c["node"].tier != new_tier:
 				c["node"].update_tier(new_tier)
 				leveled = true
+		if _kid_tier.get(a.kid, 0) != new_tier:
+			_kid_tier[a.kid] = new_tier
+			# A tier change unlocks/thickens decoration — force the throttled scans to
+			# re-run next tick even if no further land changes (crossing a threshold
+			# itself changed the version, but the rebuild this tick used the OLD tier).
+			_last_pop_version = -1
+			_last_decor_version = -1
 		if leveled and not a.is_ai:
 			AudioManager.play("round_win")   # your kingdom leveled up
 			camera.shake(0.14)
@@ -574,7 +606,29 @@ func _end_match(win: bool, reason: String) -> void:
 	AudioManager.play("round_win" if win else "eliminate")
 	if _dbg:
 		print("[end] win=%s reason=%s rank=%d pct=%.1f coins=%d" % [win, reason, rank, pct * 100.0, coins])
+	# On a win, play a cinematic victory orbit + fireworks over the capital before the
+	# results panel slides in — the App Store money-shot. (Defeat shows results at once.)
+	if win and _rulers[0].castles.size() > 0 and is_instance_valid(camera):
+		var cap_cell: Vector2i = _rulers[0].castles[0]["cell"]
+		var focus := _c2w(cap_cell.x, cap_cell.y, 0.0)
+		camera.start_victory_orbit(focus)
+		_victory_fireworks(focus, _kid_color[_rulers[0].kid])
+		await get_tree().create_timer(2.6).timeout
+		if not is_inside_tree():
+			return
 	_show_results(win, reason, rank, pct, coins)
+
+# A few staggered firework bursts over the capital during the victory orbit.
+func _victory_fireworks(focus: Vector3, color: Color) -> void:
+	if _fx == null:
+		return
+	for i in 5:
+		if not is_instance_valid(_fx):
+			return
+		var jitter := Vector3(randf_range(-4.0, 4.0), randf_range(0.0, 3.0), randf_range(-4.0, 4.0))
+		_fx.fireworks(focus + jitter, color)
+		AudioManager.play("round_win", randf_range(0.9, 1.2))
+		await get_tree().create_timer(0.5).timeout
 
 func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int) -> void:
 	var dim := ColorRect.new()
@@ -733,8 +787,18 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 				_kid_color[a.kid])
 			if not a.is_ai:
 				AudioManager.play("collect", clampf(1.0 + float(cap) / 1500.0, 1.0, 1.45))
+				camera.punch_zoom(clampf(0.02 + float(cap) / 9000.0, 0.02, 0.06))
 				if cap > 350:
 					camera.shake(0.12)
+				# Confetti + coins erupt where the land was claimed (rate-limited so a
+				# burst of small captures doesn't spawn a particle storm).
+				if _fx_cooldown <= 0.0 and cap >= 12:
+					_fx_cooldown = 0.18
+					var cmn: Vector2i = res.get("cmin", Vector2i(0, 0))
+					var cmx: Vector2i = res.get("cmax", Vector2i(-1, 0))
+					var ctr := Vector2i((cmn.x + cmx.x) / 2, (cmn.y + cmx.y) / 2)
+					_fx.burst(_c2w(ctr.x, ctr.y, 0.0), _kid_color[a.kid])
+					_pop_coins_chip()
 
 func _kill(a) -> void:
 	a.alive = false
@@ -790,6 +854,14 @@ func world_clamp(v: Vector3) -> Vector3:
 	return Vector3(clampf(v.x, -hx, hx), v.y, clampf(v.z, -hz, hz))
 
 # ── coordinate mapping (must match GridRenderer._c2w) ─────────────────────────
+# Quick scale-pop on the coins chip so the HUD reacts when you earn land.
+func _pop_coins_chip() -> void:
+	if _coins_chip == null or not is_instance_valid(_coins_chip):
+		return
+	_coins_chip.scale = Vector2(1.18, 1.18)
+	var tw := create_tween().set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tw.tween_property(_coins_chip, "scale", Vector2.ONE, 0.22)
+
 func _c2w(cx: int, cy: int, y: float) -> Vector3:
 	return Vector3((cx + 0.5 - GW * 0.5) * CELL, y, (cy + 0.5 - GH * 0.5) * CELL)
 
@@ -867,12 +939,15 @@ func _build_environment() -> void:
 
 	# Contact AO in cell seams + around castles/props = sculpted toybox depth.
 	# Forward+ only AND a heavy full-screen pass — off on mobile (where it's either
-	# ignored by the render fallback or, on a Forward+ phone, pure cost).
+	# ignored by the render fallback or, on a Forward+ phone, pure cost). Pushed up:
+	# a stronger, tighter contact ring is what grounds each house/tower as a real
+	# object resting ON the board (the "miniature under a lamp" read).
 	env.ssao_enabled = not DeviceMode.is_mobile
-	env.ssao_intensity = 2.4
-	env.ssao_radius = 0.6                    # tight — matches the 0.6 CELL size
-	env.ssao_power = 2.0
-	env.ssao_detail = 0.6
+	env.ssao_intensity = 3.2
+	env.ssao_radius = 0.45                   # tighter than CELL → a crisp base-of-prop ring
+	env.ssao_power = 2.4                      # more contrast in the contact crevice
+	env.ssao_detail = 0.7
+	env.ssao_horizon = 0.08
 
 	# Gentle grade — materials + glow carry the vibrancy now, so the acid is gone.
 	env.adjustment_enabled = true
@@ -885,29 +960,40 @@ func _build_environment() -> void:
 	# warm key sun — crisp but soft-edged shadows sell the clay relief
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-50, -125, 0)
-	key.light_color = Color("ffeccd")        # ~5400K warm sunlight (less amber wash)
-	key.light_energy = 1.25                  # brighter warm key — cheerful daylight grassland
+	key.light_color = Color("ffe6c0")        # a touch warmer → sunny toy-diorama key
+	key.light_energy = 1.32
 	key.shadow_enabled = true
-	key.shadow_opacity = 0.6
-	key.shadow_blur = 1.0                     # was 3.2 → far too mushy
+	key.shadow_opacity = 0.82                 # deeper, more grounded contact shadows
+	key.shadow_blur = 0.7                      # crisper edge → reads as a hard tabletop shadow
 	key.shadow_bias = 0.03
 	key.shadow_normal_bias = 1.5             # kills peter-panning on the plateau
 	key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	key.directional_shadow_max_distance = 90.0
+	# Pull the shadow distance IN so the 4 cascades pack their texels around the play
+	# area → much sharper near shadows. Fog (begin 34 / end 64) hides the cutoff.
+	key.directional_shadow_max_distance = 48.0
 	if DeviceMode.is_mobile:
 		# Phones: fewer cascades + a nearer shadow distance slashes shadow-pass draw
 		# calls (every caster is re-rendered once per cascade). The board still gets
 		# grounded contact shadows up close, where they actually read.
 		key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-		key.directional_shadow_max_distance = 50.0
+		key.directional_shadow_max_distance = 40.0
 	add_child(key)
-	# cool sky fill — no shadow, just lifts the shadow side toward blue
+	# cool sky fill — no shadow, just lifts the shadow side toward blue so shadows
+	# read as soft plastic, not black. Slightly stronger + cooler for the toy look.
 	var fill := DirectionalLight3D.new()
-	fill.rotation_degrees = Vector3(-30, 60, 0)
-	fill.light_color = Color("bcd4ff")
-	fill.light_energy = 0.28
+	fill.rotation_degrees = Vector3(-28, 58, 0)
+	fill.light_color = Color("b3ccff")
+	fill.light_energy = 0.36
 	fill.shadow_enabled = false
 	add_child(fill)
+	# faint warm rim from low-behind → a soft halo on prop tops, separating the town
+	# from the ground (cheap, no shadow). Sells the "lit miniature" depth.
+	var rim := DirectionalLight3D.new()
+	rim.rotation_degrees = Vector3(-12, 120, 0)
+	rim.light_color = Color("fff0d0")
+	rim.light_energy = 0.22
+	rim.shadow_enabled = false
+	add_child(rim)
 
 func _build_ground() -> void:
 	var wx := GW * CELL
@@ -959,10 +1045,10 @@ func _build_hud(ui: CanvasLayer) -> void:
 	var kc: Color = _kid_color[_rulers[0].kid]
 
 	# ── top-left: your kingdom card (colour accent + big % + stat rows) ──
-	var stat := _hud_panel(Vector2(16, 16), Vector2(232, 138), 16)
+	var stat := _hud_panel(Vector2(16, 16), Vector2(194, 112), 14)
 	ui.add_child(stat)
 	var stat_h := HBoxContainer.new()
-	stat_h.add_theme_constant_override("separation", 9)
+	stat_h.add_theme_constant_override("separation", 8)
 	stat_h.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stat.add_child(stat_h)
 	stat_h.add_child(_accent_bar(kc))
@@ -971,8 +1057,8 @@ func _build_hud(ui: CanvasLayer) -> void:
 	stat_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	stat_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stat_h.add_child(stat_v)
-	stat_v.add_child(_hud_text(_display_kingdom_name(_rulers[0].kid).to_upper(), 16, kc.lightened(0.35)))
-	_terr_label = _hud_text("0.0%", 36, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, true)
+	stat_v.add_child(_hud_text(_display_kingdom_name(_rulers[0].kid).to_upper(), 14, kc.lightened(0.35)))
+	_terr_label = _hud_text("0.0%", 30, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, true)
 	stat_v.add_child(_terr_label)
 	stat_v.add_child(_thin_rule())
 	var pr := _stat_row("people", HUD_BLUE, "Population")
@@ -993,6 +1079,8 @@ func _build_hud(ui: CanvasLayer) -> void:
 	# ── top-right: coins + population pills, then settings ──
 	var coins := _hud_panel(Vector2(Palette.DESIGN_W - 374, 16), Vector2(158, 48), 14)
 	ui.add_child(coins)
+	_coins_chip = coins
+	coins.pivot_offset = Vector2(79, 24)   # centre pivot so the earn-pop scales nicely
 	var ch := _pill_row(coins); ch.alignment = BoxContainer.ALIGNMENT_CENTER
 	ch.add_child(_glyph(GlyphIcon.new().setup("coin", HUD_GOLD, 24)))
 	_coins_label = _hud_text("0", 22, HUD_GOLD, HORIZONTAL_ALIGNMENT_LEFT, true)
@@ -1016,7 +1104,7 @@ func _build_hud(ui: CanvasLayer) -> void:
 	ui.add_child(gear)
 
 	# ── right: live leaderboard ──
-	var lb := _hud_panel(Vector2(Palette.DESIGN_W - 246, 78), Vector2(230, 286), 14)
+	var lb := _hud_panel(Vector2(Palette.DESIGN_W - 200, 78), Vector2(184, 286), 14)
 	ui.add_child(lb)
 	var lb_v := VBoxContainer.new()
 	lb_v.add_theme_constant_override("separation", 3)
@@ -1146,11 +1234,11 @@ func _stat_row(glyph: String, color: Color, caption: String) -> Dictionary:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(_glyph(GlyphIcon.new().setup(glyph, color, 15)))
-	var cap := _hud_text(caption, 16, HUD_DIM)
+	row.add_child(_glyph(GlyphIcon.new().setup(glyph, color, 14)))
+	var cap := _hud_text(caption, 14, HUD_DIM)
 	cap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(cap)
-	var value := _hud_text("0", 18, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT, true)
+	var value := _hud_text("0", 16, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT, true)
 	row.add_child(value)
 	return {"row": row, "value": value}
 
@@ -1188,7 +1276,7 @@ func _make_lb_row() -> Dictionary:
 	# Panel wrapper so the human's row (and the leader) can carry a tinted
 	# highlight behind the rank · chip · name · % layout.
 	var wrap := PanelContainer.new()
-	wrap.custom_minimum_size = Vector2(204, 27)
+	wrap.custom_minimum_size = Vector2(158, 27)
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var bg := StyleBoxFlat.new()
 	bg.bg_color = Color(0, 0, 0, 0)
@@ -1217,30 +1305,13 @@ func _make_lb_row() -> Dictionary:
 	dot.add_theme_stylebox_override("panel", dst)
 	var nm := _hud_text("", 16, Color.WHITE)
 	nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var you := _hud_text("YOU", 13, Color(0.06, 0.07, 0.10))
-	you.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	you.add_theme_constant_override("outline_size", 0)
-	var you_wrap := PanelContainer.new()
-	you_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	you_wrap.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var yst := StyleBoxFlat.new()
-	yst.bg_color = HUD_GOLD
-	yst.set_corner_radius_all(6)
-	yst.content_margin_left = 6
-	yst.content_margin_right = 6
-	yst.content_margin_top = 1
-	yst.content_margin_bottom = 1
-	you_wrap.add_theme_stylebox_override("panel", yst)
-	you_wrap.add_child(you)
-	you_wrap.visible = false
 	var pct := _hud_text("", 16, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT)
-	pct.custom_minimum_size = Vector2(48, 0)
+	pct.custom_minimum_size = Vector2(44, 0)
 	row.add_child(rank)
 	row.add_child(dot)
 	row.add_child(nm)
-	row.add_child(you_wrap)
 	row.add_child(pct)
-	return {"row": wrap, "bg": bg, "rank": rank, "chip": dst, "name": nm, "you": you_wrap, "pct": pct}
+	return {"row": wrap, "bg": bg, "rank": rank, "chip": dst, "name": nm, "pct": pct}
 
 func _hud_text(text: String, size: int, color: Color,
 		align = HORIZONTAL_ALIGNMENT_LEFT, heavy := false) -> Label:
@@ -1545,7 +1616,6 @@ func _hud_tick(delta: float) -> void:
 			Color.WHITE if (lead or mine) else Color(0.84, 0.87, 0.91))
 		rr["name"].add_theme_font_override("font",
 			ArcadeTheme.font_heavy if (lead or mine) else ArcadeTheme.font)
-		rr["you"].visible = mine
 		# tint your own row so you can find yourself at a glance; leader gets a faint gold wash.
 		rr["bg"].bg_color = (Color(kc, 0.22) if mine else (Color(HUD_GOLD, 0.08) if lead else Color(0, 0, 0, 0)))
 		rr["pct"].text = "%.1f%%" % (100.0 * e["n"] / total)

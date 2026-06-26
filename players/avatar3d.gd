@@ -22,6 +22,8 @@ const _VINYL_SHADER := preload("res://shaders/vinyl_toy.gdshader")
 var _bob_t: float = 0.0
 var _dust_t: float = 0.0
 var _anim: AnimationPlayer = null
+var _cape: Node3D = null          # royal cape (player only); sways while moving
+var _sway_t: float = 0.0
 const ANIM_WALK := "ArmatureAction"   # rename if a different action is the walk cycle
 
 static var _capsule_shape: CapsuleShape3D
@@ -97,6 +99,107 @@ func _recolor_mascot(node: Node, c: Color) -> void:
 				_body_mats.append(mat)
 		_recolor_mascot(child, c)
 
+# ─────────────────────────────────────────── The Toy King regalia ──
+# Crowns the avatar with a glowing gold crown + a flowing kingdom-colour cape so the
+# PLAYER reads instantly as royalty amid the identical rival blobs. Procedural (a few
+# tiny prims) so it works on the externally-authored mascot.glb without regenerating
+# it. Parented to _visual → inherits facing, body-scale, death/revive squash for free.
+func make_royal(accent: Color) -> void:
+	if _visual == null:
+		return
+	var box := _visual_local_aabb()
+	var top_y := box.position.y + box.size.y
+	var r := maxf(box.size.x, box.size.z) * 0.5
+
+	# ── Gold crown: a band ring + five points, emissive so it blooms ──
+	var crown := Node3D.new()
+	crown.name = "crown"
+	var gold := StandardMaterial3D.new()
+	gold.albedo_color = Color(1.0, 0.82, 0.20)
+	gold.roughness = 0.28
+	gold.emission_enabled = true
+	gold.emission = Color(1.0, 0.78, 0.18)
+	gold.emission_energy_multiplier = 1.7      # past the scene HDR bloom threshold
+	var cr := r * 0.52
+	var band := MeshInstance3D.new()
+	var band_mesh := CylinderMesh.new()
+	band_mesh.top_radius = cr
+	band_mesh.bottom_radius = cr
+	band_mesh.height = r * 0.30
+	band_mesh.radial_segments = 10
+	band.mesh = band_mesh
+	band.material_override = gold
+	crown.add_child(band)
+	for i in 5:
+		var spike := MeshInstance3D.new()
+		var sm := CylinderMesh.new()
+		sm.top_radius = 0.0
+		sm.bottom_radius = cr * 0.30
+		sm.height = r * 0.42
+		sm.radial_segments = 6
+		spike.mesh = sm
+		spike.material_override = gold
+		var ang := TAU * float(i) / 5.0
+		spike.position = Vector3(cos(ang) * cr * 0.92, r * 0.30, sin(ang) * cr * 0.92)
+		crown.add_child(spike)
+	crown.position = Vector3(0, top_y - r * 0.06, 0)
+	_visual.add_child(crown)
+
+	# ── Cape: a tapered cloth trapezoid draping down the back (back = local -X) ──
+	# Narrow at the neck, wide at the hem → a real cape silhouette (a flat box read
+	# as a slab). Built as one double-sided quad in the Y-Z plane facing backward.
+	var cape := Node3D.new()
+	cape.name = "cape"
+	var h := box.size.y * 0.92
+	var wt := r * 0.55          # neck width
+	var wb := r * 1.35          # hem width
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var nrm := Vector3(-1, 0, 0)
+	var tl := Vector3(0,  h * 0.5, -wt * 0.5)
+	var tr := Vector3(0,  h * 0.5,  wt * 0.5)
+	var bl := Vector3(0, -h * 0.5, -wb * 0.5)
+	var br := Vector3(0, -h * 0.5,  wb * 0.5)
+	for v in [tl, bl, br, tl, br, tr]:
+		st.set_normal(nrm)
+		st.add_vertex(v)
+	var cloth := MeshInstance3D.new()
+	cloth.mesh = st.commit()
+	var cmat := StandardMaterial3D.new()
+	var deep := accent
+	deep.v = clampf(deep.v * 0.80, 0.0, 1.0)   # richer than the body so it pops
+	cmat.albedo_color = deep
+	cmat.roughness = 0.55
+	cmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	cloth.material_override = cmat
+	cape.add_child(cloth)
+	cape.position = Vector3(-r * 0.62, top_y - box.size.y * 0.50, 0)
+	cape.rotation.z = deg_to_rad(14.0)         # billows back off the shoulders
+	_visual.add_child(cape)
+	_cape = cape
+
+# Combined AABB of every mesh under _visual, in _visual-LOCAL space (body-scale
+# cancels out via the inverse), so regalia is placed in the model's own units.
+func _visual_local_aabb() -> AABB:
+	var inv := _visual.global_transform.affine_inverse()
+	var box := AABB()
+	var first := true
+	for mi in _all_meshes(_visual):
+		var b: AABB = (inv * mi.global_transform) * mi.get_aabb()
+		if first:
+			box = b
+			first = false
+		else:
+			box = box.merge(b)
+	return box
+
+func _all_meshes(node: Node, out: Array[MeshInstance3D] = []) -> Array[MeshInstance3D]:
+	if node is MeshInstance3D and (node as MeshInstance3D).mesh != null:
+		out.append(node as MeshInstance3D)
+	for c in node.get_children():
+		_all_meshes(c, out)
+	return out
+
 # ───────────────────────────── external model (e.g. tank.glb) ──
 func set_model(scene: PackedScene, model_scale: float = 1.0, y: float = 0.0, y_rot_deg: float = 0.0) -> void:
 	for c in _visual.get_children():
@@ -116,6 +219,11 @@ func _process(delta: float) -> void:
 	if not _anim or not _anim.is_playing():
 		_bob_t += delta * 2.8
 		_visual.position.y = sin(_bob_t) * 0.048
+	# Royal cape billows — faster the quicker the king moves.
+	if _cape:
+		_sway_t += delta * (3.0 + velocity.length() * 0.5)
+		_cape.rotation.z = deg_to_rad(14.0 + sin(_sway_t) * 5.0)
+		_cape.rotation.x = deg_to_rad(sin(_sway_t * 0.7) * 4.0)
 
 func _physics_process(_dt: float) -> void:
 	if dead or not auto_input:

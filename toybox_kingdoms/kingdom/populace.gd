@@ -5,13 +5,22 @@ extends Node3D
 # or empty. So buildings appear exactly where you claim, never move, and recolour
 # to the conqueror when land is taken. Three MultiMesh batches (house body, roof,
 # citizen) keep it to a few draw calls; citizens bob via a vertex shader = zero CPU.
+#
+# POP-IN: each instance carries its spawn-time in MultiMesh custom-data .r; a vertex
+# shader scales it 0→1 with an ease-out-back overshoot over POP_DUR seconds. So a
+# building that first appears on a capture tick visibly *pops up* out of the ground,
+# while the town that already exists stays put — the whole settlement keeps growing
+# as you claim land, with no per-instance CPU work (the GPU reads TIME each frame).
 
 var grid
 var cell: float = 0.6
 var colors := {}
 var _homes := {}             # kid -> Vector2i home cell (villages cluster here)
+var _seen := {}              # cell index -> spawn time (sec); stable so it pops once
+var _first := true           # first rebuild = no pop (match-start town appears instantly)
 
 const PROP_Y := 0.07         # sit on the flat land slab
+const POP_DUR := 0.30        # seconds for a freshly-claimed building to pop up
 # Density buckets (out of 1000) by Manhattan distance from the kingdom's castle:
 # dense village core near home, thinning to sparse outskirts near the border.
 const CORE_R := 9
@@ -20,15 +29,34 @@ const HOUSE_CAP := 1000      # instance caps (one draw call each, but keep tris 
 const CIT_CAP := 1800
 const TOWER_CAP := 360       # sparse kingdom towers give the target's studded skyline
 
-const CIT_SHADER := """
+# One shader for every town prop: a pop-in scale from custom-data .r (spawn time),
+# plus an optional idle bob (citizens). Matte plastic-clay finish to match the board.
+const BUILD_SHADER := """
 shader_type spatial;
 render_mode cull_back;
+uniform float bob_amt = 0.0;
+uniform float pop_dur = 0.30;
 void vertex() {
-	vec3 wp = MODEL_MATRIX[3].xyz;
-	float ph = wp.x * 2.7 + wp.z * 1.9;
-	VERTEX.y += sin(TIME * 3.5 + ph) * 0.05;
+	// pop-in: custom-data .r holds the spawn time (sec). 0 = pre-existing, no pop.
+	float spawn = INSTANCE_CUSTOM.r;
+	float s = 1.0;
+	if (spawn > 0.0) {
+		float t = clamp((TIME - spawn) / pop_dur, 0.0, 1.0);
+		float p = t - 1.0;
+		s = 1.0 + 2.70158 * p * p * p + 1.70158 * p * p;   // ease-out-back overshoot
+	}
+	VERTEX *= s;
+	if (bob_amt > 0.0) {
+		vec3 wp = MODEL_MATRIX[3].xyz;
+		float ph = wp.x * 2.7 + wp.z * 1.9;
+		VERTEX.y += sin(TIME * 3.5 + ph) * bob_amt;
+	}
 }
-void fragment() { ALBEDO = COLOR.rgb; }
+void fragment() {
+	ALBEDO = COLOR.rgb;
+	ROUGHNESS = 0.9;        // matte clay to match the painted ground/plate
+	SPECULAR = 0.1;
+}
 """
 
 var _body: MultiMeshInstance3D
@@ -44,63 +72,75 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> 
 	_homes = p_homes
 	var body_mesh := BoxMesh.new()
 	body_mesh.size = Vector3(cell * 0.74, 0.58, cell * 0.74)
-	_body = _batch(body_mesh, false)
+	_body = _batch(body_mesh, 0.0, true)   # houses cast shadow → grounded on the board
 	# Overhanging gable roof (triangular prism) reads as a real little house far better
 	# than the old squat 4-sided cone; it overhangs the body on all sides.
 	var roof_mesh := PrismMesh.new()
 	roof_mesh.size = Vector3(cell * 0.90, 0.38, cell * 0.94)
-	_roof = _batch(roof_mesh, false)
+	_roof = _batch(roof_mesh, 0.0)
 	var cit_mesh := SphereMesh.new()    # cute low-poly blob citizen (mobile-cheap)
 	cit_mesh.radius = 0.24
 	cit_mesh.height = 0.40
 	cit_mesh.radial_segments = 7
 	cit_mesh.rings = 4
-	_cit = _batch(cit_mesh, true)
+	_cit = _batch(cit_mesh, 0.05)       # citizens bob
 	# Towers: a tall thin keep (cream stone) topped by a kingdom-coloured spire.
 	var tower_mesh := BoxMesh.new()
 	tower_mesh.size = Vector3(cell * 0.5, 1.3, cell * 0.5)
-	_tower = _batch(tower_mesh, false)
+	_tower = _batch(tower_mesh, 0.0, true)   # tall keeps cast a long grounding shadow
 	var spire_mesh := CylinderMesh.new()
 	spire_mesh.top_radius = 0.0
 	spire_mesh.bottom_radius = cell * 0.42
 	spire_mesh.height = 0.62
 	spire_mesh.radial_segments = 6
-	_tower_roof = _batch(spire_mesh, false)
+	_tower_roof = _batch(spire_mesh, 0.0)
 	add_child(_body)
 	add_child(_roof)
 	add_child(_cit)
 	add_child(_tower)
 	add_child(_tower_roof)
 
-func _batch(mesh: Mesh, bob: bool) -> MultiMeshInstance3D:
-	var mat: Material
-	if bob:
-		var sh := Shader.new()
-		sh.code = CIT_SHADER
-		var sm := ShaderMaterial.new()
-		sm.shader = sh
-		mat = sm
-	else:
-		var st := StandardMaterial3D.new()
-		st.vertex_color_use_as_albedo = true
-		# Matte clay to match the painted ground/plate (was 0.48 = plastic gloss, which
-		# made houses + towers read as a different art language sitting ON the board).
-		st.roughness = 0.82
-		st.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-		mat = st
+func _batch(mesh: Mesh, bob: float, cast: bool = false) -> MultiMeshInstance3D:
+	var sh := Shader.new()
+	sh.code = BUILD_SHADER
+	var sm := ShaderMaterial.new()
+	sm.shader = sh
+	sm.set_shader_parameter("bob_amt", bob)
+	sm.set_shader_parameter("pop_dur", POP_DUR)
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
+	mm.use_custom_data = true      # .r = spawn time, drives the pop-in scale
 	mm.mesh = mesh
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
-	mmi.material_override = mat
-	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mmi.material_override = sm
+	# Only the major structures cast (houses/towers), and only off-mobile — thousands
+	# of casters × cascades is too heavy for phones, where the contact look comes from
+	# the strong key shadow on the castle + the clay seam AO instead.
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON \
+		if (cast and not DeviceMode.is_mobile) else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return mmi
 
-func rebuild() -> void:
+# Spawn time for a cell: recorded the first time it becomes a building, then stable
+# (so it pops once and never re-pops on later ticks / conquests). now==0 → no pop.
+func _spawn_for(i: int, now: float) -> float:
+	if _seen.has(i):
+		return _seen[i]
+	_seen[i] = now
+	return now
+
+# Town thickens with the castle tier: an Outpost is a sparse cluster, a Capital is
+# crowded. Towers (the studded keep skyline) only appear once a kingdom is a Town (T3).
+const TIER_DENSITY := {1: 0.62, 2: 0.85, 3: 1.0, 4: 1.18}
+const TOWER_MIN_TIER := 3
+
+func rebuild(tiers: Dictionary = {}) -> void:
 	var w: int = grid.w
 	var n: int = w * grid.h
+	# First rebuild seeds the starting town instantly (now=0 → no pop); after that,
+	# freshly-claimed buildings carry the real wall-clock so they pop up on capture.
+	var now: float = 0.0 if _first else float(Time.get_ticks_msec()) * 0.001
 	# Phones thin the densest town layers (houses/citizens/towers) to keep vertex +
 	# overdraw cost down — the village still reads, just less crowded.
 	var cap_mul: float = 0.55 if DeviceMode.is_mobile else 1.0
@@ -111,10 +151,13 @@ func rebuild() -> void:
 	# allocation-light — no per-element Variant boxing or GC churn.
 	var house_pos := PackedVector3Array()
 	var house_col := PackedColorArray()
+	var house_spawn := PackedFloat32Array()
 	var cit_pos := PackedVector3Array()
 	var cit_col := PackedColorArray()
+	var cit_spawn := PackedFloat32Array()
 	var tower_pos := PackedVector3Array()
 	var tower_col := PackedColorArray()
+	var tower_spawn := PackedFloat32Array()
 	for i in n:
 		var oid: int = grid.owner[i]
 		if oid == 0:
@@ -126,12 +169,18 @@ func rebuild() -> void:
 		var d: int = absi(cx - home.x) + absi(cy - home.y)
 		var base: Vector3 = _c2w(cx, cy)
 		var col: Color = colors.get(oid, Color.WHITE)
-		# Sparse towers (separate hash) in the core/mid ring → studded skyline.
+		var tier: int = tiers.get(oid, 1)
+		var dens: float = TIER_DENSITY.get(tier, 1.0)
+		# Sparse towers (separate hash) in the core/mid ring → studded skyline. Only a
+		# Town (T3+) sprouts keep towers; lower tiers stay low-rise.
 		var tbucket: int = ((i * 2246822519) & 0x7fffffff) % 1000
-		var tower_thr: int = 14 if d <= CORE_R else (6 if d <= MID_R else 0)
-		if tbucket < tower_thr and tower_pos.size() < tower_cap:
+		var tower_thr: int = 0
+		if tier >= TOWER_MIN_TIER:
+			tower_thr = 14 if d <= CORE_R else (6 if d <= MID_R else 0)
+		if tower_thr > 0 and tbucket < tower_thr and tower_pos.size() < tower_cap:
 			tower_pos.append(base)
 			tower_col.append(col)
+			tower_spawn.append(_spawn_for(i, now))
 			continue
 		var bucket: int = ((i * 1103515245 + 12345) & 0x7fffffff) % 1000
 		var house_thr: int
@@ -142,31 +191,38 @@ func rebuild() -> void:
 			house_thr = 52; cit_thr = 180
 		else:
 			house_thr = 14; cit_thr = 56         # sparse outskirts
+		# Town crowds up as the kingdom levels (Outpost sparse → Capital busy).
+		house_thr = int(house_thr * dens)
+		cit_thr = int(cit_thr * dens)
 		if bucket >= cit_thr:
 			continue
 		if bucket < house_thr:
 			if house_pos.size() < house_cap:
 				house_pos.append(base)
 				house_col.append(col)
+				house_spawn.append(_spawn_for(i, now))
 		elif cit_pos.size() < cit_cap:
 			cit_pos.append(base)
 			cit_col.append(col)
+			cit_spawn.append(_spawn_for(i, now))
 
 	# House body = constant cream; roof = kingdom colour; citizens = kingdom colour.
-	_fill(_body, house_pos, house_col, Vector3(0, PROP_Y + 0.29, 0), Color("f1d8a0"), true)
-	_fill(_roof, house_pos, house_col, Vector3(0, PROP_Y + 0.76, 0), Color.WHITE, false)
-	_fill(_cit, cit_pos, cit_col, Vector3(0, PROP_Y + 0.25, 0), Color.WHITE, false)
+	_fill(_body, house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.29, 0), Color("f1d8a0"), true)
+	_fill(_roof, house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.76, 0), Color.WHITE, false)
+	_fill(_cit, cit_pos, cit_col, cit_spawn, Vector3(0, PROP_Y + 0.25, 0), Color.WHITE, false)
 	# Tower keep = cream stone; spire = kingdom colour, perched on top.
-	_fill(_tower, tower_pos, tower_col, Vector3(0, PROP_Y + 0.65, 0), Color("e9d6ad"), true)
-	_fill(_tower_roof, tower_pos, tower_col, Vector3(0, PROP_Y + 1.61, 0), Color.WHITE, false)
+	_fill(_tower, tower_pos, tower_col, tower_spawn, Vector3(0, PROP_Y + 0.65, 0), Color("e9d6ad"), true)
+	_fill(_tower_roof, tower_pos, tower_col, tower_spawn, Vector3(0, PROP_Y + 1.61, 0), Color.WHITE, false)
+	_first = false
 
 func _fill(mmi: MultiMeshInstance3D, positions: PackedVector3Array, cols: PackedColorArray,
-		y_off: Vector3, const_col: Color, use_const: bool) -> void:
+		spawns: PackedFloat32Array, y_off: Vector3, const_col: Color, use_const: bool) -> void:
 	var mm := mmi.multimesh
 	mm.instance_count = positions.size()
 	for k in positions.size():
 		mm.set_instance_transform(k, Transform3D(Basis(), positions[k] + y_off))
 		mm.set_instance_color(k, const_col if use_const else cols[k])
+		mm.set_instance_custom_data(k, Color(spawns[k], 0.0, 0.0, 0.0))
 
 func _c2w(cx: int, cy: int) -> Vector3:
 	return Vector3((cx + 0.5 - grid.w * 0.5) * cell, 0.0, (cy + 0.5 - grid.h * 0.5) * cell)
