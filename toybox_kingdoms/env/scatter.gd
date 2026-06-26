@@ -12,7 +12,7 @@ const TREE_KINDS := [
 	"res://assets/models/tree-round.glb",
 	"res://assets/models/tree-spreading.glb",
 ]
-const TREE_COLORS := [Color("775123"), Color("1f8a1f")]
+const TREE_COLORS := [Color("775123"), Color("33a23a")]  # [0]=trunk brown, [1]=foliage = the green kingdom/castle-roof green
 const ROCK := preload("res://assets/models/rock.glb")
 
 # Base caps (desktop multiplies these — see rebuild()).
@@ -94,6 +94,9 @@ func _batch_vc(mesh: Mesh) -> MultiMeshInstance3D:
 	var mat := StandardMaterial3D.new()
 	mat.roughness = 0.62
 	mat.vertex_color_use_as_albedo = true
+	# Baked vertex colours (TREE_COLORS) are authored in sRGB; convert them to linear so the
+	# foliage lands on the exact same tone as the castle roof (whose albedo_color converts too).
+	mat.vertex_color_is_srgb = true
 	mesh.surface_set_material(0, mat)
 	return _make_mmi(mesh)
 

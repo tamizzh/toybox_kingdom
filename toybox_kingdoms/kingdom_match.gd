@@ -43,8 +43,8 @@ const HUMAN_SPEED := 5.6          # human's base carve speed (faster than AI_SPE
 const BARRACKS_SPEED := 0.44      # each BARRACKS makes your king carve this much faster — 20% slower
 const SPEED_CAP := 8.8            # speed ceiling so boosts stay controllable — 20% slower
 const AI_SPEED := 5.04            # 20% slower
-const AI_DECIDE_EVERY := 4        # re-run each AI brain every Nth physics frame (~15Hz),
-								  # staggered by kid so they never all decide on one frame
+var _ai_decide_every: int = 4     # re-run each AI brain every Nth physics frame (~15Hz);
+								  # raised to 6 on mobile (~10Hz) — avatars still move smoothly on cached heading
 const RESPAWN_TIME := 1.2
 # Claimed cells rise into a raised plateau in the ground shader (territory_ground.gd
 # `plateau`). Avatars sit at Y=0, so without this lift their feet + the king's ground
@@ -145,6 +145,8 @@ func _ready() -> void:
 	_n_kingdoms = 1 + _rival_diffs.size()
 	AudioManager.play_music("game")
 	_apply_render_scale()
+	if DeviceMode.is_mobile:
+		_ai_decide_every = 6        # ~10 Hz AI decisions; avatars still move every frame on cached heading
 	_build_environment()
 	_build_ground()
 
@@ -355,7 +357,7 @@ func _physics_process(delta: float) -> void:
 	_frame += 1
 	for a in _rulers:
 		if a.is_ai and a.alive:
-			if (_frame + a.kid) % AI_DECIDE_EVERY == 0:
+			if (_frame + a.kid) % _ai_decide_every == 0:
 				a.cached_dir = a.ai.decide(a, self)
 			var dir: Vector2 = a.cached_dir
 			a.avatar.velocity = Vector3(dir.x, 0.0, dir.y) * AI_SPEED
@@ -405,7 +407,7 @@ func _physics_process(delta: float) -> void:
 	if _minimap_pending and _minimap_t <= 0.0:
 		_minimap.request_render()
 		_minimap_pending = false
-		_minimap_t = 0.33
+		_minimap_t = 0.5 if DeviceMode.is_mobile else 0.33
 	_kingdom_tick(delta)
 	_hud_tick(delta)
 	if _fps_label and _fps_label.visible:
@@ -421,7 +423,7 @@ func _kingdom_tick(delta: float) -> void:
 	_kingdom_t -= delta
 	if _kingdom_t > 0.0:
 		return
-	_kingdom_t = 0.4
+	_kingdom_t = 0.6 if DeviceMode.is_mobile else 0.4
 	# Populace + flags are full-board scans. Skip them when no land changed since the
 	# last build, and alternate them across ticks so only one runs per 0.4s spike.
 	var v: int = grid.version
@@ -936,9 +938,9 @@ func _build_environment() -> void:
 	env.tonemap_exposure = 0.78              # pull back so the bright matte floor stays saturated, not blown to pale lime
 	env.tonemap_white = 1.0
 
-	# Subtle bloom on bright clay + emissive trails/rings/capture flashes.
-	# Glow is supported on Mobile too, so it survives the mobile fallback.
-	env.glow_enabled = true
+	# Subtle bloom on emissive trails/rings/capture flashes.
+	# Disabled on mobile — each enabled glow level is a full-screen blur pass.
+	env.glow_enabled = not DeviceMode.is_mobile
 	env.glow_intensity = 0.35
 	env.glow_strength = 0.9
 	env.glow_bloom = 0.08
@@ -987,7 +989,7 @@ func _build_environment() -> void:
 		# calls (every caster is re-rendered once per cascade). The board still gets
 		# grounded contact shadows up close, where they actually read.
 		key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-		key.directional_shadow_max_distance = 40.0
+		key.directional_shadow_max_distance = 28.0  # tighter cascades = fewer casters + crisper near shadows
 	add_child(key)
 	# cool sky fill — no shadow, just lifts the shadow side toward blue so shadows
 	# read as soft plastic, not black. Slightly stronger + cooler for the toy look.

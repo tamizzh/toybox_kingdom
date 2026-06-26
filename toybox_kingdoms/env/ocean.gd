@@ -73,6 +73,35 @@ void fragment(){
 }
 """
 
+# Mobile: replace the 8-FBM-call desktop shader (32 noise evals/px) with a cheap
+# sin/cos swell + distance-based foam. Unshaded so no lighting pass runs at all.
+const MOBILE_SHADER_CODE := """
+shader_type spatial;
+render_mode cull_back, unshaded;
+
+uniform vec3 deep = vec3(0.02, 0.17, 0.40);
+uniform vec3 shallow = vec3(0.09, 0.45, 0.62);
+uniform vec3 foam_col = vec3(0.92, 0.97, 1.0);
+uniform vec2 board_half = vec2(38.4, 28.8);
+uniform float foam_band = 3.0;
+uniform float speed = 1.0;
+
+varying vec3 v_world;
+void vertex(){ v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz; }
+
+void fragment(){
+	vec2 w = v_world.xz;
+	float t = TIME * 0.04 * speed;
+	float swell = sin(w.x * 0.06 + t) * 0.3 + cos(w.z * 0.07 - t * 0.7) * 0.2;
+	vec3 col = mix(deep, shallow, clamp(swell + 0.5, 0.0, 1.0));
+	vec2 d = abs(w) - board_half;
+	float outside = length(max(d, vec2(0.0)));
+	float shore = 1.0 - smoothstep(0.0, foam_band, outside);
+	col = mix(col, foam_col, shore * 0.75);
+	ALBEDO = col;
+}
+"""
+
 func setup(p_board_half: Vector2, p_extent := 360.0, p_y := -0.16) -> void:
 	var pm := PlaneMesh.new()
 	pm.size = Vector2(p_board_half.x * 2.0 + p_extent, p_board_half.y * 2.0 + p_extent)
@@ -80,7 +109,7 @@ func setup(p_board_half: Vector2, p_extent := 360.0, p_y := -0.16) -> void:
 
 	var mat := ShaderMaterial.new()
 	var sh := Shader.new()
-	sh.code = SHADER_CODE
+	sh.code = MOBILE_SHADER_CODE if DeviceMode.is_mobile else SHADER_CODE
 	mat.shader = sh
 	mat.set_shader_parameter("board_half", p_board_half)
 	material_override = mat

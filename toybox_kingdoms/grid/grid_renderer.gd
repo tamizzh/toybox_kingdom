@@ -129,7 +129,7 @@ func rebuild_borders(x0: int = 0, y0: int = 0, x1: int = -1, y1: int = -1) -> vo
 			var i := row + cx
 			var kid: int = grid.owner[i]
 			if kid != 0 and _is_border(i, cx, cy, w, h, kid):
-				_border_cells[i] = (colors.get(kid, Color.WHITE) as Color).darkened(0.12)
+				_border_cells[i] = (colors.get(kid, Color.WHITE) as Color).darkened(0.08)
 			else:
 				_border_cells.erase(i)
 	# Rebuild the compact instance buffer from the border-cell set (a few hundred
@@ -238,7 +238,7 @@ func rebuild_territory() -> void:
 		var border := _is_border(i, cx, cy, w, h, kid)
 		var hgt: float = BORDER_H if border else LAND_H
 		# 3 clean values: dark border wall < saturated land < bright buildings.
-		var col: Color = oc.darkened(0.40) if border else oc.lightened(0.10)
+		var col: Color = oc.darkened(0.25) if border else oc.lightened(0.10)
 		var t := Transform3D(Basis().scaled(Vector3(1.0, hgt, 1.0)), _c2w(cx, cy, hgt * 0.5))
 		mm.set_instance_transform(k, t)
 		mm.set_instance_color(k, col)
