@@ -1,29 +1,52 @@
 [gd_scene format=3 uid="uid://ckh8u3dmix64y"]
 
 [sub_resource type="Environment" id="Env_1"]
-background_color = Color(0.047, 0.153, 0.2, 1)
+background_mode = 1
+background_color = Color(0.114, 0.357, 0.525, 1)
 ambient_light_source = 2
-ambient_light_color = Color(0.68, 0.82, 1, 1)
-ambient_light_energy = 0.7
+ambient_light_color = Color(0.957, 0.953, 0.933, 1)
+ambient_light_energy = 0.45
+tonemap_mode = 3
+tonemap_exposure = 0.65
+ssao_enabled = true
+ssao_radius = 0.9
+ssao_intensity = 0.6
+ssao_power = 1.6
+ssao_horizon = 0.1
+glow_enabled = true
+glow_levels/3 = 1.0
+glow_levels/4 = 1.0
+glow_levels/5 = 0.6
+glow_intensity = 0.35
+glow_strength = 0.9
+glow_bloom = 0.08
+glow_blend_mode = 0
+glow_hdr_threshold = 1.05
 adjustment_enabled = true
-adjustment_brightness = 1.06
-adjustment_contrast = 1.28
-adjustment_saturation = 1.75
+adjustment_contrast = 1.06
+adjustment_saturation = 1.28
 
-[node name="World" type="Node3D" unique_id=1239802861]
+[node name="World" type="Node3D" unique_id=1865398686]
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1708191604]
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1232100038]
 environment = SubResource("Env_1")
 
-[node name="KeyLight" type="DirectionalLight3D" parent="." unique_id=34775266]
-transform = Transform3D(0.743145, 0.5125838, -0.43010855, 0, 0.64278734, 0.7660447, 0.6691304, -0.56928223, 0.4776842, 0, 0, 0)
-light_color = Color(1, 0.87, 0.38, 1)
-light_energy = 1.9
+[node name="KeyLight" type="DirectionalLight3D" parent="." unique_id=993142499]
+transform = Transform3D(-0.3527964, 0.40640405, -0.8428348, -0.3789787, 0.7615032, 0.5258212, 0.85551727, 0.5049243, -0.1146371, 0, 0, 0)
+light_color = Color(0.8520156, 0.77285194, 0.97976714, 1)
+light_energy = 2.5
 shadow_enabled = true
-shadow_opacity = 0.68
-shadow_blur = 1.5
+shadow_opacity = 0.33
+shadow_blur = 0.608
+directional_shadow_max_distance = 48.0
 
-[node name="FillLight" type="DirectionalLight3D" parent="." unique_id=1886866363]
-transform = Transform3D(-0.74314463, -0.39330548, 0.54133797, 0, 0.8090167, 0.58778566, -0.6691308, 0.43680975, -0.60121644, 0, 0, 0)
-light_color = Color(0.5, 0.68, 1, 1)
-light_energy = 0.42
+[node name="FillLight" type="DirectionalLight3D" parent="." unique_id=1920063758]
+transform = Transform3D(0.52991927, -0.39813447, 0.748782, 0, 0.88294756, 0.46947157, -0.8480481, -0.24878204, 0.46789092, 0, 0, 0)
+visible = false
+light_color = Color(0.702, 0.8, 1, 1)
+light_energy = 0.16
+
+[node name="RimLight" type="DirectionalLight3D" parent="." unique_id=1710404207]
+transform = Transform3D(0.7668281, 0.5774815, 0.28016084, 0.6282646, -0.7646553, -0.14347751, 0.13137081, 0.2860377, -0.94917035, 0, 0, -0.034879684)
+light_color = Color(7.123351e-06, 0.71074915, 0.9336182, 1)
+light_energy = 0.653

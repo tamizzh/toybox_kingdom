@@ -181,3 +181,22 @@ func _fill(mmi: MultiMeshInstance3D, positions: PackedVector3Array, cols: Packed
 
 func _c2w(cx: int, cy: int) -> Vector3:
 	return Vector3((cx + 0.5 - grid.w * 0.5) * cell, 0.0, (cy + 0.5 - grid.h * 0.5) * cell)
+
+# Returns a sample of farm world positions for road connections.
+# Mirrors the exact farm hash from rebuild() so positions are stable.
+func get_road_nodes(kid: int, tier: int) -> PackedVector3Array:
+	if tier < MIN_TIER:
+		return PackedVector3Array()
+	var out := PackedVector3Array()
+	var w: int = grid.w; var n: int = w * grid.h
+	var home: Vector2i = _homes.get(kid, Vector2i(w / 2, grid.h / 2))
+	var limit := 10
+	for i in n:
+		if grid.owner[i] != kid or out.size() >= limit: continue
+		var cx: int = i % w; var cy: int = i / w
+		var d: int = absi(cx - home.x) + absi(cy - home.y)
+		if d <= CORE_R or d > FARM_MAX: continue
+		var fb: int = ((i * 2654435761) & 0x7fffffff) % 1000
+		if fb < 48:
+			out.append(_c2w(cx, cy))
+	return out

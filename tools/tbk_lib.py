@@ -52,6 +52,39 @@ def ico(r, x, y, z, subdiv=1):
 	return bpy.context.active_object
 
 
+def prism(sx, sy, sz, x=0, y=0, z=0):
+	"""Triangular prism (gable roof). sx=width, sy=depth (ridge runs along Y), sz=height.
+	Mesh is centered at (x,y,z). Use bevel() after to round the ridge and eave edges."""
+	import bmesh as _bm
+	mesh_data = bpy.data.meshes.new("prism_mesh")
+	bm = _bm.new()
+	hw, hd, hh = sx / 2, sy / 2, sz / 2
+	# 4 base corners + 2 ridge points
+	v = [
+		bm.verts.new((-hw, -hd, -hh)),  # 0 front-left base
+		bm.verts.new(( hw, -hd, -hh)),  # 1 front-right base
+		bm.verts.new(( hw,  hd, -hh)),  # 2 back-right base
+		bm.verts.new((-hw,  hd, -hh)),  # 3 back-left base
+		bm.verts.new((  0, -hd,  hh)),  # 4 front ridge
+		bm.verts.new((  0,  hd,  hh)),  # 5 back ridge
+	]
+	bm.faces.new([v[1], v[0], v[4]])         # front gable
+	bm.faces.new([v[3], v[2], v[5]])         # back gable
+	bm.faces.new([v[0], v[3], v[5], v[4]])  # left slope
+	bm.faces.new([v[2], v[1], v[4], v[5]])  # right slope
+	bm.faces.new([v[3], v[0], v[1], v[2]])  # bottom (closed for clean bevel)
+	bm.to_mesh(mesh_data)
+	bm.free()
+	mesh_data.update()
+	obj = bpy.data.objects.new("prism", mesh_data)
+	bpy.context.collection.objects.link(obj)
+	obj.location = (x, y, z)
+	bpy.context.view_layer.objects.active = obj
+	obj.select_set(True)
+	bpy.ops.object.transform_apply(location=True)
+	return obj
+
+
 # ── the toybox ingredients ───────────────────────────────────────────────────
 def bevel(obj, width=0.03, segments=2, angle=0.7):
 	"""Round the sharp edges. ANGLE limit keeps large flat faces flat so only

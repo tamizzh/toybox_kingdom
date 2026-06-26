@@ -32,6 +32,7 @@ const Windmills := preload("res://toybox_kingdoms/kingdom/windmills.gd")
 const Decor := preload("res://toybox_kingdoms/kingdom/decorations.gd")
 const CaptureFX := preload("res://toybox_kingdoms/fx/capture_fx.gd")
 const Ocean := preload("res://toybox_kingdoms/env/ocean.gd")
+const Roads := preload("res://toybox_kingdoms/kingdom/roads.gd")
 
 const GW := 128
 const GH := 96
@@ -81,6 +82,9 @@ var _slabs
 var _flags
 var _windmills
 var _decor
+var _roads
+var _road_tick := 0          # counts _kingdom_tick calls; roads rebuild every N ticks
+var _last_road_version := -1
 var _kingdom_t := 0.0
 var _terr_rebuild_t := 0.0
 var _minimap_t := 0.0           # rate-limits the minimap's full 2nd-scene render
@@ -205,6 +209,18 @@ func _ready() -> void:
 	_decor.position.y = CLAIMED_LIFT
 	_decor.setup(grid, CELL, homes)
 	_decor.rebuild()
+
+	# dirt roads connecting each kingdom's buildings to its castle
+	_roads = Roads.new()
+	add_child(_roads)
+	_roads.position.y = CLAIMED_LIFT   # sit on top of the claimed-land plateau (same as populace/windmills/decor)
+	_roads.populace     = _populace
+	_roads.windmills_ref = _windmills
+	_roads.decor_ref    = _decor
+	_roads.setup(grid, homes)
+	for a in _rulers:
+		_roads.rebuild(a.kid, _kid_tier.get(a.kid, 1), grid.territory_count(a.kid))
+	_last_road_version = grid.version
 
 	# lush wilderness: trees / rocks / bushes on neutral land
 	_scatter = Scatter.new()
@@ -440,6 +456,16 @@ func _kingdom_tick(delta: float) -> void:
 			_last_decor_version = v
 		_decor_phase = 0
 	_windmills.rebuild(_kid_tier)
+	# Roads: rebuild every ~10 kingdom ticks (~4 s desktop, ~6 s mobile) when territory
+	# changed. Each kingdom's rebuild() does its own delta-skip so it's cheap when nothing moved.
+	_road_tick += 1
+	var _road_interval := 6 if not DeviceMode.is_mobile else 8
+	if _road_tick >= _road_interval and grid.version != _last_road_version:
+		_last_road_version = grid.version
+		_road_tick = 0
+		for a in _rulers:
+			if not a.eliminated:
+				_roads.rebuild(a.kid, _kid_tier.get(a.kid, 1), grid.territory_count(a.kid))
 	_minimap.update_territory(grid, _kid_color)
 	for a in _rulers:
 		if a.eliminated:
@@ -457,6 +483,7 @@ func _kingdom_tick(delta: float) -> void:
 			# itself changed the version, but the rebuild this tick used the OLD tier).
 			_last_pop_version = -1
 			_last_decor_version = -1
+			_road_tick = 999   # force road rebuild on next _kingdom_tick (tier unlocks new roads)
 		if leveled and not a.is_ai:
 			AudioManager.play("round_win")   # your kingdom leveled up
 			camera.shake(0.14)
@@ -562,6 +589,8 @@ func _eliminate(b, conq) -> void:
 	b.alive = false
 	grid.clear_trail(b.kid)
 	grid.transfer_all(b.kid, conq.kid)
+	if _roads:
+		_roads.clear_kingdom(b.kid)
 	if b.avatar:
 		b.avatar.visible = false
 	if b.name_tag:
@@ -918,95 +947,15 @@ func _apply_camera_mode(mode: String) -> void:
 		camera.fov = 46.0
 
 func _build_environment() -> void:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("1d5b86")   # deep sea blue → the open ocean melts into the horizon past the island
-
-	# No fog — simple_target.png is a clean bright diorama on a light table, with no
-	# atmospheric haze. The light background + the ground's pale coast rim carry the
-	# airy edge on their own.
-	env.fog_enabled = false
-
-	# Cool sky-ambient fill — kept LOW so shadows stay deep and colours stay rich.
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color("f4f3ee")
-	env.ambient_light_energy = 0.45         # even flat fill → near-shadowless paper look (replaces shadow contrast); neutral (not blue) so greens don't lift toward mint
-
-	# Filmic highlight rolloff. ACES keeps the punchy toy-colour saturation while
-	# rolling off highlights (AgX looked great but desaturated the candy palette).
-	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 0.78              # pull back so the bright matte floor stays saturated, not blown to pale lime
-	env.tonemap_white = 1.0
-
-	# Subtle bloom on emissive trails/rings/capture flashes.
-	# Disabled on mobile — each enabled glow level is a full-screen blur pass.
-	env.glow_enabled = not DeviceMode.is_mobile
-	env.glow_intensity = 0.35
-	env.glow_strength = 0.9
-	env.glow_bloom = 0.08
-	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE   # clean halo on trail/crown/coins, no muddy softlight
-	env.glow_hdr_threshold = 1.05            # only the brightest pixels bloom
-	env.set_glow_level(3, 1.0)
-	env.set_glow_level(4, 1.0)
-	env.set_glow_level(5, 0.6)
-
-	# Contact AO in cell seams + around castles/props = sculpted toybox depth.
-	# Forward+ only AND a heavy full-screen pass — off on mobile (where it's either
-	# ignored by the render fallback or, on a Forward+ phone, pure cost). Pushed up:
-	# a stronger, tighter contact ring is what grounds each house/tower as a real
-	# object resting ON the board (the "miniature under a lamp" read).
-	env.ssao_enabled = not DeviceMode.is_mobile
-	env.ssao_intensity = 0.6                 # barely-there grounding; flat paper has almost no AO
-	env.ssao_radius = 0.9                     # soft, wide occlusion → toy-soft, not realistic
-	env.ssao_power = 1.6
-	env.ssao_detail = 0.5
-	env.ssao_horizon = 0.10
-
-	# Gentle grade — materials + glow carry the vibrancy now, so the acid is gone.
-	env.adjustment_enabled = true
-	env.adjustment_brightness = 1.03
-	env.adjustment_contrast = 1.06           # a little punch so the flat paper colours read crisp
-	env.adjustment_saturation = 1.28         # vibrant candy colours, but not so high the lit floor washes to pale lime
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
-	# warm key sun — crisp but soft-edged shadows sell the clay relief
-	var key := DirectionalLight3D.new()
-	key.rotation_degrees = Vector3(-50, -125, 0)
-	key.light_color = Color("fff6ee")        # near-neutral white → flat even paper light, no warm cast
-	key.light_energy = 1.0                     # calm key; ambient now carries the flat fill
-	key.shadow_enabled = true
-	key.shadow_opacity = 0.18                 # barely-there shadow → the target's near-shadowless look
-	key.shadow_blur = 3.0                      # very soft, diffuse edge
-	key.shadow_bias = 0.03
-	key.shadow_normal_bias = 1.5             # kills peter-panning on the plateau
-	key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	# Pull the shadow distance IN so the 4 cascades pack their texels around the play
-	# area → much sharper near shadows. Fog (begin 34 / end 64) hides the cutoff.
-	key.directional_shadow_max_distance = 48.0
+	var world := preload("res://toybox_kingdoms/world.tscn").instantiate()
+	add_child(world)
 	if DeviceMode.is_mobile:
-		# Phones: fewer cascades + a nearer shadow distance slashes shadow-pass draw
-		# calls (every caster is re-rendered once per cascade). The board still gets
-		# grounded contact shadows up close, where they actually read.
+		var key := world.get_node("KeyLight") as DirectionalLight3D
 		key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-		key.directional_shadow_max_distance = 28.0  # tighter cascades = fewer casters + crisper near shadows
-	add_child(key)
-	# cool sky fill — no shadow, just lifts the shadow side toward blue so shadows
-	# read as soft plastic, not black. Slightly stronger + cooler for the toy look.
-	var fill := DirectionalLight3D.new()
-	fill.rotation_degrees = Vector3(-28, 58, 0)
-	fill.light_color = Color("b3ccff")
-	fill.light_energy = 0.16
-	fill.shadow_enabled = false
-	add_child(fill)
-	# faint warm rim from low-behind → a soft halo on prop tops, separating the town
-	# from the ground (cheap, no shadow). Sells the "lit miniature" depth.
-	var rim := DirectionalLight3D.new()
-	rim.rotation_degrees = Vector3(-12, 120, 0)
-	rim.light_color = Color("fff0d0")
-	rim.light_energy = 0.22
-	rim.shadow_enabled = false
-	add_child(rim)
+		key.directional_shadow_max_distance = 28.0
+		var env := (world.get_node("WorldEnvironment") as WorldEnvironment).environment
+		env.glow_enabled = false
+		env.ssao_enabled = false
 
 func _build_ground() -> void:
 	# The play board is an ISLAND: everything outside the grid rectangle is open sea.

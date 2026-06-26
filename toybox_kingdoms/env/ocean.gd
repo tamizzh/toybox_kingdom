@@ -73,8 +73,12 @@ void fragment(){
 }
 """
 
-# Mobile: replace the 8-FBM-call desktop shader (32 noise evals/px) with a cheap
-# sin/cos swell + distance-based foam. Unshaded so no lighting pass runs at all.
+# Mobile: the desktop shader's lit fbm normals (≈32 noise evals/px) are too heavy for
+# phone GPUs, so this swaps them for an UNSHADED look that FAKES the same cues with a
+# handful of trig ops — no lighting pass at all, yet it keeps the life of the desktop sea:
+#   • layered cross-swell → the deep↔teal banding (not one flat wave)
+#   • a drifting sheen band + tight crossing-wave sparkles → fake "sun glint on water"
+#   • a trig-wobbled foam ring → the shoreline breaks unevenly, not a clean rectangle
 const MOBILE_SHADER_CODE := """
 shader_type spatial;
 render_mode cull_back, unshaded;
@@ -82,6 +86,7 @@ render_mode cull_back, unshaded;
 uniform vec3 deep = vec3(0.02, 0.17, 0.40);
 uniform vec3 shallow = vec3(0.09, 0.45, 0.62);
 uniform vec3 foam_col = vec3(0.92, 0.97, 1.0);
+uniform vec3 glint_col = vec3(1.0, 1.0, 0.95);   // warm sun sparkle
 uniform vec2 board_half = vec2(38.4, 28.8);
 uniform float foam_band = 3.0;
 uniform float speed = 1.0;
@@ -92,12 +97,27 @@ void vertex(){ v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz; }
 void fragment(){
 	vec2 w = v_world.xz;
 	float t = TIME * 0.04 * speed;
-	float swell = sin(w.x * 0.06 + t) * 0.3 + cos(w.z * 0.07 - t * 0.7) * 0.2;
+
+	// Layered swell → richer deep↔teal banding than a single wave.
+	float swell = sin(w.x * 0.06 + t) * 0.3
+	            + cos(w.y * 0.07 - t * 0.7) * 0.2
+	            + sin((w.x + w.y) * 0.05 + t * 1.3) * 0.15;
 	vec3 col = mix(deep, shallow, clamp(swell + 0.5, 0.0, 1.0));
+
+	// Fake sun glint without a lighting pass: a soft drifting sheen band plus tight
+	// sparkles where two high-frequency waves cross — additive highlights = sun on water.
+	float sheen = smoothstep(0.55, 1.0, sin(w.x * 0.045 - w.y * 0.05 + t * 0.8));
+	float spark = sin(w.x * 0.8 + t * 5.0) * sin(w.y * 0.7 - t * 4.0);
+	float glint = smoothstep(0.82, 1.0, spark);
+	col += glint_col * (sheen * 0.10 + glint * 0.30);
+
+	// Trig-wobbled foam ring — animate the shoreline so it isn't a clean box.
 	vec2 d = abs(w) - board_half;
 	float outside = length(max(d, vec2(0.0)));
-	float shore = 1.0 - smoothstep(0.0, foam_band, outside);
-	col = mix(col, foam_col, shore * 0.75);
+	float wobble = sin(w.x * 0.5 + t * 2.0) * cos(w.y * 0.6 - t * 1.5) * 1.1;
+	float shore = 1.0 - smoothstep(0.0, foam_band, outside + wobble);
+	col = mix(col, foam_col, shore * 0.8);
+
 	ALBEDO = col;
 }
 """
@@ -109,7 +129,10 @@ func setup(p_board_half: Vector2, p_extent := 360.0, p_y := -0.16) -> void:
 
 	var mat := ShaderMaterial.new()
 	var sh := Shader.new()
-	sh.code = MOBILE_SHADER_CODE if DeviceMode.is_mobile else SHADER_CODE
+	# TBK_OCEAN_MOBILE=1 forces the cheap mobile sea on desktop so its shader can be
+	# eyeballed at full resolution (no 0.75 mobile upscale softening the read).
+	var use_mobile := DeviceMode.is_mobile or OS.get_environment("TBK_OCEAN_MOBILE") == "1"
+	sh.code = MOBILE_SHADER_CODE if use_mobile else SHADER_CODE
 	mat.shader = sh
 	mat.set_shader_parameter("board_half", p_board_half)
 	material_override = mat

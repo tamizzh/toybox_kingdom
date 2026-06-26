@@ -16,6 +16,7 @@ GENERATORS = [
 	"gen_wall.py",
 	"gen_props.py",
 	"gen_castle.py",
+	"gen_house.py",
 ]
 
 

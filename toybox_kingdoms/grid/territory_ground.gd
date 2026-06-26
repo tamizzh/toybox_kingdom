@@ -24,7 +24,7 @@ uniform vec2 grid_size = vec2(128.0, 96.0);
 // PAPER look: every surface is flat matte cardstock. No tile texture, no grass
 // detail — just clean saturated colour with a soft bevel + a lighter ribbon where
 // two regions meet, exactly like simple_target.png.
-uniform vec3 paper_neutral = vec3(0.16, 0.68, 0.09); // unclaimed wilderness = flat saturated paper green, darkened ~30% from the original (0.18,0.32,0.07)
+uniform vec3 paper_neutral = vec3(0.24, 0.65, 0.15); // unclaimed wilderness — spring lawn green; desaturated ~12%, dimmed ~5%, hue shifted ~4° toward yellow vs the prior neon green
 uniform vec3 sand_col = vec3(0.88, 0.79, 0.55);       // warm sandy BEACH where the island meets the sea
 uniform float bump_amp = 0.045;
 uniform float plateau = 0.115;                // claimed land rises into thicker toy-board plates
@@ -91,11 +91,13 @@ void fragment(){
 		// so a large open field isn't a single dead flat colour.
 		float sn = vnoise(v_world.xz * 0.22 + 7.0);
 		float ch = hash(floor(uv * grid_size) * 1.7 + 3.0);
-			// Most cells stay the light base green; only the occasional cell drops to a
-			// different shade so the field is mostly uniform with rare patches of variety.
+			// Most cells stay the base green. Rare micro-patches add just enough variety
+			// to break monotony without competing with gameplay elements.
 			base = paper_neutral;
-			if (ch > 0.985) base = paper_neutral * 0.78;       // ~1.5% darker patch
-			else if (ch > 0.97) base = paper_neutral * 1.12;   // ~1.5% lighter patch
+			if      (ch > 0.985) base = paper_neutral * 0.82;                                // ~1.5% soft dark patch
+			else if (ch > 0.970) base = paper_neutral * 1.07;                                // ~1.5% soft light patch
+			else if (ch > 0.955) base = mix(paper_neutral, vec3(0.16, 0.60, 0.22), 0.12);   // ~1.5% clover tint (cooler green)
+			else if (ch > 0.940) base = mix(paper_neutral, vec3(0.38, 0.58, 0.07), 0.09);   // ~1.5% dry grass tint (warmer)
 			base *= (0.98 + sn * 0.04);
 		// soft pale rim against any claimed neighbour (the target's light divider)
 		base = mix(base, mix(paper_neutral, vec3(1.0), 0.4), rim * 0.5);

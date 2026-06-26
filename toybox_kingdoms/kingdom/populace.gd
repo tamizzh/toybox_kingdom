@@ -12,6 +12,8 @@ extends Node3D
 # while the town that already exists stays put — the whole settlement keeps growing
 # as you claim land, with no per-instance CPU work (the GPU reads TIME each frame).
 
+const HOUSE_GLB := "res://assets/models/house.glb"
+
 var grid
 var cell: float = 0.6
 var colors := {}
@@ -77,15 +79,30 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> 
 	cell = p_cell
 	colors = p_colors
 	_homes = p_homes
-	var body_mesh := BoxMesh.new()
-	body_mesh.size = Vector3(cell * 0.74, 0.58, cell * 0.74)
+	var body_mesh: Mesh
+	var roof_mesh: Mesh
+	# Load bevelled house body + gable roof from the Blender-generated GLB.
+	# Falls back to procedural primitives if the GLB hasn't been generated yet.
+	var glb = load(HOUSE_GLB) as PackedScene
+	if glb != null:
+		var s := glb.instantiate()
+		var bmi := s.find_child("body", true, false) as MeshInstance3D
+		var rmi := s.find_child("roof", true, false) as MeshInstance3D
+		if bmi:
+			body_mesh = bmi.mesh
+		if rmi:
+			roof_mesh = rmi.mesh
+		s.free()
+	if body_mesh == null:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(cell * 0.74, 0.58, cell * 0.74)
+		body_mesh = bm
+	if roof_mesh == null:
+		var pm := PrismMesh.new()
+		pm.size = Vector3(cell * 0.90, 0.38, cell * 0.94)
+		roof_mesh = pm
 	_body = _batch(body_mesh, 0.0, true)   # houses cast shadow → grounded on the board
-	# Overhanging gable roof (triangular prism) reads as a real little house far better
-	# than the old squat 4-sided cone; it overhangs the body on all sides.
-	var roof_mesh := PrismMesh.new()
-	roof_mesh.size = Vector3(cell * 0.90, 0.38, cell * 0.94)
-	# Match the windmill cap exactly: glossier (rough 0.8), default spec highlight, and the
-	# same sRGB->linear albedo conversion StandardMaterial3D applies (to_linear=1).
+	# Glossier roof (rough 0.8) + sRGB->linear conversion matches windmill cap finish.
 	_roof = _batch(roof_mesh, 0.0, false, 0.8, 0.5, 1.0)
 	var cit_mesh := SphereMesh.new()    # cute low-poly blob citizen (mobile-cheap)
 	cit_mesh.radius = 0.24
@@ -238,3 +255,31 @@ func _fill(mmi: MultiMeshInstance3D, positions: PackedVector3Array, cols: Packed
 
 func _c2w(cx: int, cy: int) -> Vector3:
 	return Vector3((cx + 0.5 - grid.w * 0.5) * cell, 0.0, (cy + 0.5 - grid.h * 0.5) * cell)
+
+# Returns a representative sample of house/tower world positions for the road generator.
+# Mirrors the exact same hash logic as rebuild() so positions are stable and consistent.
+func get_road_nodes(kid: int, tier: int) -> Dictionary:
+	var w: int = grid.w
+	var n: int = w * grid.h
+	var dens: float = TIER_DENSITY.get(tier, 1.0)
+	var home: Vector2i = _homes.get(kid, Vector2i(w / 2, grid.h / 2))
+	var houses := PackedVector3Array()
+	var towers  := PackedVector3Array()
+	# Roads only need a representative sample, not the full MultiMesh count
+	var hlimit := 16 if not DeviceMode.is_mobile else 10
+	var tlimit := 6
+	for i in n:
+		if grid.owner[i] != kid: continue
+		var cx: int = i % w; var cy: int = i / w
+		var d: int = absi(cx - home.x) + absi(cy - home.y)
+		var tbucket: int = ((i * 2246822519) & 0x7fffffff) % 1000
+		var tower_thr: int = 0
+		if tier >= TOWER_MIN_TIER:
+			tower_thr = 14 if d <= CORE_R else (6 if d <= MID_R else 0)
+		if tower_thr > 0 and tbucket < tower_thr and towers.size() < tlimit:
+			towers.append(_c2w(cx, cy)); continue
+		var bucket: int = ((i * 1103515245 + 12345) & 0x7fffffff) % 1000
+		var hthr: int = int((66 if d <= CORE_R else (32 if d <= MID_R else 9)) * dens)
+		if bucket < hthr and houses.size() < hlimit:
+			houses.append(_c2w(cx, cy))
+	return {"houses": houses, "towers": towers}

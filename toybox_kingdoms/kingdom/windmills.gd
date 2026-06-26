@@ -96,3 +96,16 @@ func _mat(c: Color) -> StandardMaterial3D:
 
 func _c2w(cx: int, cy: int) -> Vector3:
 	return Vector3((cx + 0.5 - grid.w * 0.5) * cell, 0.0, (cy + 0.5 - grid.h * 0.5) * cell)
+
+# Returns world positions of this kingdom's built windmills for road connections.
+func get_road_nodes(kid: int) -> PackedVector3Array:
+	if not _built.get(kid, false):
+		return PackedVector3Array()
+	var home: Vector2i = _homes.get(kid, Vector2i(grid.w / 2, grid.h / 2))
+	var out := PackedVector3Array()
+	for n in mini(PER_KINGDOM, OFFSETS.size()):
+		var off: Vector2i = OFFSETS[n]
+		var cx := clampi(home.x + off.x, 0, grid.w - 1)
+		var cy := clampi(home.y + off.y, 0, grid.h - 1)
+		out.append(_c2w(cx, cy))
+	return out
