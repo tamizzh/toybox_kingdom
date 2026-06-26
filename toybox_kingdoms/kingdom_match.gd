@@ -899,30 +899,22 @@ func _kingdom_color(i: int, n: int) -> Color:
 func _build_environment() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("0e1512")   # dark frame → saturated plates pop (checked-in look)
+	env.background_color = Color("c4d2dc")   # soft airy blue-grey table → the bright paper-diorama surround
 
-	# Distance fog fades the grass continent + forest border into the dark frame,
-	# giving the soft misty vignette of the target instead of a hard board edge.
-	env.fog_enabled = true
-	env.fog_mode = Environment.FOG_MODE_DEPTH
-	env.fog_light_color = Color("3a5440")    # brighter mossy haze → airy vignette, not gloom
-	env.fog_light_energy = 1.0
-	env.fog_sun_scatter = 0.0
-	env.fog_depth_begin = 48.0               # play area never hazes; only the far border recedes
-	env.fog_depth_end = 74.0
-	env.fog_depth_curve = 1.5
-	env.fog_density = 1.0
-	env.fog_sky_affect = 1.0
+	# No fog — simple_target.png is a clean bright diorama on a light table, with no
+	# atmospheric haze. The light background + the ground's pale coast rim carry the
+	# airy edge on their own.
+	env.fog_enabled = false
 
 	# Cool sky-ambient fill — kept LOW so shadows stay deep and colours stay rich.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color("e8f0ff")
-	env.ambient_light_energy = 0.55         # brighter, airier shadow sides → the target's open grassland
+	env.ambient_light_color = Color("eef2f6")
+	env.ambient_light_energy = 0.30         # lower + less blue → open field stays a saturated paper green instead of washing to pale chartreuse
 
 	# Filmic highlight rolloff. ACES keeps the punchy toy-colour saturation while
 	# rolling off highlights (AgX looked great but desaturated the candy palette).
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 1.0
+	env.tonemap_exposure = 0.84              # pull back so bright matte surfaces stay saturated, not blown to cream
 	env.tonemap_white = 1.0
 
 	# Subtle bloom on bright clay + emissive trails/rings/capture flashes.
@@ -960,8 +952,8 @@ func _build_environment() -> void:
 	# warm key sun — crisp but soft-edged shadows sell the clay relief
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-50, -125, 0)
-	key.light_color = Color("ffe6c0")        # a touch warmer → sunny toy-diorama key
-	key.light_energy = 1.32
+	key.light_color = Color("ffe9c8")        # sunny toy-diorama key, a hair less orange
+	key.light_energy = 1.15                   # pulled back so the open paper field stays saturated (G off the clip), not limey
 	key.shadow_enabled = true
 	key.shadow_opacity = 0.55                 # soft toy shadow, not a hard tabletop slab
 	key.shadow_blur = 1.3                      # diffuse edge → plastic-soft contact shadow
@@ -983,7 +975,7 @@ func _build_environment() -> void:
 	var fill := DirectionalLight3D.new()
 	fill.rotation_degrees = Vector3(-28, 58, 0)
 	fill.light_color = Color("b3ccff")
-	fill.light_energy = 0.36
+	fill.light_energy = 0.16
 	fill.shadow_enabled = false
 	add_child(fill)
 	# faint warm rim from low-behind → a soft halo on prop tops, separating the town

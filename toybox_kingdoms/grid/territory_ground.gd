@@ -21,17 +21,11 @@ uniform sampler2D own : filter_nearest;       // R = kingdom idx/255, A = claime
 uniform sampler2D own_l : filter_linear;      // same texture, smooth — drives plateau height
 uniform vec3 kcolors[8];
 uniform vec2 grid_size = vec2(128.0, 96.0);
-// Wilderness uses the authored grass (0-3) + soil (4) TILES, one per cell.
-uniform sampler2DArray terrain_tex : filter_linear_mipmap;
-// Wilderness samples the authored tiles (7 grass variants + the dirt tile's
-// cracked-stone pattern) for their bevel + DETAIL only, then drives the hue from
-// these clean colours — so it reads as grass/soil tiles with the tile grid intact,
-// without the tiles' wrong raw hues (yellow grass, blue "dirt").
-uniform vec3 grass_a = vec3(0.24, 0.46, 0.17);       // deep green
-uniform vec3 grass_b = vec3(0.37, 0.60, 0.22);       // mid green (lush)
-uniform vec3 grass_c = vec3(0.52, 0.71, 0.29);       // light green
-uniform vec3 soil_col = vec3(0.47, 0.34, 0.21);      // earthy brown
-uniform vec3 sand_col = vec3(0.34, 0.30, 0.20);      // muted coast, doesn't glow
+// PAPER look: every surface is flat matte cardstock. No tile texture, no grass
+// detail — just clean saturated colour with a soft bevel + a lighter ribbon where
+// two regions meet, exactly like simple_target.png.
+uniform vec3 paper_neutral = vec3(0.21, 0.37, 0.10);  // unclaimed wilderness = flat saturated paper green; tuned so the lit open field lands on the target's (158,192,76)
+uniform vec3 sand_col = vec3(0.80, 0.82, 0.74);       // soft pale rim before the table/water
 uniform float bump_amp = 0.045;
 uniform float plateau = 0.115;                // claimed land rises into thicker toy-board plates
 
@@ -61,83 +55,47 @@ void fragment(){
 	float claimed = here.a;
 	int idx = int(floor(here.r * 255.0 + 0.5));
 	bool is_claimed = claimed > 0.5;
-	float m = vnoise(v_world.xz * 0.62);
 	vec2 cuv = fract(uv * grid_size);
 
-	// seam: a dark rim where a neighbour has a different owner → every plate (and
-	// the wilderness next to it) reads as a raised, AO'd toy-board tile.
-	float seam = 0.0;
-	seam += float(texture(own, uv + vec2(px.x, 0)).r != here.r);
-	seam += float(texture(own, uv - vec2(px.x, 0)).r != here.r);
-	seam += float(texture(own, uv + vec2(0, px.y)).r != here.r);
-	seam += float(texture(own, uv - vec2(0, px.y)).r != here.r);
-	float seam_ao = mix(1.0, 0.86, clamp(seam, 0.0, 1.0));   // softer plate gap; TIER 1 adds the crisp light border
+	// border: where a neighbour cell has a DIFFERENT owner. In the target this reads
+	// as a clean LIGHTER ribbon (not a dark AO gap), so two regions separate crisply.
+	float border = 0.0;
+	border += float(texture(own, uv + vec2(px.x, 0)).r != here.r);
+	border += float(texture(own, uv - vec2(px.x, 0)).r != here.r);
+	border += float(texture(own, uv + vec2(0, px.y)).r != here.r);
+	border += float(texture(own, uv - vec2(0, px.y)).r != here.r);
+	float rim = clamp(border, 0.0, 1.0);
 
-	// per-cell bevel normal (claimed plates only)
+	// per-cell bevel normal (claimed plates only) — the soft paper-board edge
 	vec2 fc = abs(cuv - 0.5);
 	vec2 tilt = vec2(smoothstep(0.35, 0.5, fc.x), smoothstep(0.35, 0.5, fc.y));
 	vec2 sgn = sign(cuv - 0.5);
 	vec3 nrm = normalize(vec3(tilt.x * sgn.x * 0.18 * claimed, 1.0, tilt.y * sgn.y * 0.18 * claimed));
 	NORMAL = normalize((VIEW_MATRIX * vec4(nrm, 0.0)).xyz);
 
-	// sandy coast rim around the whole continent before the water
+	// pale rim around the whole continent before the table/water
 	float edge = min(min(uv.x, 1.0 - uv.x) * grid_size.x, min(uv.y, 1.0 - uv.y) * grid_size.y);
 	float coast = smoothstep(0.0, 3.0, edge);
 
+	vec3 base;
 	if (is_claimed) {
-		// Keep the plate's colour RICH. Same-hue sheen, never white.
-		vec3 base = kcolors[idx] * seam_ao;
-		base = mix(sand_col, base, coast);
-		vec2 gloss_uv = cuv - vec2(0.34, 0.22);
-		float view_gloss = pow(clamp(1.0 - length(gloss_uv) * 2.4, 0.0, 1.0), 3.0);
-		ALBEDO = base * 0.96 + base * 0.08 * view_gloss;
-		ROUGHNESS = 0.62;
-		SPECULAR = 0.06;
+		// Flat saturated paper plate. A lighter ribbon of the SAME hue marks the
+		// boundary with any neighbour of a different owner.
+		base = kcolors[idx];
+		base = mix(base, mix(kcolors[idx], vec3(1.0), 0.55), rim * 0.7);
 	} else {
-		// Tiled wilderness: the AUTHORED painted tiles (tiles.png), shown with their
-		// REAL colour — lush grass with the occasional flower, plus rare dirt patches.
-		// One tile per cell; a per-cell 90° rotation + variant hash breaks the grid
-		// repetition so it reads as a continuous meadow, not a stamped checkerboard.
-		vec2 cell_id = floor(uv * grid_size);
-		vec2 tuv = fract(uv * grid_size);
-		// rotate the tile 0/90/180/270 deg per cell (kills the "same flower every cell" look)
-		int rot = int(floor(hash(cell_id + 5.1) * 4.0));
-		vec2 rc = tuv - 0.5;
-		if (rot == 1) rc = vec2(-rc.y, rc.x);
-		else if (rot == 2) rc = -rc;
-		else if (rot == 3) rc = vec2(rc.y, -rc.x);
-		tuv = rc + 0.5;
-		float gh = hash(cell_id + 0.37);
-		float soil = smoothstep(0.74, 0.84, vnoise(v_world.xz * 0.5 + 19.0));  // rare dirt clumps (~10-15%)
-		bool is_soil = soil > 0.5;
-		// layers 0-3 = grass variants (tiles.png bottom row), layer 4 = dirt (middle row)
-		float layer = is_soil ? 4.0 : floor(gh * 4.0);
-		vec3 t = texture(terrain_tex, vec3(tuv, layer)).rgb;
-		vec3 g;
-		if (is_soil) {
-			// the raw dirt tile is too orange → salmon under the grade; pull it to an
-			// earthy brown while keeping the pebble detail.
-			g = vec3(t.r * 0.58, t.g * 0.70, t.b * 0.85);
-		} else {
-			// tiles.png grass is chartreuse (blue≈0) → neon under the grade. Remap to a
-			// rich, natural grass green, deriving the missing blue from the green channel,
-			// while KEEPING the painted detail (tufts read as lighter patches).
-			// low blue (t.g*0.18) keeps it a rich grass green, not a pale mint.
-			vec3 green = vec3(t.r * 0.42, t.g * 0.68, t.g * 0.18);
-			// flowers/highlights are bright + actually have blue → keep them as light
-			// specks instead of flattening them to green (preserves the tile's charm).
-			float flower = smoothstep(0.30, 0.55, t.b);
-			g = mix(green, t * 0.9, flower);
-		}
-		// subtle large-scale brightness variation so the open field has gentle tonal movement
-		float sn = vnoise(v_world.xz * 0.30 + 7.0);
-		g *= (0.93 + sn * 0.09);                          // gentle tonal drift only; flatter, cleaner meadow
-		g *= seam_ao;                                     // gap shadow next to a plate
-		g = mix(sand_col, g, coast);                      // sandy coast
-		ALBEDO = g;
-		ROUGHNESS = 0.88;
-		SPECULAR = 0.10;
+		// Unclaimed wilderness: flat matte paper green with the faintest tonal drift
+		// so a large open field isn't a single dead flat colour.
+		float sn = vnoise(v_world.xz * 0.22 + 7.0);
+		base = paper_neutral * (0.97 + sn * 0.05);
+		// soft pale rim against any claimed neighbour (the target's light divider)
+		base = mix(base, mix(paper_neutral, vec3(1.0), 0.4), rim * 0.5);
 	}
+	base = mix(sand_col, base, coast);                // pale coast/table rim
+	// Matte cardstock everywhere: no sheen, no specular highlight.
+	ALBEDO = base;
+	ROUGHNESS = 0.95;
+	SPECULAR = 0.02;
 }
 """
 
@@ -179,7 +137,6 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	mat.set_shader_parameter("own_l", _tex)
 	mat.set_shader_parameter("grid_size", Vector2(_w, _h))
 	mat.set_shader_parameter("bump_amp", BUMP)
-	mat.set_shader_parameter("terrain_tex", _build_terrain_array())
 	# Kingdom tiles use the exact same base colour as castle roofs.
 	var pal := PackedVector3Array()
 	pal.resize(8)

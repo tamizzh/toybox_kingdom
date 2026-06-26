@@ -186,9 +186,9 @@ func rebuild() -> void:
 			var kind: int = (((cx * 49157) ^ (cy * 98317)) & 0x7fffffff) % TREE_KINDS.size()
 			tree_buckets[kind].append(_xform(cx, cy, bucket, 0.58))
 			tree_total += 1
-		elif bucket < tree_thresh + 10 and rocks.size() < rock_cap:
+		elif bucket < tree_thresh + 3 and rocks.size() < rock_cap:
 			rocks.append(_xform(cx, cy, bucket, 1.0))
-		elif bucket < tree_thresh + 20 and bushes.size() < bush_cap:
+		elif bucket < tree_thresh + 10 and bushes.size() < bush_cap:
 			bushes.append(_xform(cx, cy, bucket, 1.08))
 	# ── Forest apron: scatter onto the off-grid ring framing the board ──────────
 	# Dense at the board edge, thinning out with distance; the fog swallows the
