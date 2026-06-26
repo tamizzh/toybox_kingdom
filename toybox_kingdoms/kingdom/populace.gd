@@ -161,7 +161,7 @@ func _spawn_for(i: int, now: float) -> float:
 
 # Town thickens with the castle tier: an Outpost is a sparse cluster, a Capital is
 # crowded. Towers (the studded keep skyline) only appear once a kingdom is a Town (T3).
-const TIER_DENSITY := {1: 0.62, 2: 0.85, 3: 1.0, 4: 1.18}
+const TIER_DENSITY := {1: 0.62, 2: 0.85, 3: 1.0, 4: 1.18, 5: 1.38, 6: 1.55}
 const TOWER_MIN_TIER := 3
 
 func rebuild(tiers: Dictionary = {}) -> void:

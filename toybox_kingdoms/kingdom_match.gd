@@ -321,24 +321,22 @@ func _spawn_kingdom(i: int) -> void:
 	_kid_to_agent[kid] = a
 
 func _castle_tier(n: int) -> int:
-	# Higher thresholds so the castle levels gradually over a match, not instantly.
-	if n < 300:
-		return 1
-	elif n < 800:
-		return 2
-	elif n < 1800:
-		return 3
-	return 4
+	# Six levels — kingdoms level up gradually over the 5-minute match.
+	# Thresholds are tuned so T4 (the iconic castle) arrives at mid-game and
+	# T6 (Capital) is only reached by truly dominant kingdoms.
+	if n < 200:   return 1   # Watchtower
+	elif n < 500:  return 2   # Twin Towers
+	elif n < 1000: return 3   # Keep
+	elif n < 1800: return 4   # Castle
+	elif n < 2800: return 5   # Fortress
+	return 6                  # Capital
 
-# Half-width (disc radius, in cells) of a castle's footprint at a given tier. The GLB
-# spans ±1.63 model units (corner-tower outer edge) and is drawn at scale 0.86+tier*0.12
-# (see castle.gd), so this is the real ground the castle covers. A conqueror must own
-# every cell in this disc before the castle falls — the bigger it has grown, the more
-# territory they must engulf. ceil() so the whole model is always enclosed.
-const CASTLE_HALF_SPAN := 1.63
+# Per-tier half-span: outer edge of the castle model in Godot world units.
+# A conqueror must own every cell within this radius before the castle can fall.
+const CASTLE_HALF_SPANS := [0.44, 1.09, 1.38, 1.62, 1.88, 2.21]
 func _castle_radius(tier: int) -> int:
-	var scale := 0.86 + float(tier) * 0.12
-	return int(ceil(CASTLE_HALF_SPAN * scale / CELL))
+	var span: float = CASTLE_HALF_SPANS[clampi(tier - 1, 0, CASTLE_HALF_SPANS.size() - 1)]
+	return int(ceil(span / CELL))
 
 # Render the 3D board at a fraction of the screen resolution on phones and upscale
 # it — the blocky toybox art still reads cleanly while we reclaim a lot of fragment
@@ -1409,7 +1407,7 @@ func _buy_building(kind: String, cost: int) -> void:
 	var fx := ""
 	match kind:
 		"castle":
-			_castle_floor = mini(_castle_floor + 1, 4)
+			_castle_floor = mini(_castle_floor + 1, 6)
 			for c in _rulers[0].castles:
 				if c["node"] != null:
 					c["node"].update_tier(maxi(c["node"].tier, _castle_floor))

@@ -32,8 +32,8 @@ const CELL := 0.6
 const ROAD_Y := 0.006
 
 # Tile scale as fraction of CELL — the thin gap between tiles reads as grout
-const ROAD_TILE  := 0.84   # path cells
-const PLAZA_TILE := 0.92   # castle plaza cells
+const ROAD_TILE  := 1.0   # path cells — flush, no gap
+const PLAZA_TILE := 1.0   # castle plaza cells — flush
 
 # Square radius of cells around the castle that form the plaza
 const PLAZA_R := 2
@@ -54,7 +54,7 @@ var decor_ref             # Decor node
 # ── State ─────────────────────────────────────────────────────────────────
 var _homes:  Dictionary = {}   # kid → Vector2i
 var _meshes: Dictionary = {}   # kid → MeshInstance3D
-var _mats:   Array      = []   # [dirt_mat, sand_mat] StandardMaterial3D
+var _mats:   Dictionary = {}   # kid → StandardMaterial3D (lazy, per-kingdom tile_color)
 var _last_tier:  Dictionary = {}
 var _last_count: Dictionary = {}
 
@@ -76,7 +76,6 @@ class Conn:
 func setup(p_grid, p_homes: Dictionary) -> void:
 	grid  = p_grid
 	_homes = p_homes
-	_build_materials()
 
 # ── Public API ────────────────────────────────────────────────────────────
 
@@ -132,7 +131,7 @@ func rebuild(kid: int, tier: int, territory_count: int) -> void:
 
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
-	mi.material_override = _pick_mat(tier, pct)
+	mi.material_override = _get_mat(kid)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
 	_meshes[kid] = mi
@@ -142,6 +141,7 @@ func clear_kingdom(kid: int) -> void:
 	if _meshes.has(kid):
 		_meshes[kid].queue_free()
 		_meshes.erase(kid)
+	_mats.erase(kid)
 	_last_tier.erase(kid)
 	_last_count.erase(kid)
 
@@ -351,26 +351,18 @@ func _add_tile(st: SurfaceTool, cell: Vector2i, half: float) -> void:
 
 # ── Materials ─────────────────────────────────────────────────────────────
 
-func _build_materials() -> void:
-	_mats = []
-	# Light sand tile — bright clean path (T1-2, early roads)
-	var dirt := StandardMaterial3D.new()
-	dirt.albedo_texture = load("res://assets/ground_sand_1.png") as Texture2D
-	dirt.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	dirt.shading_mode   = BaseMaterial3D.SHADING_MODE_UNSHADED
-	dirt.cull_mode      = BaseMaterial3D.CULL_DISABLED
-	_mats.append(dirt)
-	# Warm sand tile — slightly richer (T3+, late roads / plaza)
-	var sand := StandardMaterial3D.new()
-	sand.albedo_texture = load("res://assets/ground_sand_0.png") as Texture2D
-	sand.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	sand.shading_mode   = BaseMaterial3D.SHADING_MODE_UNSHADED
-	sand.cull_mode      = BaseMaterial3D.CULL_DISABLED
-	_mats.append(sand)
-
-func _pick_mat(tier: int, pct: float) -> StandardMaterial3D:
-	if pct >= 0.50 or tier >= 3: return _mats[1]   # sand roads
-	return _mats[0]                                  # dirt roads
+# Returns (and caches) the kingdom-coloured tile material for kid.
+# tile_color_0..7 match kingdom ids 1..8 — same palette as territory tiles.
+func _get_mat(_kid: int) -> StandardMaterial3D:
+	if _mats.has(0):
+		return _mats[0]
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = load("res://assets/tile_foam.png") as Texture2D
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	mat.shading_mode   = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode      = BaseMaterial3D.CULL_DISABLED
+	_mats[0] = mat
+	return mat
 
 # ── Progression ───────────────────────────────────────────────────────────
 
