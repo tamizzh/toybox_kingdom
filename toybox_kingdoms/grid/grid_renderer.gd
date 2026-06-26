@@ -25,21 +25,17 @@ const G_LITE := Color("5c9a3c")
 const TRAIL_SHADER := """
 shader_type spatial;
 render_mode cull_back;
+vec3 to_lin(vec3 c){
+	return mix(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, step(c, vec3(0.04045)));
+}
 void fragment() {
-	vec3 c = COLOR.rgb;
-	// FACES use the exact territory-tile albedo (territory_ground.gd) so the trail
-	// reads as the SAME colour as the kingdom's plate. The glow lives only on the
-	// silhouette as a same-hue fresnel rim halo — so it glows without the face
-	// brightening/desaturating away from the plate colour.
-	ALBEDO = c * 0.96;
-	ROUGHNESS = 0.62;
-	SPECULAR = 0.06;
-	// Strong SAME-HUE glow: a gentle whole-block lift + a wide, punchy fresnel rim
-	// halo. Same-hue + face near plate level → it glows HARD while staying the
-	// kingdom colour instead of blooming out to white.
+	vec3 lin = to_lin(COLOR.rgb);   // sRGB->linear: matches wall + roof tone exactly
+	ALBEDO = lin;
+	ROUGHNESS = 0.8;
+	SPECULAR = 0.5;
 	float ndv = clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0);
 	float rim = pow(1.0 - ndv, 1.8);
-	EMISSION = c * (0.25 + rim * 1.9);
+	EMISSION = lin * (0.55 + rim * 2.8);
 }
 """
 
@@ -295,4 +291,4 @@ func update_trails(ids: Array) -> void:
 			Basis().scaled(Vector3(cell * 0.62, TRAIL_H, cell * 0.62)),
 			_c2w(cx, cy, TRAIL_H * 0.5)))
 		var col: Color = colors.get(id, Color.WHITE)
-		mm.set_instance_color(k, col)   # full saturation; the shader adds a soft glow
+		mm.set_instance_color(k, col)   # raw kingdom colour; shader converts sRGB->linear to match roofs

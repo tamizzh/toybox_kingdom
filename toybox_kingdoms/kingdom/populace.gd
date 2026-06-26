@@ -28,7 +28,7 @@ const POP_DUR := 0.30        # seconds for a freshly-claimed building to pop up
 const CORE_R := 9
 const MID_R := 20
 const HOUSE_CAP := 1000      # instance caps (one draw call each, but keep tris sane)
-const CIT_CAP := 1800
+const CIT_CAP := 600
 const TOWER_CAP := 360       # sparse kingdom towers give the target's studded skyline
 
 # One shader for every town prop: a pop-in scale from custom-data .r (spawn time),
@@ -105,8 +105,8 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> 
 	# Glossier roof (rough 0.8) + sRGB->linear conversion matches windmill cap finish.
 	_roof = _batch(roof_mesh, 0.0, false, 0.8, 0.5, 1.0)
 	var cit_mesh := SphereMesh.new()    # cute low-poly blob citizen (mobile-cheap)
-	cit_mesh.radius = 0.24
-	cit_mesh.height = 0.40
+	cit_mesh.radius = 0.15
+	cit_mesh.height = 0.26
 	cit_mesh.radial_segments = 7
 	cit_mesh.rings = 4
 	_cit = _batch(cit_mesh, 0.05)       # citizens bob
@@ -215,11 +215,11 @@ func rebuild(tiers: Dictionary = {}) -> void:
 		var house_thr: int
 		var cit_thr: int
 		if d <= CORE_R:
-			house_thr = 66; cit_thr = 340        # dense village core
+			house_thr = 55; cit_thr = 120        # dense village core
 		elif d <= MID_R:
-			house_thr = 32; cit_thr = 180
+			house_thr = 25; cit_thr = 65
 		else:
-			house_thr = 9; cit_thr = 56          # sparse outskirts
+			house_thr = 7; cit_thr = 22          # sparse outskirts
 		# Town crowds up as the kingdom levels (Outpost sparse → Capital busy).
 		house_thr = int(house_thr * dens)
 		cit_thr = int(cit_thr * dens)
@@ -231,7 +231,12 @@ func rebuild(tiers: Dictionary = {}) -> void:
 				house_col.append(col)
 				house_spawn.append(_spawn_for(i, now))
 		elif cit_pos.size() < cit_cap:
-			cit_pos.append(base)
+			# Stagger: offset X/Z within the cell using stable per-cell hashes so
+			# citizens don't land on a uniform grid. Max ±35% of a cell in each axis.
+			var jx: float = (((i * 374761393 + 6271) & 0x7fffffff) % 1000) / 1000.0 - 0.5
+			var jz: float = (((i * 1664525 + 1013904223) & 0x7fffffff) % 1000) / 1000.0 - 0.5
+			var jpos := base + Vector3(jx * cell * 0.7, 0.0, jz * cell * 0.7)
+			cit_pos.append(jpos)
 			cit_col.append(col)
 			cit_spawn.append(_spawn_for(i, now))
 
