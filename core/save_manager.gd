@@ -142,28 +142,29 @@ func set_mode(m: String) -> void:
 func mode() -> String:
 	return _pending_mode
 
-# ── transient endless-run state (a RUN = a chain of islands) ──────────────────────
-# Not persisted: lives in memory across the scene reloads that carry the player from
-# one island to the next. Reset when a fresh run starts (menu ENDLESS / Play Again).
-var _er_island := 0       # 0-based index of the island currently being played
-var _er_score := 0        # score banked from islands already CLEARED this run
+# ── endless run state (a RUN = a chain of islands) ────────────────────────────────
+# The current ISLAND is PERSISTED (progress/endless_island) so the player resumes from
+# the last island they reached across sessions and runs — they never restart at island 1.
+# The run SCORE is transient (per-run; reset when a fresh run starts).
+var _er_score := 0
 
 func endless_island() -> int:
-	return _er_island
+	return int(_cfg.get_value("progress", "endless_island", 0))
 
 func endless_run_score() -> int:
 	return _er_score
 
+# A fresh run resets only the run score — the saved island is kept so the player resumes.
 func endless_run_reset() -> void:
-	_er_island = 0
 	_er_score = 0
 
-# Bank one island's result. On a clear we add its score AND advance to the next island;
-# on a failed island we only add the partial score (the run is ending).
+# Bank one island's result. On a CLEAR, add its score and PERSIST the advance to the next
+# island; on a failed island, only add the partial score (the run is ending).
 func endless_run_bank(island_score: int, cleared: bool) -> void:
 	_er_score += island_score
 	if cleared:
-		_er_island += 1
+		_cfg.set_value("progress", "endless_island", endless_island() + 1)
+		_save()
 
 # ── progression: endless best (persistent across runs) ─────────────────────────────
 func endless_best() -> int:
