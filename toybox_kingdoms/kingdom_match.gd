@@ -730,24 +730,37 @@ func _decline_continue() -> void:
 	_continue_pending = false
 	_end_match(false, "conquered")
 
-# Rise again: a fresh home blob + castle where the player fell, score/run preserved.
+# Rise again. Two cases:
+#  • POPPED but kingdom intact (still has castles) → just respawn at a castle, keep
+#    everything (the common single-life case).
+#  • ELIMINATED (no castles left) → a fresh home blob + castle where they fell.
+# Score/run is preserved either way.
 func _revive_human() -> void:
 	var human = _rulers[0]
-	var cell := _w2c(human.avatar.global_position)
-	cell.x = clampi(cell.x, HOME_R, GW - 1 - HOME_R)
-	cell.y = clampi(cell.y, HOME_R, GH - 1 - HOME_R)
-	grid.seed_kingdom(human.kid, cell.x, cell.y, HOME_R)
 	human.eliminated = false
 	human.alive = true
-	human.home = cell
-	var castle = Castle.new()
-	add_child(castle)
-	castle.position = _c2w(cell.x, cell.y, CLAIMED_LIFT)
-	castle.set_color(_kid_color[human.kid])
-	castle.update_tier(_castle_tier(grid.territory_count(human.kid)))
-	human.castle = castle
-	human.castles = [{"cell": cell, "node": castle}]
-	var spawn := Vector2i(mini(cell.x + 4, GW - 1), cell.y)
+	var spawn: Vector2i
+	if human.castles.is_empty():
+		# Eliminated: re-seed a fresh blob + castle where the player fell.
+		var cell := _w2c(human.avatar.global_position)
+		cell.x = clampi(cell.x, HOME_R, GW - 1 - HOME_R)
+		cell.y = clampi(cell.y, HOME_R, GH - 1 - HOME_R)
+		grid.seed_kingdom(human.kid, cell.x, cell.y, HOME_R)
+		human.home = cell
+		var castle = Castle.new()
+		add_child(castle)
+		castle.position = _c2w(cell.x, cell.y, CLAIMED_LIFT)
+		castle.set_color(_kid_color[human.kid])
+		castle.update_tier(_castle_tier(grid.territory_count(human.kid)))
+		human.castle = castle
+		human.castles = [{"cell": cell, "node": castle}]
+		if human.name_tag:
+			human.name_tag.visible = true
+			human.name_tag.position = _c2w(cell.x, cell.y, 0.0) + Vector3(0, 4.4, 0)
+		spawn = Vector2i(mini(cell.x + 4, GW - 1), cell.y)
+	else:
+		# Popped: kingdom intact — respawn at the nearest castle.
+		spawn = human.castles[0]["cell"]
 	human.avatar.visible = true
 	human.avatar.revive(_c2w(spawn.x, spawn.y, 0.0))
 	human.avatar.set_body_scale(KING_SCALE)
@@ -755,10 +768,7 @@ func _revive_human() -> void:
 	human.avatar.collision_mask = 0
 	human.avatar.auto_input = true
 	human.last_cell = spawn
-	if human.name_tag:
-		human.name_tag.visible = true
-		human.name_tag.position = _c2w(cell.x, cell.y, 0.0) + Vector3(0, 4.4, 0)
-	_ring(_c2w(cell.x, cell.y, 0.0), _kid_color[human.kid])
+	_ring(_c2w(spawn.x, spawn.y, 0.0), _kid_color[human.kid])
 	if is_instance_valid(camera):
 		camera.shake(0.2)
 	AudioManager.play("round_win")
@@ -1064,6 +1074,7 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	match reason:
 		"conquest": sub = "You conquered every rival kingdom!"
 		"conquered": sub = "Your kingdom was wiped off the map."
+		"popped": sub = "You got popped!  Don't let rivals cut your trail."
 		"timeout":
 			if win:
 				sub = "Time's up — you ruled %.0f%% of the toybox!" % (pct * 100.0)
@@ -1237,11 +1248,23 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 					_fx.burst(_c2w(ctr.x, ctr.y, 0.0), _kid_color[a.kid])
 					_pop_coins_chip()
 
+# Endless/timed (PLAY) is SINGLE-LIFE: getting popped ends the run. Campaign keeps the
+# forgiving castle-respawn (handled in _respawn below).
+func _is_single_life() -> bool:
+	return _mode in ["endless", "timed"]
+
 func _kill(a) -> void:
 	a.alive = false
 	a.respawn_t = RESPAWN_TIME
 	if a.avatar:
 		a.avatar.set_dead()
+	# Single-life: the human dying ends the run → offer a rewarded-ad revive (kingdom
+	# stays intact on a revive, since a pop doesn't take castles). Cap then game over.
+	if a == _rulers[0] and _is_single_life() and not _continue_pending and not _ended:
+		if _continues_used < MAX_CONTINUES:
+			_offer_continue()
+		else:
+			_end_match(false, "popped")
 
 func _respawn(a) -> void:
 	# No castles left -> elimination is handled in _check_conquests.
