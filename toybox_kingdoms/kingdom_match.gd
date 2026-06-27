@@ -84,6 +84,7 @@ var _rulers: Array = []         # Array[RulerAgent]
 var _kid_to_agent := {}
 var _kids: Array = []
 var _kid_color := {}
+var _kid_label := {}        # colour-matched HUD/leaderboard name ("Your Kingdom" for the human)
 var _kid_name := {}
 var _kid_tier := {}        # kid -> castle tier (1..4); gates which decorations unlock
 var _minimap
@@ -220,9 +221,8 @@ func _ready() -> void:
 
 	# colors first so the renderer can draw every kingdom
 	for i in _n_kingdoms:
-		var kid := i + 1
-		_kids.append(kid)
-		_kid_color[kid] = _kingdom_color(i, _n_kingdoms)
+		_kids.append(i + 1)
+	_assign_kingdom_colors()
 
 	renderer = GridRenderer.new()
 	add_child(renderer)
@@ -1190,6 +1190,27 @@ const KINGDOM_LABELS := [
 func _kingdom_color(i: int, n: int) -> Color:
 	return KINGDOM_COLORS[i % KINGDOM_COLORS.size()]
 
+# Assign every kingdom's colour AND its display name together. The HUMAN (kid 1) wears
+# their selected cosmetic king colour — so equipping a skin actually recolours their
+# king, ground ring and territory — and is labelled "Your Kingdom". Rivals take the
+# hardcoded palette colours MOST distinct from the player's (so nothing clashes), each
+# keeping the colour-matched name so "Red Empire" is always actually red, etc.
+func _assign_kingdom_colors() -> void:
+	var human_col: Color = Cosmetics.king_color(SaveManager.selected_pack())
+	_kid_color[1] = human_col
+	_kid_label[1] = "Your Kingdom"
+	var pairs: Array = []
+	for i in KINGDOM_COLORS.size():
+		pairs.append({"col": KINGDOM_COLORS[i], "label": KINGDOM_LABELS[i]})
+	pairs.sort_custom(func(a, b): return _col_dist(a.col, human_col) > _col_dist(b.col, human_col))
+	for i in range(1, _n_kingdoms):          # rivals: i = 1.._n-1 → kid = i + 1
+		var p: Dictionary = pairs[(i - 1) % pairs.size()]
+		_kid_color[i + 1] = p.col
+		_kid_label[i + 1] = p.label
+
+func _col_dist(a: Color, b: Color) -> float:
+	return absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)
+
 # ── world dressing ────────────────────────────────────────────────────────────
 # Camera framing presets (player setting). "hero" = cinematic 3/4 diorama;
 # "map" = steep, near-top-down long lens → the flat paper-map read of simple_target.png.
@@ -1750,7 +1771,8 @@ func _apply_human_speed() -> void:
 	_rulers[0].avatar.speed = minf(HUMAN_SPEED + float(_barracks) * BARRACKS_SPEED, SPEED_CAP)
 
 func _display_kingdom_name(kid: int) -> String:
-	return KINGDOM_LABELS[(kid - 1) % KINGDOM_LABELS.size()]
+	# Colour-matched names assigned in _assign_kingdom_colors ("Your Kingdom" for the human).
+	return _kid_label.get(kid, KINGDOM_LABELS[(kid - 1) % KINGDOM_LABELS.size()])
 
 func _population_estimate(owned: int) -> int:
 	return maxi(12, int(float(owned) * 0.55) + _farms * 8 + _barracks * 14)
