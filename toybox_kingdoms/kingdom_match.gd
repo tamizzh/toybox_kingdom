@@ -733,7 +733,8 @@ func _decline_continue() -> void:
 # Rise again. Two cases:
 #  • POPPED but kingdom intact (still has castles) → just respawn at a castle, keep
 #    everything (the common single-life case).
-#  • ELIMINATED (no castles left) → a fresh home blob + castle where they fell.
+#  • ELIMINATED (keep conquered) → RECLAIM your keep at home: take the castle back
+#    (same node, your colour) and re-seed its region, so the castle is back where it was.
 # Score/run is preserved either way.
 func _revive_human() -> void:
 	var human = _rulers[0]
@@ -741,17 +742,34 @@ func _revive_human() -> void:
 	human.alive = true
 	var spawn: Vector2i
 	if human.castles.is_empty():
-		# Eliminated: re-seed a fresh blob + castle where the player fell.
-		var cell := _w2c(human.avatar.global_position)
+		var cell: Vector2i = human.home
 		cell.x = clampi(cell.x, HOME_R, GW - 1 - HOME_R)
 		cell.y = clampi(cell.y, HOME_R, GH - 1 - HOME_R)
+		# Find the conqueror's keep sitting on our home cell and detach it from them.
+		var reclaimed = null
+		for a in _rulers:
+			if a == human:
+				continue
+			for c in a.castles:
+				if c["cell"] == cell:
+					reclaimed = c
+					a.castles.erase(c)
+					break
+			if reclaimed != null:
+				break
+		var castle
+		if reclaimed != null and reclaimed["node"] != null:
+			castle = reclaimed["node"]      # same keep, given back to you
+			castle.set_color(_kid_color[human.kid])
+			castle._pop()
+		else:
+			castle = Castle.new()
+			add_child(castle)
+			castle.position = _c2w(cell.x, cell.y, CLAIMED_LIFT)
+			castle.set_color(_kid_color[human.kid])
 		grid.seed_kingdom(human.kid, cell.x, cell.y, HOME_R)
-		human.home = cell
-		var castle = Castle.new()
-		add_child(castle)
-		castle.position = _c2w(cell.x, cell.y, CLAIMED_LIFT)
-		castle.set_color(_kid_color[human.kid])
 		castle.update_tier(_castle_tier(grid.territory_count(human.kid)))
+		human.home = cell
 		human.castle = castle
 		human.castles = [{"cell": cell, "node": castle}]
 		if human.name_tag:
@@ -1068,7 +1086,7 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	vb.add_theme_constant_override("separation", 10)
 	panel.add_child(vb)
 
-	_result_label(vb, "VICTORY!" if win else "DEFEATED", 64,
+	_result_label(vb, "VICTORY!" if win else "DEFEAT!", 64,
 		Palette.WARN if win else Palette.DANGER)
 	var sub := ""
 	match reason:
