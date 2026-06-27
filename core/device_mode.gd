@@ -43,8 +43,8 @@ func _apply_window() -> void:
 	# in lock-step with the monitor refresh, so a frame is never torn mid-scanout.
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 
-	# Desktop: project.godot window/size/mode=2 already starts maximized; no
-	# code needed. Mobile fullscreen is set here because the export templates
+	# Desktop: project.godot window/size/mode=0 opens a 1560x720 windowed box.
+	# Mobile fullscreen is forced here because the export templates
 	# handle the window differently on Android/iOS.
 	if is_mobile:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)

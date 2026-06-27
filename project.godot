@@ -35,7 +35,7 @@ GameManager="*res://core/game_manager.gd"
 
 window/size/viewport_width=1560
 window/size/viewport_height=720
-window/size/mode=3
+window/size/mode=0
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/handheld/orientation="landscape"
