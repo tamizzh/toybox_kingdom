@@ -776,11 +776,13 @@ func _end_match(win: bool, reason: String) -> void:
 # next island" card wipes the screen and we reload — _ready reads the advanced island
 # index, builds the next island, and fades IN from the same cover (see _endless_intro).
 func _endless_clear_transition() -> void:
-	if _rulers[0].castles.size() > 0 and is_instance_valid(camera):
+	# Camera rises up and away from the cleared island (with a fireworks send-off),
+	# then the navy card wipes in over the receding board and we reload.
+	if is_instance_valid(camera):
+		camera.pull_out(1.3)
+	if _rulers[0].castles.size() > 0:
 		var cap_cell: Vector2i = _rulers[0].castles[0]["cell"]
-		var focus := _c2w(cap_cell.x, cap_cell.y, 0.0)
-		camera.start_victory_orbit(focus)
-		_victory_fireworks(focus, _kid_color[_rulers[0].kid])
+		_victory_fireworks(_c2w(cap_cell.x, cap_cell.y, 0.0), _kid_color[_rulers[0].kid])
 
 	# Build the transition card over a high layer (above all HUD), starting transparent.
 	var layer := CanvasLayer.new()
@@ -804,12 +806,12 @@ func _endless_clear_transition() -> void:
 	_result_label(box, "⛵  Sailing to Island %d" % (_endless_island + 2), 30, Color.WHITE)
 	_result_label(box, "Score  %s" % _comma(SaveManager.endless_run_score()), 30, Palette.WARN)
 
-	# Let the orbit/fireworks read for a beat, then wipe in and reload.
-	await get_tree().create_timer(0.9).timeout
+	# Let the pull-out read for a beat, then wipe the card in over the receding board.
+	await get_tree().create_timer(0.7).timeout
 	if not is_inside_tree():
 		return
-	root.create_tween().tween_property(root, "modulate:a", 1.0, 0.45)
-	await get_tree().create_timer(0.7).timeout
+	root.create_tween().tween_property(root, "modulate:a", 1.0, 0.5)
+	await get_tree().create_timer(0.6).timeout
 	if not is_inside_tree():
 		return
 	get_tree().reload_current_scene()
@@ -817,6 +819,9 @@ func _endless_clear_transition() -> void:
 # Fade the next island IN from the same deep cover the clear wipe ended on, so the jump
 # between islands reads as one continuous move instead of a hard cut.
 func _endless_intro() -> void:
+	# Camera descends from high above onto the new island as the cover lifts.
+	if is_instance_valid(camera):
+		camera.descend(1.3)
 	var layer := CanvasLayer.new()
 	layer.layer = 80
 	add_child(layer)
@@ -826,8 +831,8 @@ func _endless_intro() -> void:
 	cover.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(cover)
 	var tw := cover.create_tween()
-	tw.tween_interval(0.15)
-	tw.tween_property(cover, "color:a", 0.0, 0.6)
+	tw.tween_interval(0.2)
+	tw.tween_property(cover, "color:a", 0.0, 0.7)
 	tw.tween_callback(layer.queue_free)
 
 # A few staggered firework bursts over the capital during the victory orbit.
@@ -1755,7 +1760,9 @@ func _build_hud_old(ui: CanvasLayer) -> void:
 func _hud_tick(delta: float) -> void:
 	var owned: int = grid.territory_count(_rulers[0].kid)
 	# Gentle, capped zoom-out as the realm grows (much milder than before — tops at 1.3x).
-	camera.zoom = clampf(1.0 + sqrt(float(owned)) / 125.0, 1.0, 1.18)
+	# Skip while an island-transition camera move owns the zoom.
+	if not camera.intro_active():
+		camera.zoom = clampf(1.0 + sqrt(float(owned)) / 125.0, 1.0, 1.18)
 	_income = 20.0 + float(owned) / 120.0 + float(_farms) * 6.0 + float(_barracks) * 2.0
 	_coin_accum += (_income / 60.0) * delta
 	if _coin_accum >= 1.0:

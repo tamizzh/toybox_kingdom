@@ -440,10 +440,12 @@ func _refresh_hook() -> void:
 # centre, forever. Pivot is kept at the layer's centre as it (re)sizes so the zoom
 # never drifts off-frame. `peak` is the max scale, `secs` one half-cycle's duration.
 func _ken_burns(node: Control, peak: float, secs: float) -> void:
-	var recentre := func() -> void: node.pivot_offset = node.size * 0.5
-	node.resized.connect(recentre)
-	# Await layout — size is (0,0) in _ready() so pivot would be wrong, causing a jump.
-	await node.get_tree().process_frame
+	# pivot_offset must be the node's visual centre. node.size is (0,0) in _ready() before
+	# layout, so we read the viewport size instead — it's always correct and never triggers
+	# the layout-resized feedback loop that caused the shake.
+	var recentre := func() -> void:
+		node.pivot_offset = Vector2(node.get_viewport().size) * 0.5
+	node.resized.connect(recentre)  # keeps pivot correct if the window is resized (web)
 	recentre.call()
 	var tw := node.create_tween().set_loops()
 	tw.tween_property(node, "scale", Vector2(peak, peak), secs) \

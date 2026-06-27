@@ -16,6 +16,29 @@ var _zoom_punch := 0.0   # 0..~0.06, snaps the camera in then decays
 var _orbit := false
 var _orbit_focus := Vector3.ZERO
 var _orbit_ang := 0.0
+var _intro := false      # true while a clear/arrive camera move owns the zoom (HUD must not fight it)
+
+# While an island-transition camera move is running, the match should NOT drive `zoom`
+# from territory size — let the move own it.
+func intro_active() -> bool:
+	return _intro
+
+# Rise up and back away from the board as an island is cleared (zoom pulls the hero
+# rig up + back along its angle). Leaves _intro set — the scene reloads right after.
+func pull_out(secs: float = 1.1) -> void:
+	_orbit = false
+	_intro = true
+	var tw := create_tween()
+	tw.tween_property(self, "zoom", 6.0, secs).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
+
+# Descend from high above down into normal framing as a new island opens.
+func descend(secs: float = 1.1) -> void:
+	_orbit = false
+	_intro = true
+	zoom = 6.0
+	var tw := create_tween()
+	tw.tween_property(self, "zoom", 1.0, secs).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	tw.tween_callback(func() -> void: _intro = false)
 
 func _ready() -> void:
 	fov = 46.0
