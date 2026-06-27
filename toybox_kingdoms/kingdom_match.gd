@@ -127,6 +127,12 @@ var _endless_is_best := false
 var _daily_streak := 0          # daily-challenge results display
 var _daily_reward := 0
 var _daily_first := false
+# ── continue-on-death (rewarded-ad revive) ──
+const MAX_CONTINUES := 2        # ad-revives offered per run before it's truly game over
+var _continue_pending := false  # an offer is on screen; the world is frozen
+var _continue_resolved := false # the current offer was answered (watch / give up / timeout)
+var _continues_used := 0
+var _continue_panel: Control
 var _ui_layer: CanvasLayer
 
 var _terr_label: Label
@@ -443,8 +449,8 @@ func _apply_render_scale() -> void:
 	vp.scaling_3d_scale = scale
 
 func _physics_process(delta: float) -> void:
-	if _ended:
-		return
+	if _ended or _continue_pending:
+		return    # frozen while a continue offer is on screen
 	_match_t = maxf(0.0, _match_t - delta)
 	_elapsed += delta
 	_fx_cooldown = maxf(0.0, _fx_cooldown - delta)
@@ -680,6 +686,138 @@ func _eliminate(b, conq) -> void:
 		b.name_tag.visible = false
 	_toast("%s conquered %s!" % [_kid_name[conq.kid], _kid_name[b.kid]], _kid_color[conq.kid])
 
+# ── continue-on-death (rewarded-ad revive) ────────────────────────────────────
+# The human just lost their last castle. Freeze the world and offer a revive: watch a
+# rewarded ad to rise again, or give up to the results screen. Auto-declines after a
+# few seconds of no answer. TBK_AUTOCONTINUE=1 auto-takes it (headless QA).
+func _offer_continue() -> void:
+	_continue_pending = true
+	_continue_resolved = false
+	if _rulers[0].avatar:
+		_rulers[0].avatar.auto_input = false
+	AudioManager.play("eliminate")
+	Analytics.event("continue_offered", {"used": _continues_used, "mode": _mode})
+	_build_continue_panel()
+	if OS.get_environment("TBK_AUTOCONTINUE") == "1":
+		await get_tree().create_timer(0.2).timeout
+		if not _continue_resolved:
+			_take_continue()
+		return
+	await get_tree().create_timer(6.0).timeout
+	if not _continue_resolved and is_inside_tree():
+		_decline_continue()
+
+func _take_continue() -> void:
+	if _continue_resolved:
+		return
+	_continue_resolved = true
+	# Show a rewarded ad; revive only when it pays out (instant on desktop simulation).
+	MonetizationManager.show_rewarded(_on_continue_reward, "revive")
+
+func _on_continue_reward() -> void:
+	_continues_used += 1
+	Analytics.event("continue_taken", {"n": _continues_used, "mode": _mode})
+	_close_continue_panel()
+	_revive_human()
+	_continue_pending = false
+
+func _decline_continue() -> void:
+	if _continue_resolved:
+		return
+	_continue_resolved = true
+	Analytics.event("continue_declined", {"used": _continues_used, "mode": _mode})
+	_close_continue_panel()
+	_continue_pending = false
+	_end_match(false, "conquered")
+
+# Rise again: a fresh home blob + castle where the player fell, score/run preserved.
+func _revive_human() -> void:
+	var human = _rulers[0]
+	var cell := _w2c(human.avatar.global_position)
+	cell.x = clampi(cell.x, HOME_R, GW - 1 - HOME_R)
+	cell.y = clampi(cell.y, HOME_R, GH - 1 - HOME_R)
+	grid.seed_kingdom(human.kid, cell.x, cell.y, HOME_R)
+	human.eliminated = false
+	human.alive = true
+	human.home = cell
+	var castle = Castle.new()
+	add_child(castle)
+	castle.position = _c2w(cell.x, cell.y, CLAIMED_LIFT)
+	castle.set_color(_kid_color[human.kid])
+	castle.update_tier(_castle_tier(grid.territory_count(human.kid)))
+	human.castle = castle
+	human.castles = [{"cell": cell, "node": castle}]
+	var spawn := Vector2i(mini(cell.x + 4, GW - 1), cell.y)
+	human.avatar.visible = true
+	human.avatar.revive(_c2w(spawn.x, spawn.y, 0.0))
+	human.avatar.set_body_scale(KING_SCALE)
+	human.avatar.collision_layer = 0
+	human.avatar.collision_mask = 0
+	human.avatar.auto_input = true
+	human.last_cell = spawn
+	if human.name_tag:
+		human.name_tag.visible = true
+		human.name_tag.position = _c2w(cell.x, cell.y, 0.0) + Vector3(0, 4.4, 0)
+	_ring(_c2w(cell.x, cell.y, 0.0), _kid_color[human.kid])
+	if is_instance_valid(camera):
+		camera.shake(0.2)
+	AudioManager.play("round_win")
+	_toast("Long live the King!", _kid_color[human.kid])
+
+func _build_continue_panel() -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0.03, 0.03, 0.09, 0.0)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_ui_layer.add_child(dim)
+	dim.create_tween().tween_property(dim, "color:a", 0.66, 0.25)
+	_continue_panel = dim
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.add_child(center)
+	var panel := PanelContainer.new()
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color("23203f")
+	st.border_color = Color(Palette.DANGER, 0.9)
+	st.set_border_width_all(4)
+	st.set_corner_radius_all(24)
+	st.set_content_margin_all(28)
+	panel.add_theme_stylebox_override("panel", st)
+	center.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	panel.add_child(vb)
+
+	_result_label(vb, "CONQUERED!", 56, Palette.DANGER)
+	_result_label(vb, "Watch an ad to rise again and continue your run.", 24, Color.WHITE)
+	var sp := Control.new(); sp.custom_minimum_size = Vector2(0, 8); vb.add_child(sp)
+
+	var btns := HBoxContainer.new()
+	btns.alignment = BoxContainer.ALIGNMENT_CENTER
+	btns.add_theme_constant_override("separation", 16)
+	vb.add_child(btns)
+	var watch := _continue_btn("▶  CONTINUE  (Ad)", Palette.SAFE)
+	watch.pressed.connect(_take_continue)
+	btns.add_child(watch)
+	var giveup := _continue_btn("GIVE UP", Palette.NEUTRAL)
+	giveup.pressed.connect(_decline_continue)
+	btns.add_child(giveup)
+
+func _continue_btn(text: String, color: Color) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 28)
+	b.custom_minimum_size = Vector2(280, 70)
+	_style_button(b, color, 16)
+	return b
+
+func _close_continue_panel() -> void:
+	if _continue_panel and is_instance_valid(_continue_panel):
+		_continue_panel.queue_free()
+	_continue_panel = null
+
 func _check_match_end() -> void:
 	var human = _rulers[0]
 	var human_pct: float = float(grid.territory_count(human.kid)) / float(GW * GH)
@@ -688,7 +826,11 @@ func _check_match_end() -> void:
 		if not a.eliminated:
 			alive += 1
 	if human.eliminated:
-		_end_match(false, "conquered")
+		# Killed (all castles lost) → offer a rewarded-ad revive before it's game over.
+		if not _ended and not _continue_pending and _continues_used < MAX_CONTINUES:
+			_offer_continue()
+		else:
+			_end_match(false, "conquered")
 	elif alive == 1:
 		_end_match(true, "conquest")               # win: last kingdom standing → next island
 	elif _match_t <= 0.0 and _mode in ["campaign", "daily"]:
