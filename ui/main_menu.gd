@@ -105,7 +105,6 @@ func _build_background() -> void:
 	photo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	photo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(photo)
-	_ken_burns(photo, 1.035, 9.0)
 
 	# Drifting confetti above the art (below all chrome) for constant gentle motion.
 	var confetti := _Confetti.new()
