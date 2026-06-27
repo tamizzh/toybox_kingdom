@@ -109,11 +109,23 @@ void fragment(){
 	vec2 w = v_world.xz;
 	float t = TIME * 0.04 * speed;
 
+	// Distance OUTSIDE the island rectangle — drives the coast softening below.
+	vec2 d = abs(w) - board_half;
+	float outside = length(max(d, vec2(0.0)));
+
 	// Layered swell → richer deep↔teal banding than a single wave.
 	float swell = sin(w.x * 0.06 + t) * 0.3
 	            + cos(w.y * 0.07 - t * 0.7) * 0.2
 	            + sin((w.x + w.y) * 0.05 + t * 1.3) * 0.15;
 	vec3 col = mix(deep, shallow, clamp(swell + 0.5, 0.0, 1.0));
+
+	// Shallow shore band: lift the water hugging the coast toward a bright turquoise
+	// so it sits CLOSE to the sandy beach instead of a dark navy butting against pale
+	// sand. Without this the unshaded mobile sea shows the straight board silhouette
+	// (desktop hides the same edge with lit specular + a noisy foam crest).
+	vec3 nearshore_col = shallow * 1.35;
+	float nearshore = 1.0 - smoothstep(0.0, 9.0, outside);
+	col = mix(col, nearshore_col, nearshore * 0.6);
 
 	// Fake sun glint without a lighting pass: a soft, broad drifting sheen band. Kept
 	// LOW-frequency on purpose — a tight sparkle pattern aliases into shimmering white
@@ -121,12 +133,15 @@ void fragment(){
 	float sheen = smoothstep(0.45, 1.0, sin(w.x * 0.045 - w.y * 0.05 + t * 0.8));
 	col += glint_col * sheen * 0.16;
 
-	// Trig-wobbled foam ring — animate the shoreline so it isn't a clean box.
-	vec2 d = abs(w) - board_half;
-	float outside = length(max(d, vec2(0.0)));
-	float wobble = sin(w.x * 0.5 + t * 2.0) * cos(w.y * 0.6 - t * 1.5) * 1.1;
-	float shore = 1.0 - smoothstep(0.0, foam_band, outside + wobble);
-	col = mix(col, foam_col, shore * 0.8);
+	// Trig-wobbled foam ring — animate the shoreline so it isn't a clean box. A wider,
+	// two-step falloff feathers the surf line (broad soft base + brighter inner lip),
+	// standing in for the desktop crest so the coast never reads as a hard rectangle.
+	float wobble = sin(w.x * 0.5 + t * 2.0) * cos(w.y * 0.6 - t * 1.5) * 1.1
+	             + sin((w.x + w.y) * 0.33 + t * 1.1) * 0.5;
+	float edge  = outside + wobble;
+	float shore = 1.0 - smoothstep(0.0, foam_band * 1.6, edge);   // broad soft surf
+	float lip   = 1.0 - smoothstep(0.0, foam_band * 0.6, edge);   // brighter inner lip
+	col = mix(col, foam_col, clamp(shore * 0.45 + lip * 0.45, 0.0, 1.0));
 
 	ALBEDO = col;
 }
