@@ -24,14 +24,25 @@ func _ready() -> void:
 	# project), which would wrongly force the mobile/touch UI on a PC.
 	is_mobile = OS.has_feature("mobile")
 
+	# Touch sticks follow the mode: shown on mobile, hidden on a desktop.
+	has_touch = is_mobile
+
+	# Web is special: the HTML5 export reports OS.has_feature("mobile") == false
+	# even inside a phone browser, so the line above would force desktop UI + the
+	# heavy (full-res, lit) render path onto weak mobile-web GPUs. Sniff the
+	# browser instead — a touchscreen / mobile user-agent flips us to the mobile
+	# (touch-first, downscaled) path; a desktop browser stays on desktop.
+	if OS.has_feature("web"):
+		_detect_web()
+
+	# CLI / FORCE_MODE override everything above (manual testing on a PC).
 	var cli := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	if FORCE_MODE == "mobile" or "--mobile" in cli:
 		is_mobile = true
+		has_touch = true
 	elif FORCE_MODE == "desktop" or "--desktop" in cli:
 		is_mobile = false
-
-	# Touch sticks follow the mode: shown on mobile, hidden on a desktop.
-	has_touch = is_mobile
+		has_touch = false
 
 	# Wait one frame so the main window exists before we resize it.
 	_apply_window.call_deferred()
@@ -45,6 +56,21 @@ func _apply_window() -> void:
 
 	# Desktop: project.godot window/size/mode=0 opens a 1560x720 windowed box.
 	# Mobile fullscreen is forced here because the export templates
-	# handle the window differently on Android/iOS.
-	if is_mobile:
+	# handle the window differently on Android/iOS. On web the canvas size is
+	# owned by the host page, so we leave the window alone there.
+	if is_mobile and not OS.has_feature("web"):
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+
+# Browser sniff for the web export: decide touch-first vs desktop from the actual
+# browser. navigator.maxTouchPoints catches touchscreens; the user-agent regex
+# catches phones/tablets (and lets us pick the mobile perf path on them).
+func _detect_web() -> void:
+	var ua := str(JavaScriptBridge.eval("navigator.userAgent || ''", true)).to_lower()
+	var touch_points := int(JavaScriptBridge.eval("navigator.maxTouchPoints || 0", true))
+	var re := RegEx.new()
+	re.compile("android|iphone|ipad|ipod|iemobile|blackberry|opera mini|mobile")
+	var mobile_ua := re.search(ua) != null
+	# iPadOS 13+ reports a desktop UA but has touch points — treat any touchscreen
+	# browser as mobile so it gets the touch controls.
+	is_mobile = mobile_ua or touch_points > 0
+	has_touch = is_mobile
