@@ -1,97 +1,115 @@
-# Party Pals Arena — Local Multiplayer Framework (Godot 4.6)
+# Toybox Kingdoms (Godot 4.6)
 
-A couch-multiplayer (2–4 players, one device) party-game framework with **30 mini-games**
-rendered in **real 3D**. Runs on **PC and Android**, no plugins.
+A fast, cozy **territory-conquest** game with a premium toy-diorama look. Drive your
+Toy King around an island grid, leave a trail, loop back to **claim land**, cut rivals'
+trails to **pop** them, and grow your castle through 6 tiers. Conquer a rival's castle
+(at equal-or-higher tier) to take their kingdom. Built mobile-first (Android/iOS),
+also runs on desktop and web.
 
-Each round is a self-contained 3D mini-game played on a top-down-tilted arena: a
-`Camera3D` + lighting, an XZ-plane floor with walls, and `CharacterBody3D` avatars
-(the tank games swap in `tank.glb`; others use a colored mascot). The HUD,
-countdown and menus stay on a 2D `CanvasLayer` overlay on top of the 3D world.
+Core mechanic is the `.io` carve-and-enclose loop (Paper.io / Splix lineage) layered
+with a castle-siege + light build economy for strategic depth.
 
 ## Run
-Open the project in Godot 4.6 and press **F5**. `main.tscn` is the entry scene.
-The renderer is **Mobile** (Forward+), physics is **Jolt**, orientation is **landscape**.
 
-- **Desktop vs mobile (auto):** `core/device_mode.gd` (autoload `DeviceMode`) detects the
-  platform at startup — **desktop** opens **maximized** (fills the monitor, stays
-  resizable); **mobile** goes **fullscreen**. Read `DeviceMode.is_mobile` /
-  `DeviceMode.has_touch` anywhere you need to branch on device.
-- **Touch (mobile / touchscreen):** every player gets an on-screen joystick + action
-  button in the screen corners. These are **hidden on a keyboard-driven desktop** (no
-  touchscreen) so the play area stays uncluttered.
-- **Keyboard (desktop):** P1 = WASD + Space, P2 = Arrows + Enter.
-- **Match:** random mini-games (no immediate repeat). First player to **5 points** wins.
-- **Display:** the 3D camera auto-frames the arena to fill whatever viewport it gets
-  (desktop, phone landscape, resized window) and re-frames on rotation/resize, so the
-  arena always takes the whole space available without cropping gameplay.
+Open in **Godot 4.6** and press F5 — `ui/main_menu.tscn` is the boot scene.
+Renderer is **Mobile**; web uses **gl_compatibility**; physics is **Jolt**; landscape.
 
-## Architecture
+Headless error check / harness flags (set as env vars):
 
-| Layer | Files |
+| Flag | Effect |
 |---|---|
-| Autoload singletons | `core/input_manager.gd`, `core/score_manager.gd`, `core/game_manager.gd` |
-| Data / base | `core/player_data.gd`, `core/round_timer.gd`, `core/mini_game_registry.gd` |
-| 3D base (current) | `core/mini_game_base_3d.gd` — every mini-game extends this |
-| 3D pieces | `players/avatar3d.gd`, `shared/bullet3d.gd`, `shared/wall_arena3d.gd`, `tank.glb` |
-| Theme / visuals | `theme/palette.gd`, `theme/flat_figure.gd` |
-| UI (2D overlay) | `ui/main_menu`, `ui/hud`, `ui/results_screen`, `ui/touch_controls` (+ `virtual_joystick.gd`, `action_button.gd`) |
-| Root | `main.tscn` + `main.gd` |
-| Mini-games | `minigames/<category>/<name>.gd` (30 total) |
+| `TBK_FASTMATCH=<sec>` | Override match length (short matches for headless testing) |
+| `TBK_ENDLESS=1` | Force the endless island-chain mode |
+| `TBK_DAILY=1` | Force the daily challenge |
+| `TBK_FIRSTMATCH=1` | Force the first-ever-match path (coach + pure-carve HUD) |
+| `TBK_COLDOPEN=1` / `TBK_NO_COLDOPEN=1` | Force / disable cold-open into a match |
+| `TBK_NO_ANALYTICS=1` | Disable the analytics autoload |
+| `TBK_DEBUG=1` | On-screen/perf debug |
 
-> **2D → 3D migration:** the project was originally 2D and has been ported to true 3D.
-> The legacy 2D base (`core/mini_game_base.gd`, `players/`, `shared/bullet.*`,
-> `shared/wall_arena.gd`) is kept during the transition. `GameManager`/`main.gd` are a
-> hybrid launcher — `current_game` is typed `Node` and the round-start fade guards
-> `modulate` with `if game is CanvasItem` — so 2D and 3D mini-games can coexist.
-> See `pending.md` for remaining polish.
+Headless example:
+`godot --headless --path . "res://toybox_kingdoms/kingdom_match.tscn" --quit-after 120`
 
-**Flow:** `MainMenu → (random MiniGame → round results)* → MatchResults → MainMenu`,
-driven by signals from `GameManager`. `main.gd` mounts/swaps screens in `ScreenHost` and
-keeps the HUD + touch overlays persistent.
+## Game modes
 
-Communication is signal-based. Mini-games never touch raw input or scene-switching — they
-read `InputManager.get_move(id)` / `get_action(id)` and report a results dictionary.
+All three reuse one match scene (`toybox_kingdoms/kingdom_match.gd`); a transient
+`SaveManager.mode()` selects behaviour. The menu maps:
 
-## Add a new mini-game (3 steps)
+- **PLAY → endless island chain** (`timed`/`endless`, identical): a **truly untimed**
+  run of escalating islands. Conquer an island (last kingdom standing) → a camera
+  pull-out + "Sailing to the next island" wipe → the next, harder island, score carried
+  over. Losing all your castles ends the run. No clock, no timeout. Score = peak land %
+  + rivals conquered + per-island clear bonus; persistent best is chased.
+- **Conquer Rush → campaign** (`campaign`): a 10-stage ladder
+  (`toybox_kingdoms/data/campaign.gd`), escalating rivals, each a timed match. The
+  button opens the campaign ladder (stages, progress, locks) and shows progress
+  ("· N/10"). In-match a "STAGE N/10 · Title" chip + start toast surface where you are.
+- **Daily challenge** (`daily`, via the menu rewards icon → `ui/daily_screen.gd`): a
+  single **date-seeded** timed run — the same board for everyone that day. First
+  completion pays a streak-scaling coin reward; replays update the day's best only.
 
-1. Create `minigames/<category>/<name>.gd` that `extends MiniGameBase3D`. Override
-   `_setup_round()` and `_compute_results()`, optionally `_game_process(delta)`:
+## Systems
 
-   ```gdscript
-   extends MiniGameBase3D
+### Onboarding & first session
+- **Cold-open**: a never-played install boots straight into its first match (no menu
+  taps). The how-to slideshow is marked seen so the in-match coach teaches instead.
+- **First-match coach**: a guided two-beat banner ("draw a loop" → "loop back home"),
+  dismissed on first claim, plus a **pure-carve HUD** (build economy hidden on match 1)
+  and a slightly larger starting home so the first claim lands fast.
+- Stage-driven match length: first campaign match is short (90s), ramping to 300s.
 
-   func _setup_round() -> void:
-	   win_condition = WinType.LAST_ALIVE             # or HIGH_SCORE / FAST_TIME
-	   add_child(WallArena3D.build(ARENA_HX, ARENA_HZ)) # floor + 4 walls (optional)
-	   spawn_avatars(corner_spawns(2.0))               # XZ-plane, auto-tinted
+### Analytics (`core/analytics.gd`, autoload `Analytics`)
+Backend-agnostic facade modelled on `MonetizationManager`. `Analytics.event(name, params)`
+or typed helpers (`match_start`, `first_capture`, `match_end`, `building_bought`,
+`ad_event`, `iap_event`, `progression`). Stamps each event with a stable player id +
+per-launch session id; buffers + batch-flushes to a collector **once consent is granted**;
+**always logs locally** to `user://analytics_log.jsonl` (the system of record until a
+backend is wired — set `ENDPOINT` to go live). Funnel covers session, match start/end,
+time-to-first-claim, building/ad/iap events, plus `endless_island` / `endless_end` /
+`daily_end`.
 
-   func _game_process(delta: float) -> void:
-	   # read InputManager.get_move(id)/get_action(id); call eliminate(id), etc.
-	   pass
+### Monetization (`core/monetization_manager.gd`, autoload `MonetizationManager`)
+Facade over ads + IAP with GDPR/UMP + ATT consent. Real SDK calls are stubbed
+(`TODO(real-sdk)`) and fall back to safe simulated behaviour so Shop/consent/rewarded
+flows are testable now. Rewarded-ad placements, interstitial frequency cap, and IAP
+(remove-ads + cosmetic packs) are wired through this layer.
 
-   func _compute_results() -> Dictionary:
-	   return survivor_results(3)                      # or award_by_rank([...]) / rank_by_value({...})
-   ```
+### Cosmetics — the coin sink (`theme/cosmetics.gd`, `ui/shop_screen.gd`)
+Earn coins (any mode) → **Shop** → unlock/equip a cosmetic pack with coins (or IAP).
+The equipped pack's **king colour recolours your kingdom in-game** — Toy King, ground
+ring, claimed territory and trail — and you're labelled "Your Kingdom". Default is the
+classic blue; rivals auto-take the most distinct palette colours and keep colour-matched
+names. Packs: Classic (free) / Neon / Pastel / Candy.
 
-   Gameplay lives on the **XZ plane** (2D `x` → 3D `x`, 2D `y` → 3D `z`, jumps → `y`).
-   The shared arena is `ARENA_HX = 12` × `ARENA_HZ = 7` (half-extents, centered on origin).
+### Persistence (`core/save_manager.gd`, autoload `SaveManager`)
+`user://save.cfg`: coins, campaign progress, endless best, daily streak/best, XP/level,
+owned/selected cosmetics, audio, consent, onboarding. Plus transient run state (current
+mode, endless island/score) that survives the scene reloads between islands.
 
-2. (Optional) build extra visuals in code via the base helpers — `spawn_marker()`,
-   `spawn_ball()`, `spawn_disc()` (3D meshes), or `make_label()` / `make_bar()` (2D overlay).
-   No `.tscn` is required — games are instanced from their script.
+## Key files
 
-3. Append one entry to `core/mini_game_registry.gd`:
+| Area | File |
+|---|---|
+| Match (all modes, HUD, results) | `toybox_kingdoms/kingdom_match.gd` |
+| Grid / capture | `toybox_kingdoms/grid/territory_grid.gd` (+ renderer, ground, slabs) |
+| AI rivals | `toybox_kingdoms/ai/kingdom_ai.gd` |
+| Camera (follow, pull-out/descend, victory orbit) | `toybox_kingdoms/camera/kingdom_camera.gd` |
+| Campaign ladder data / screen | `toybox_kingdoms/data/campaign.gd`, `ui/campaign_screen.gd` |
+| Menu | `ui/main_menu.gd` |
+| Daily overlay | `ui/daily_screen.gd` |
+| Analytics / Monetization / Save / Cosmetics | `core/analytics.gd`, `core/monetization_manager.gd`, `core/save_manager.gd`, `theme/cosmetics.gd` |
 
-   ```gdscript
-   {"script": "res://minigames/<category>/<name>.gd", "title": "My Game", "category": "Misc", "duration": 30.0},
-   ```
+## Commercial roadmap
 
-   It now joins the random rotation automatically.
+Targeting **hybrid-casual (ads + IAP)**, solo-built, aiming for **publisher-readiness**
+(strong D1/retention + a low CPI creative → pitch a publisher to fund UA).
 
-### Helpers available on `MiniGameBase3D`
-World/spawning: `spawn_avatars`, `corner_spawns`, `lane_spawns`, `clamp_avatar`, `xz`,
-`spawn_marker`, `spawn_ball`, `spawn_disc`, `get_avatar`.
-Overlay (2D): `make_label`, `make_bar`.
-Scoring/flow: `eliminate`, `survivors`, `check_last_alive`, `award_by_rank`, `rank_by_value`,
-`survivor_results`, `finish_round`, `time_left`, `elapsed`.
-The camera auto-frames the `ARENA_HX`/`ARENA_HZ` arena to the viewport (`_frame_camera`).
+- **Phase 0 — Analytics** ✅ (instrumented funnel)
+- **Phase 1 — First-30s hook** ✅ (cold-open, 90s first match, guided coach, pure-carve)
+- **Phase 2 — Retention loop** ✅ endless · daily · campaign visibility · cosmetic chase.
+  Remaining: leaderboards (Firebase/PlayFab).
+- **Phase 3 — CPI test & creatives** ⏳ (wire real ad/IAP SDKs, cut 15s vertical clips,
+  organic test for a CPI signal)
+- **Phase 4 — Decision gate** ⏳ (pitch publishers if D1 ≥ ~40% and CPI is workable; else
+  lean self-publish on organic + ASO)
+
+Metric gates to aim for: D1 ≥ 40%, D7 ≥ 12%, 4–6 min sessions, 3+ sessions/day.
