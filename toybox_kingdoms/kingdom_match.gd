@@ -62,6 +62,13 @@ const MATCH_DURATION := 300.0   # seconds (5 min — long enough for the castle-
 # WIN_PCT of the toybox; otherwise you lose.
 const WIN_PCT := 0.50           # land you must hold AT TIMEOUT to win
 
+# ── ENDLESS mode (run-based score attack — the retention loop) ─────────────────
+# Not a campaign stage: a fixed, hard, time-boxed run scored on peak land held +
+# rivals conquered (+ a win bonus). The chase is your persistent best score, not the
+# single match. Reuses the whole match; only setup / scoring / results differ.
+const ENDLESS_DIFFS := [2, 2, 2, 2, 2, 2, 2]   # seven bold rivals
+const ENDLESS_DURATION := 180.0                 # 3-min runs — long enough to swing, short enough to retry
+
 var grid
 var renderer
 var camera
@@ -101,6 +108,14 @@ var _ended := false
 var _match_t := MATCH_DURATION
 var _elapsed := 0.0              # seconds since the match began (analytics timing)
 var _first_capture_logged := false
+var _is_first_match := false    # player's first-ever match → guided coach + pure-carve HUD
+var _coach: Control             # the first-match coaching banner (dismissed on first claim)
+var _coach_label: Label         # coach text (swaps "draw a loop" → "return home")
+var _mode := "campaign"         # "campaign" | "endless"
+var _peak_pct := 0.0            # highest land fraction the human held this run (endless score)
+var _rivals_conquered := 0      # rival kingdoms the human eliminated this run (endless score)
+var _endless_score := 0
+var _endless_is_best := false
 var _ui_layer: CanvasLayer
 
 var _terr_label: Label
@@ -144,13 +159,33 @@ func _ready() -> void:
 	if fast != "":
 		_match_t = float(fast)
 
-	# Load this match's stage from the campaign ladder. Rival count + AI difficulty
-	# escalate per stage; the human is always kingdom 0.
-	_stage = SaveManager.active_stage()
-	_rival_diffs = Campaign.rival_diffs(_stage)
-	_n_kingdoms = 1 + _rival_diffs.size()
-	Analytics.match_start(_stage, _n_kingdoms, "campaign", _match_t)
-	Analytics.progression("start", "stage_%d" % _stage)
+	# Configure rivals + match length from the mode. ENDLESS is a fixed hard run; CAMPAIGN
+	# escalates per stage. The human is always kingdom 0. A TBK_FASTMATCH override always
+	# wins so the headless harness can still run short matches.
+	_mode = SaveManager.mode()
+	if OS.get_environment("TBK_ENDLESS") == "1":
+		_mode = "endless"
+	if _mode == "endless":
+		_rival_diffs = ENDLESS_DIFFS.duplicate()
+		_n_kingdoms = 1 + _rival_diffs.size()
+		if fast == "":
+			_match_t = ENDLESS_DURATION
+	else:
+		_stage = SaveManager.active_stage()
+		_rival_diffs = Campaign.rival_diffs(_stage)
+		_n_kingdoms = 1 + _rival_diffs.size()
+		if fast == "":
+			_match_t = Campaign.duration(_stage)
+	# The very first match the player ever starts gets the guided coach + a pure-carve
+	# HUD (no build economy yet). Counted once here so a "Play Again" reload is match 2+.
+	# Endless is never a first-match (returning players only) — no coach / no deferral.
+	# TBK_FIRSTMATCH=1 forces the first-match path for QA without resetting the save.
+	_is_first_match = _mode != "endless" and (SaveManager.stat("matches_played") == 0 \
+		or OS.get_environment("TBK_FIRSTMATCH") == "1")
+	SaveManager.bump_stat("matches_played")
+	Analytics.match_start(_stage, _n_kingdoms, _mode, _match_t)
+	if _mode != "endless":
+		Analytics.progression("start", "stage_%d" % _stage)
 	AudioManager.play_music("game")
 	_apply_render_scale()
 	if DeviceMode.is_mobile:
@@ -258,7 +293,13 @@ func _spawn_kingdom(i: int) -> void:
 	var info: Dictionary = Roster.info(i)
 	_kid_name[kid] = info["name"]
 	var home := _home_anchor(i, _n_kingdoms)
-	grid.seed_kingdom(kid, home.x, home.y, HOME_R)
+	# On the player's very first match, give the human a bigger starting blob: a larger
+	# home is an easier target to loop back to, so the very first claim lands fast (the
+	# time-to-first-capture metric). Rivals + all later matches use the standard HOME_R.
+	var home_r := HOME_R
+	if i == 0 and _is_first_match:
+		home_r = HOME_R + 2
+	grid.seed_kingdom(kid, home.x, home.y, home_r)
 
 	var a := RulerAgent.new()
 	a.kid = kid
@@ -593,6 +634,8 @@ func _ring(pos: Vector3, color: Color) -> void:
 
 # A ruler with no castles left is out; their scattered land goes to the conqueror.
 func _eliminate(b, conq) -> void:
+	if conq == _rulers[0]:
+		_rivals_conquered += 1          # endless score input
 	b.eliminated = true
 	b.alive = false
 	grid.clear_trail(b.kid)
@@ -627,6 +670,11 @@ func _human_rank() -> int:
 			rank += 1
 	return rank
 
+# Endless run score: peak land held dominates, each conquered rival is a big bonus,
+# and surviving to a win (last-standing / 50% at the buzzer) caps it off.
+func _compute_endless_score(win: bool) -> int:
+	return int(round(_peak_pct * 100.0)) * 50 + _rivals_conquered * 500 + (2000 if win else 0)
+
 # ── match end + results ───────────────────────────────────────────────────────
 func _end_match(win: bool, reason: String) -> void:
 	if _ended:
@@ -635,20 +683,32 @@ func _end_match(win: bool, reason: String) -> void:
 	if _rulers[0].avatar:
 		_rulers[0].avatar.auto_input = false   # freeze the human (AI halts via the early return)
 	var pct: float = float(grid.territory_count(_rulers[0].kid)) / float(GW * GH)
+	_peak_pct = maxf(_peak_pct, pct)
 	var rank := _human_rank()
 	var coins: int = int(pct * 300.0) + maxi(0, _n_kingdoms - rank) * 15 + (60 if win else 0)
 	Analytics.match_end(win, reason, rank, pct, _elapsed, coins)
-	Analytics.progression("complete" if win else "fail", "stage_%d" % _stage, {"pct": snappedf(pct, 0.001)})
-	SaveManager.add_coins(coins)
-	# Advance the campaign ladder on a win (only the frontier stage unlocks new ground).
-	if win:
-		if SaveManager.clear_stage(_stage):
-			if SaveManager.campaign_complete():
-				_stage_msg = "Campaign complete!  You rule the toybox 👑"
+	if _mode == "endless":
+		# Score the run, bank the best, and surface it on the results panel.
+		_endless_score = _compute_endless_score(win)
+		coins += _endless_score / 20            # endless also pays coins toward cosmetics
+		_endless_is_best = SaveManager.record_endless(_endless_score)
+		_stage_msg = ""
+		Analytics.event("endless_end", {
+			"score": _endless_score, "best": SaveManager.endless_best(), "is_best": _endless_is_best,
+			"peak_pct": snappedf(_peak_pct, 0.001), "rivals": _rivals_conquered, "win": win,
+		})
+	else:
+		Analytics.progression("complete" if win else "fail", "stage_%d" % _stage, {"pct": snappedf(pct, 0.001)})
+		# Advance the campaign ladder on a win (only the frontier stage unlocks new ground).
+		if win:
+			if SaveManager.clear_stage(_stage):
+				if SaveManager.campaign_complete():
+					_stage_msg = "Campaign complete!  You rule the toybox 👑"
+				else:
+					_stage_msg = "Stage cleared!  Next: %s" % Campaign.title(SaveManager.active_stage())
 			else:
-				_stage_msg = "Stage cleared!  Next: %s" % Campaign.title(SaveManager.active_stage())
-		else:
-			_stage_msg = "Stage replayed  ·  %s" % Campaign.title(_stage)
+				_stage_msg = "Stage replayed  ·  %s" % Campaign.title(_stage)
+	SaveManager.add_coins(coins)
 	AudioManager.play("round_win" if win else "eliminate")
 	if _dbg:
 		print("[end] win=%s reason=%s rank=%d pct=%.1f coins=%d" % [win, reason, rank, pct * 100.0, coins])
@@ -715,6 +775,16 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 				sub = "Time's up — you held %.0f%% (need 50%%), #%d of %d." % [pct * 100.0, rank, _n_kingdoms]
 		_: sub = "You finished #%d of %d." % [rank, _n_kingdoms]
 	_result_label(vb, sub, 26, Color.WHITE)
+
+	# Endless: the score chase is the headline. Big score, best/NEW BEST, run breakdown.
+	if _mode == "endless":
+		_result_label(vb, "SCORE  %s" % _comma(_endless_score), 46, Palette.WARN)
+		if _endless_is_best:
+			_result_label(vb, "★  NEW BEST!  ★", 28, Palette.SAFE)
+		else:
+			_result_label(vb, "Best  %s" % _comma(SaveManager.endless_best()), 22, Color(1, 1, 1, 0.85))
+		_result_label(vb, "Peak %.0f%%   ·   %d conquered" % [_peak_pct * 100.0, _rivals_conquered],
+			20, HUD_DIM)
 
 	# Campaign ladder banner (stage cleared / campaign complete / replayed).
 	if _stage_msg != "":
@@ -786,6 +856,18 @@ func _toast(text: String, color: Color = Color.WHITE) -> void:
 	tw.parallel().tween_property(l, "position:y", 100.0, 0.5)
 	tw.tween_callback(l.queue_free)
 
+# 12345 -> "12,345" (thousands separators for the endless score readout).
+func _comma(n: int) -> String:
+	var s := str(absi(n))
+	var out := ""
+	var c := 0
+	for i in range(s.length() - 1, -1, -1):
+		out = s[i] + out
+		c += 1
+		if c % 3 == 0 and i > 0:
+			out = "," + out
+	return ("-" if n < 0 else "") + out
+
 func _result_label(parent: Node, text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text
@@ -836,6 +918,7 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 				if not _first_capture_logged:
 					_first_capture_logged = true
 					Analytics.first_capture(_elapsed)
+					_dismiss_coach()
 				AudioManager.play("collect", clampf(1.0 + float(cap) / 1500.0, 1.0, 1.45))
 				camera.punch_zoom(clampf(0.02 + float(cap) / 9000.0, 0.02, 0.06))
 				if cap > 350:
@@ -1089,14 +1172,50 @@ func _build_hud(ui: CanvasLayer) -> void:
 		lb_v.add_child(rr["row"])
 		_lb_rows.append(rr)
 
-	_build_action_stack(ui)
-	_build_toolbar(ui)
+	# First-ever match is pure carve-and-claim: defer the build economy (toolbar + boost/
+	# shield action stack) so the player learns the core loop before the systems land.
+	if not _is_first_match:
+		_build_action_stack(ui)
+		_build_toolbar(ui)
+	else:
+		_build_first_match_coach(ui)
 
 	# Minimap paints from grid data (no 3D render) — no environment needed.
 	_minimap = Minimap.new()
 	_minimap.setup(GW, GH)
 	_minimap.position = Vector2(Palette.DESIGN_W - 286, Palette.DESIGN_H - 202)
 	ui.add_child(_minimap)
+
+# First-match coach: one friendly, pulsing banner just above the controls that teaches
+# the core loop in two beats — "draw a loop" then "return home". Dismissed the instant
+# the player closes their first loop (see _dismiss_coach in the capture path).
+func _build_first_match_coach(ui: CanvasLayer) -> void:
+	var panel := _hud_panel(Vector2(Palette.CENTER_X - 230, Palette.DESIGN_H - 150), Vector2(460, 60), 18)
+	panel.pivot_offset = Vector2(230, 30)
+	ui.add_child(panel)
+	var row := _pill_row(panel)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_child(_glyph(GlyphIcon.new().setup("boost", HUD_GOLD, 24)))
+	_coach_label = _hud_text("Leave your land — draw a loop!", 24, Color.WHITE,
+		HORIZONTAL_ALIGNMENT_CENTER, true)
+	row.add_child(_coach_label)
+	_coach = panel
+	# gentle attention pulse
+	var tw := panel.create_tween().set_loops()
+	tw.tween_property(panel, "scale", Vector2(1.05, 1.05), 0.6).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(panel, "scale", Vector2.ONE, 0.6).set_trans(Tween.TRANS_SINE)
+
+# Fade the coach out once it has done its job (first claim closed).
+func _dismiss_coach() -> void:
+	if _coach == null or not is_instance_valid(_coach):
+		return
+	var c := _coach
+	_coach = null
+	_coach_label = null
+	var tw := c.create_tween()
+	tw.tween_property(c, "modulate:a", 0.0, 0.4)
+	tw.parallel().tween_property(c, "scale", Vector2(1.2, 1.2), 0.4).set_trans(Tween.TRANS_BACK)
+	tw.tween_callback(c.queue_free)
 
 # A glowing, gently-pulsing ground ring fixed under the human's Crowned Toy King so
 # you can always pick yourself out of a crowded board. Emissive + additive so it
@@ -1540,8 +1659,15 @@ func _hud_tick(delta: float) -> void:
 		return
 	_hud_t = 0.2
 
+	# First-match coach swaps its message once the player is out drawing a trail.
+	if _coach_label != null and is_instance_valid(_coach_label):
+		_coach_label.text = ("Now loop back home to claim it!"
+			if grid.trail_length(_rulers[0].kid) > 0
+			else "Leave your land — draw a loop!")
+
 	var total := float(GW * GH)
 	var pct := 100.0 * owned / total
+	_peak_pct = maxf(_peak_pct, float(owned) / total)   # endless score input
 	var pop := _population_estimate(owned)
 	_terr_label.text = "%.1f%%" % pct
 	_pop_label.text = "%d" % pop

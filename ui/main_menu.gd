@@ -10,10 +10,22 @@ const KINGDOM_MATCH := "res://toybox_kingdoms/kingdom_match.tscn"
 const ROSTER_PREVIEW := 5        # crests shown in the rival row
 
 var _coin_label: Label
-var _hook_label: Label
+var _hook_label: Button
 
 
 func _ready() -> void:
+	# Cold-open: a brand-new player drops STRAIGHT into their first match — action in
+	# seconds, no menu/PLAY/stage taps to read past. The in-match coach teaches the loop,
+	# so we also mark the how-to slideshow seen (no double-teaching). After that first
+	# match the results screen's MAIN MENU brings them here as normal.
+	if _should_cold_open():
+		SaveManager.set_onboarding_done(true)
+		SaveManager.set_mode("campaign")
+		# Deferred: the menu node is still being added to the tree here, so swapping the
+		# scene synchronously trips "parent is busy adding/removing children".
+		get_tree().change_scene_to_file.call_deferred(KINGDOM_MATCH)
+		return
+
 	AudioManager.play_music("menu")
 	add_child(load("res://toybox_kingdoms/tools/shader_warmup.gd").new())
 
@@ -146,8 +158,8 @@ func _build_bottom_dock() -> void:
 	var icon_row := HBoxContainer.new()
 	icon_row.add_theme_constant_override("separation", 20)
 	icon_row.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	icon_row.offset_top    = -290
-	icon_row.offset_bottom = -150
+	icon_row.offset_top    = -320
+	icon_row.offset_bottom = -204
 	icon_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	icon_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	icon_row.z_index = 12
@@ -164,30 +176,65 @@ func _build_bottom_dock() -> void:
 		AudioManager.play("tap")
 		_open_overlay(load("res://ui/settings_screen.gd").new())))
 
-	# PLAY button — wide, prominent, centered
+	# PLAY button (campaign) — wide, prominent, centered
 	var play := _PlayButton.new()
 	play.custom_minimum_size = Vector2(460, 110)
 	play.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	play.offset_top    = -132
-	play.offset_bottom = -18
+	play.offset_top    = -200
+	play.offset_bottom = -90
 	play.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	play.pressed.connect(_on_play)
 	play.z_index = 12
 	add_child(play)
 
-	# Campaign hook — small floating text, no background
-	_hook_label = Label.new()
+	# ENDLESS button — the score-attack retention loop, a secondary action under PLAY.
+	# Shows your best so the chase is visible right on the menu.
+	var endless := Button.new()
+	endless.text = _endless_label()
+	endless.focus_mode = Control.FOCUS_NONE
+	endless.add_theme_font_size_override("font_size", 24)
+	endless.add_theme_color_override("font_color", Color.WHITE)
+	endless.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
+	endless.add_theme_constant_override("outline_size", 5)
+	var ec := Color("6a3fb0")   # regal purple, distinct from the gold PLAY
+	endless.add_theme_stylebox_override("normal", _panel_style(Color(ec, 0.92), Color(ec.lightened(0.2), 0.9), 18, 2, 8))
+	endless.add_theme_stylebox_override("hover", _panel_style(ec.lightened(0.12), Color(ec.lightened(0.3), 0.9), 18, 2, 8))
+	endless.add_theme_stylebox_override("pressed", _panel_style(ec.darkened(0.15), Color(ec, 0.9), 18, 2, 8))
+	endless.anchor_left = 0.5; endless.anchor_right = 0.5
+	endless.anchor_top = 1.0; endless.anchor_bottom = 1.0
+	endless.offset_left = -170; endless.offset_right = 170
+	endless.offset_top = -82; endless.offset_bottom = -40
+	endless.z_index = 12
+	endless.pressed.connect(_on_endless)
+	add_child(endless)
+
+	# Campaign hook — tappable progress line that opens the conquest ladder. Styled as
+	# flat text (no button chrome) so it reads as a hint, but it's a real tap target now
+	# that PLAY skips the stage-select overlay.
+	_hook_label = Button.new()
+	_hook_label.flat = true
+	_hook_label.focus_mode = Control.FOCUS_NONE
 	_hook_label.add_theme_font_size_override("font_size", 17)
 	_hook_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.88))
+	_hook_label.add_theme_color_override("font_hover_color", Color(1, 1, 1, 1.0))
+	_hook_label.add_theme_color_override("font_pressed_color", Color(1, 1, 1, 0.7))
 	_hook_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
 	_hook_label.add_theme_constant_override("outline_size", 6)
-	_hook_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var flat_sb := StyleBoxEmpty.new()
+	for st in ["normal", "hover", "pressed", "focus"]:
+		_hook_label.add_theme_stylebox_override(st, flat_sb)
 	_hook_label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	_hook_label.offset_top    = -16
-	_hook_label.offset_bottom = 0
-	_hook_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hook_label.offset_top    = -34
+	_hook_label.offset_bottom = -6
 	_hook_label.z_index = 12
+	_hook_label.pressed.connect(_open_campaign)
 	add_child(_hook_label)
+
+
+# ENDLESS button caption — shows the best score once the player has set one.
+func _endless_label() -> String:
+	var best := SaveManager.endless_best()
+	return ("ENDLESS  ·  BEST %s" % best) if best > 0 else "ENDLESS"
 
 
 # ── Top-left coin bar (atlas coinbar + label) ─────────────────────────────────
@@ -347,8 +394,32 @@ func _kingdom_color(i: int) -> Color:
 
 
 func _on_play() -> void:
+	# Straight into the match — PLAY plays the active campaign stage with no stage-select
+	# detour (that overlay was pure friction; the ladder lives behind the progress hook).
+	AudioManager.play("tap")
+	SaveManager.set_mode("campaign")
+	get_tree().change_scene_to_file(KINGDOM_MATCH)
+
+
+func _on_endless() -> void:
+	AudioManager.play("tap")
+	SaveManager.set_mode("endless")
+	get_tree().change_scene_to_file(KINGDOM_MATCH)
+
+
+func _open_campaign() -> void:
 	AudioManager.play("tap")
 	_open_overlay(load("res://ui/campaign_screen.gd").new())
+
+
+# True only for a never-played install. TBK_COLDOPEN=1 forces it for QA; TBK_NO_COLDOPEN=1
+# disables it (so the menu can be inspected on a fresh save).
+func _should_cold_open() -> bool:
+	if OS.get_environment("TBK_NO_COLDOPEN") == "1":
+		return false
+	if OS.get_environment("TBK_COLDOPEN") == "1":
+		return true
+	return SaveManager.stat("matches_played") == 0
 
 
 func _refresh_hook() -> void:
@@ -360,7 +431,7 @@ func _refresh_hook() -> void:
 		_hook_label.text = "Campaign complete!  You rule the toybox 👑"
 		return
 	var stage := SaveManager.active_stage()
-	_hook_label.text = "CONQUEST  %d/%d   ·   Next: %s" % [
+	_hook_label.text = "CONQUEST  %d/%d   ·   Next: %s   ›" % [
 		stage + 1, Campaign.count(), Campaign.title(stage)]
 
 

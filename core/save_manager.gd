@@ -130,6 +130,34 @@ func spend_coins(n: int) -> bool:
 	coins_changed.emit(coins())
 	return true
 
+# ── match mode (transient — which mode the NEXT match runs) ───────────────────────
+# Not persisted: the menu sets it before launching kingdom_match; "Play Again" reloads
+# the same scene so it persists in memory across reloads, and a cold launch defaults to
+# campaign. Values: "campaign" | "endless".
+var _pending_mode := "campaign"
+
+func set_mode(m: String) -> void:
+	_pending_mode = m
+
+func mode() -> String:
+	return _pending_mode
+
+# ── progression: endless score-attack ─────────────────────────────────────────────
+func endless_best() -> int:
+	return int(_cfg.get_value("progress", "endless_best", 0))
+
+func endless_runs() -> int:
+	return int(_cfg.get_value("progress", "endless_runs", 0))
+
+# Record a finished endless run; returns true if it set a new personal best.
+func record_endless(score: int) -> bool:
+	_cfg.set_value("progress", "endless_runs", endless_runs() + 1)
+	var is_best := score > endless_best()
+	if is_best:
+		_cfg.set_value("progress", "endless_best", score)
+	_save()
+	return is_best
+
 # ── progression: campaign ladder ─────────────────────────────────────────────────
 const Campaign := preload("res://toybox_kingdoms/data/campaign.gd")
 
