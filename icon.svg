@@ -1,27 +1,78 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2a3b8f"/>
+      <stop offset="0" stop-color="#3a5bd0"/>
       <stop offset="1" stop-color="#6a2da0"/>
     </linearGradient>
-    <radialGradient id="shine" cx="0.35" cy="0.30" r="0.7">
+    <radialGradient id="shine" cx="0.35" cy="0.26" r="0.85">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.30"/>
       <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
+    <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#74a0ff"/>
+      <stop offset="1" stop-color="#3f6fd8"/>
+    </linearGradient>
+    <linearGradient id="stoneDark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4d7ce0"/>
+      <stop offset="1" stop-color="#2f57b4"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe27a"/>
+      <stop offset="1" stop-color="#f5a81e"/>
+    </linearGradient>
+    <linearGradient id="grass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#62d24a"/>
+      <stop offset="1" stop-color="#36a82c"/>
+    </linearGradient>
   </defs>
+
+  <!-- rounded-square backdrop (store applies its own mask) -->
   <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
   <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#shine)"/>
-  <!-- star accent -->
-  <path d="M412 92 l18 38 42 6 -30 30 7 42 -37 -20 -38 20 7 -42 -30 -30 42 -6 z" fill="#ffd23f"/>
-  <!-- mascot blob -->
-  <circle cx="256" cy="292" r="150" fill="#f02828"/>
-  <circle cx="256" cy="292" r="150" fill="url(#shine)"/>
-  <!-- eyes -->
-  <ellipse cx="212" cy="270" rx="44" ry="48" fill="#ffffff"/>
-  <ellipse cx="300" cy="270" rx="44" ry="48" fill="#ffffff"/>
-  <circle cx="220" cy="278" r="22" fill="#161226"/>
-  <circle cx="308" cy="278" r="22" fill="#161226"/>
-  <!-- cheeks -->
-  <circle cx="186" cy="330" r="20" fill="#ff8c8c" fill-opacity="0.55"/>
-  <circle cx="326" cy="330" r="20" fill="#ff8c8c" fill-opacity="0.55"/>
+
+  <!-- grassy toy-island -->
+  <ellipse cx="256" cy="452" rx="168" ry="40" fill="#2c7d24" opacity="0.55"/>
+  <ellipse cx="256" cy="444" rx="160" ry="34" fill="url(#grass)"/>
+
+  <!-- soft ground shadow under the castle -->
+  <ellipse cx="256" cy="430" rx="118" ry="22" fill="#000000" opacity="0.18"/>
+
+  <!-- left tower -->
+  <rect x="150" y="300" width="66" height="128" rx="8" fill="url(#stoneDark)"/>
+  <rect x="148" y="290" width="22" height="22" fill="url(#stoneDark)"/>
+  <rect x="196" y="290" width="22" height="22" fill="url(#stoneDark)"/>
+  <rect x="172" y="290" width="22" height="14" fill="url(#stoneDark)"/>
+  <!-- right tower -->
+  <rect x="296" y="300" width="66" height="128" rx="8" fill="url(#stoneDark)"/>
+  <rect x="294" y="290" width="22" height="22" fill="url(#stoneDark)"/>
+  <rect x="342" y="290" width="22" height="22" fill="url(#stoneDark)"/>
+  <rect x="318" y="290" width="22" height="14" fill="url(#stoneDark)"/>
+
+  <!-- central keep -->
+  <rect x="200" y="240" width="112" height="188" rx="10" fill="url(#stone)"/>
+  <!-- keep merlons -->
+  <rect x="198" y="226" width="26" height="26" fill="url(#stone)"/>
+  <rect x="243" y="226" width="26" height="26" fill="url(#stone)"/>
+  <rect x="288" y="226" width="26" height="26" fill="url(#stone)"/>
+
+  <!-- gate -->
+  <path d="M232 428 v-58 a24 24 0 0 1 48 0 v58 z" fill="#1d2a5c"/>
+  <path d="M232 428 v-58 a24 24 0 0 1 48 0 v58" fill="none" stroke="#0f1740" stroke-width="4"/>
+
+  <!-- tower windows -->
+  <rect x="173" y="330" width="18" height="30" rx="9" fill="#1d2a5c"/>
+  <rect x="319" y="330" width="18" height="30" rx="9" fill="#1d2a5c"/>
+
+  <!-- crown floating above the keep -->
+  <g>
+    <path d="M206 214 L206 188 L230 204 L256 168 L282 204 L306 188 L306 214 Z" fill="url(#gold)" stroke="#c97e10" stroke-width="3" stroke-linejoin="round"/>
+    <rect x="206" y="208" width="100" height="16" rx="5" fill="url(#gold)" stroke="#c97e10" stroke-width="3"/>
+    <circle cx="256" cy="166" r="9" fill="#ff5e7a" stroke="#c97e10" stroke-width="2"/>
+    <circle cx="208" cy="186" r="6" fill="#5ed1ff" stroke="#c97e10" stroke-width="2"/>
+    <circle cx="304" cy="186" r="6" fill="#5ed1ff" stroke="#c97e10" stroke-width="2"/>
+    <circle cx="256" cy="216" r="6" fill="#ff5e7a"/>
+  </g>
+
+  <!-- corner star sparkle -->
+  <path d="M414 96 l11 24 26 4 -19 18 4 26 -22 -12 -23 12 4 -26 -18 -18 26 -4 z" fill="#ffd23f" opacity="0.9"/>
 </svg>

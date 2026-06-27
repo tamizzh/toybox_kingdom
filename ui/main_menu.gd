@@ -107,6 +107,9 @@ func _build_background() -> void:
 	backdrop.modulate = Color(0.45, 0.45, 0.52)
 	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(backdrop)
+	# Slow, deep parallax drift on the recessed backdrop (more travel than the poster
+	# so the two layers separate and the scene reads as 3D, not a flat photo).
+	_ken_burns(backdrop, 1.10, 11.0)
 
 	# The full poster, scaled to fit without cropping (full height, centred).
 	var photo := TextureRect.new()
@@ -116,6 +119,13 @@ func _build_background() -> void:
 	photo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	photo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(photo)
+	# Subtle breathing zoom on the hero poster so the title screen feels alive.
+	_ken_burns(photo, 1.035, 9.0)
+
+	# Drifting confetti above the art (below all chrome) for constant gentle motion.
+	var confetti := _Confetti.new()
+	confetti.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(confetti)
 
 	# Gentle scrim along the bottom so the PLAY button + hint text stay legible.
 	var scrim := ColorRect.new()
@@ -330,6 +340,20 @@ func _refresh_hook() -> void:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────────
+# Cinematic "Ken Burns" loop: scale a full-rect layer gently in and out from its
+# centre, forever. Pivot is kept at the layer's centre as it (re)sizes so the zoom
+# never drifts off-frame. `peak` is the max scale, `secs` one half-cycle's duration.
+func _ken_burns(node: Control, peak: float, secs: float) -> void:
+	var recentre := func() -> void: node.pivot_offset = node.size * 0.5
+	node.resized.connect(recentre)
+	recentre.call()
+	var tw := node.create_tween().set_loops()
+	tw.tween_property(node, "scale", Vector2(peak, peak), secs) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(node, "scale", Vector2.ONE, secs) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+
 func _panel_style(bg: Color, border: Color, radius: int, border_width: int, padding: int) -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
 	s.bg_color = bg
@@ -397,10 +421,67 @@ class _Crest extends Control:
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
 
 
+# ── Drifting confetti layer ──────────────────────────────────────────────────────
+# A sparse field of slow-falling, tumbling paper bits in the kingdom colours. Pure
+# procedural draw (no textures); wraps each piece to the top when it leaves the
+# bottom so the field loops seamlessly. Kept faint so it accents, never distracts.
+class _Confetti extends Control:
+	const COUNT := 40
+	var _bits: Array = []
+
+	func _ready() -> void:
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+		var pal: Array = Palette.PLAYER_COLORS
+		for i in COUNT:
+			_bits.append({
+				"x": randf(),                                   # 0..1 across width
+				"y": randf(),                                   # 0..1 down height
+				"vy": randf_range(18.0, 46.0),                  # px/sec fall speed
+				"sway": randf_range(8.0, 22.0),                 # px horizontal swing
+				"freq": randf_range(0.5, 1.4),
+				"phase": randf_range(0.0, TAU),
+				"spin": randf_range(-2.2, 2.2),
+				"rot": randf_range(0.0, TAU),
+				"w": randf_range(7.0, 14.0),
+				"h": randf_range(4.0, 9.0),
+				"color": Color(pal[i % pal.size()], randf_range(0.5, 0.85)),
+			})
+
+	func _process(delta: float) -> void:
+		var h := size.y
+		for b in _bits:
+			b["y"] += b["vy"] * delta / max(h, 1.0)
+			b["rot"] += b["spin"] * delta
+			b["phase"] += b["freq"] * delta
+			if b["y"] > 1.08:
+				b["y"] = -0.08
+				b["x"] = randf()
+		queue_redraw()
+
+	func _draw() -> void:
+		for b in _bits:
+			var px: float = b["x"] * size.x + sin(b["phase"]) * b["sway"]
+			var py: float = b["y"] * size.y
+			draw_set_transform(Vector2(px, py), b["rot"], Vector2.ONE)
+			var w: float = b["w"]
+			var hh: float = b["h"]
+			draw_rect(Rect2(-w * 0.5, -hh * 0.5, w, hh), b["color"])
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+
 class _PlayButton extends Button:
 	func _ready() -> void:
 		focus_mode = Control.FOCUS_NONE
 		flat = true
+		# Gentle "press me" pulse so the eye lands on PLAY. Pivot stays centred.
+		var recentre := func() -> void: pivot_offset = size * 0.5
+		resized.connect(recentre)
+		recentre.call()
+		var tw := create_tween().set_loops()
+		tw.tween_property(self, "scale", Vector2(1.05, 1.05), 0.8) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tw.tween_property(self, "scale", Vector2.ONE, 0.8) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 	func _draw() -> void:
 		DrawKit.card(self, Rect2(Vector2.ZERO, size), 30.0, Palette.SAFE, 4.0, true)
