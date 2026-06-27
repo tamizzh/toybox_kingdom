@@ -1,20 +1,24 @@
 # gen_house.py — detailed toy house -> assets/models/house.glb
 #
-# Target aesthetic (target_art.png):
-#   Chimneys, raised window frames + sills, door frame with lintel,
-#   corner quoins, wide roof overhang — recognisably a house even at tiny scale.
+# Matches the reference image: cream walls, steep kingdom-coloured gable, chimney
+# with crown + pots, embedded window frames (no Z-fight), door with lintel, and
+# a surrounding picket fence with a gate opening on the front face.
 #
-# Two named objects so populace.gd can tint each independently:
-#   "body"  — walls + chimney shaft + quoins + door/window details (cream stone)
-#   "roof"  — main gable + chimney cap (kingdom colour)
+# THREE named submeshes (populace.gd loads each independently):
+#   "body"  — walls + window frames + door + chimney shaft/crown/pots  (cream)
+#   "roof"  — gable prism with wide eave overhang                      (kingdom colour)
+#   "fence" — picket fence with gate opening                           (warm wood brown)
 #
-# Blender convention:
-#   Z = up (→ Godot Y),  X = right (→ Godot X),  Y = depth (→ Godot -Z)
-#   Front face of house = -Y in Blender (faces viewer in Godot +Z isometric view)
+# Blender → Godot axes: Z=up → Y, X=X, Y=depth → -Z.
+# Front face (-Y in Blender) faces the isometric camera in Godot (+Z).
 #
-# Dimensions chosen so populace.gd instance offsets below work:
-#   body center at Godot  PROP_Y + 0.32   (body spans PROP_Y to PROP_Y+0.64)
-#   roof center at Godot  PROP_Y + 0.85   (roof sits on top, peak at +1.06)
+# Instance Y offsets for populace.gd (relative to PROP_Y):
+#   body  : PROP_Y + BH        = PROP_Y + 0.330   (body spans PROP_Y … PROP_Y+0.660)
+#   roof  : PROP_Y + BH*2+RHH  = PROP_Y + 0.890   (roof peak at PROP_Y+1.120)
+#   fence : PROP_Y + FHALF     = PROP_Y + 0.125   (fence bottom on ground)
+#
+# Z-fighting prevention rule: every surface decoration's back face is placed
+# 5 mm INSIDE the wall it sits on (embedded), so there is never a coplanar pair.
 #
 # Run:  blender --background --python tools/gen_house.py
 import bpy, sys, os
@@ -24,106 +28,152 @@ import tbk_lib as T
 
 T.reset()
 
-CELL = 0.6
-
 # ── dimensions ────────────────────────────────────────────────────────────────
-BW  = CELL * 0.76 / 2   # body half-footprint  = 0.228
-BH  = 0.32               # body half-height     → full height 0.64
-RW  = CELL * 0.96 / 2   # roof half-footprint  = 0.288 (overhang = BW+0.060)
-RD  = CELL * 1.00 / 2   # roof half-depth      = 0.300
-RH  = 0.42               # roof full height
+BW = 0.240          # body half-footprint (48 × 48 cm plan)
+BH = 0.330          # body half-height    (66 cm walls)
+RH = 0.460          # roof full height    (steep 46 cm pitch)
+RW = BW + 0.078     # = 0.318 roof half-width  (7.8 cm eave overhang per side)
+RD = BW + 0.082     # = 0.322 roof half-depth
 
-# Materials (Godot overrides via material_override, these are placeholder colours)
-body_mat = T.mat("body", (0.92, 0.88, 0.80), rough=0.72)
-roof_mat = T.mat("roof", (0.25, 0.55, 0.25), rough=0.55)
+POST_H = 0.250      # fence post full height
+FHALF  = POST_H / 2 # = 0.125  (fence mesh centred at Z=0)
+FHW    = 0.286      # fence half-footprint (just within cell half of 0.300)
+GATE_HW = 0.076     # half-width of gate opening on front fence
 
-body_parts = []
+# chimney placement (Blender XY offset from house centre)
+CHX, CHY  = 0.092, 0.070
+CH_HW     = 0.050
+CHIM_BOT  = BH - 0.080          # shaft start: 8 cm inside body top → no coplanar face
+CHIM_TOP  = BH + 0.520          # shaft tip:   above roof peak at BH + RH/2 = 0.560
+CHIM_HH   = (CHIM_TOP - CHIM_BOT) * 0.5
+CHIM_CZ   = (CHIM_TOP + CHIM_BOT) * 0.5
+
+# placeholder materials (Godot's material_override replaces these at runtime)
+body_mat  = T.mat("body",  (0.93, 0.89, 0.81), rough=0.68)
+roof_mat  = T.mat("roof",  (0.22, 0.52, 0.22), rough=0.50)
+fence_mat = T.mat("fence", (0.52, 0.33, 0.14), rough=0.84)
+
+body_parts  = []
 roof_parts  = []
+fence_parts = []
 
-# ── BODY ──────────────────────────────────────────────────────────────────────
+# ─────────────────────────── BODY ─────────────────────────────────────────────
 
 # Main walls
 body_parts.append(T.box(BW, BW, BH, 0, 0, 0))
 
-# Horizontal string course (thin belt midway up the wall = a classic toy-house read)
-body_parts.append(T.box(BW + 0.007, BW + 0.007, 0.013, 0, 0, -BH * 0.10))
-
-# Corner quoins — raised square strips at the 4 vertical edges give depth + scale
-for qx, qy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
-    body_parts.append(T.box(0.024, 0.024, BH + 0.004, qx * (BW - 0.012), qy * (BW - 0.012), 0.002))
-
-# ── Front face windows (front = -Y in Blender) ──
-WFW, WFH, WFD = 0.058, 0.050, 0.013   # frame half-width, half-height, protrusion depth
-WFSY = -(BW + WFD)                     # Y position (just beyond front face)
+# Window frames — front face is at Blender Y = -BW.
+# Centre each frame so its back face sits 5 mm INSIDE the wall (no coplanar Z-fight).
+WFW, WFH, WFD = 0.056, 0.048, 0.016
+_wy = -(BW + WFD - 0.005)          # back face lands at -(BW - 0.005) = inside wall
 for wx in [-0.090, 0.090]:
-    # Window frame (raised rectangle)
-    body_parts.append(T.box(WFW, WFD, WFH,  wx, WFSY, 0.050))
-    # Window sill (thin ledge below frame)
-    body_parts.append(T.box(WFW + 0.014, WFD + 0.004, 0.009,  wx, WFSY - 0.002, 0.050 - WFH - 0.011))
-    # Window header (thin bar above frame)
-    body_parts.append(T.box(WFW + 0.008, WFD + 0.002, 0.008,  wx, WFSY - 0.001, 0.050 + WFH + 0.009))
+    body_parts.append(T.box(WFW, WFD, WFH,  wx, _wy, 0.055))
+    # Sill: thin ledge below frame, same depth
+    body_parts.append(T.box(WFW + 0.014, WFD + 0.004, 0.008,
+                             wx, _wy - 0.002, 0.055 - WFH - 0.010))
+    # Header: thin bar above frame
+    body_parts.append(T.box(WFW + 0.010, WFD + 0.002, 0.007,
+                             wx, _wy - 0.001, 0.055 + WFH + 0.008))
 
-# ── Side windows (one per side, centred, slightly higher) ──
-SWY = 0.035   # Z centre
-for sx, sy in [(BW + WFD, 0), (-(BW + WFD), 0)]:
-    body_parts.append(T.box(WFD, WFW, WFH,  sx, 0, SWY))
-    body_parts.append(T.box(WFD + 0.004, WFW + 0.012, 0.009,  sx * 0.998, 0, SWY - WFH - 0.011))
+# Door — front face, bottom flush with house base
+DW, DH, DD = 0.068, 0.112, 0.016
+_dy = -(BW + DD - 0.005)           # same 5 mm embedding rule
+body_parts.append(T.box(DW, DD, DH, 0, _dy, -BH + DH))
+# Lintel above door
+body_parts.append(T.box(DW + 0.014, DD + 0.002, 0.010,
+                         0, _dy, -BH + DH * 2 + 0.010))
 
-# ── Door (front face, centred, near the bottom) ──
-DW, DH, DD = 0.070, 0.108, 0.015
-DY = -(BW + DD)
-DZ = -BH + DH                           # door bottom sits at the house base
-body_parts.append(T.box(DW, DD, DH, 0, DY, DZ))
-# Lintel bar above door opening
-body_parts.append(T.box(DW + 0.014, DD + 0.002, 0.010, 0, DY, DZ + DH + 0.010))
-# Tiny door step at the base
-body_parts.append(T.box(DW + 0.018, 0.024, 0.016, 0, -(BW + 0.012), -BH - 0.010))
-
-# ── Chimney (stone-coloured, rises from mid-body through the roof peak) ──
-# Placed at Blender (+X, +Y) offset so it reads clearly against the roof slope.
-# Z range: from BH*0.05 (starts inside the body near the top) up to BH + 0.52
-#          In Godot Y: body instance at +0.32, so chimney tip at 0.32 + 0.32 + 0.52 = 1.16
-#          Roof peak in Godot Y: 0.85 + 0.21 = 1.06  → chimney pokes 0.10 above the peak.
-CHX, CHY = 0.092, 0.074        # Blender XY offset of chimney centre from house centre
-CHIM_BOT_Z = BH * 0.05        # = 0.016
-CHIM_TOP_Z = BH + 0.52        # = 0.84
-CHIM_CZ = (CHIM_BOT_Z + CHIM_TOP_Z) * 0.5   # = 0.428
-CHIM_HH = (CHIM_TOP_Z - CHIM_BOT_Z) * 0.5   # = 0.412
-CH_HW = 0.054
+# Chimney shaft — starts inside the body so no face is shared with the body top
 body_parts.append(T.box(CH_HW, CH_HW, CHIM_HH, CHX, CHY, CHIM_CZ))
+# Crown: wider flange at the tip
+body_parts.append(T.box(CH_HW + 0.018, CH_HW + 0.018, 0.012,
+                         CHX, CHY, CHIM_TOP + 0.012))
+# Two chimney pots
+body_parts.append(T.cyl(0.013, 0.050, CHX - 0.014, CHY - 0.010, CHIM_TOP + 0.043, 6))
+body_parts.append(T.cyl(0.013, 0.050, CHX + 0.014, CHY + 0.010, CHIM_TOP + 0.043, 6))
 
-# Chimney crown (wider flange at the very top, Godot will see as a stone cap)
-body_parts.append(T.box(CH_HW + 0.016, CH_HW + 0.016, 0.012,
-                         CHX, CHY, CHIM_TOP_Z + 0.012))
+# ─────────────────────────── ROOF ─────────────────────────────────────────────
 
-# Two chimney pots (small cylinders rising from the crown)
-body_parts.append(T.cyl(0.015, 0.058, CHX - 0.016, CHY - 0.012, CHIM_TOP_Z + 0.045, 6))
-body_parts.append(T.cyl(0.015, 0.058, CHX + 0.016, CHY + 0.012, CHIM_TOP_Z + 0.045, 6))
-
-# ── ROOF ──────────────────────────────────────────────────────────────────────
-
-# Main gable prism (overhangs the body on all sides for a proper eave)
-# prism: sx=X-width, sy=Y-depth (ridge runs along Y), sz=full height
+# Steep gable prism — ridge runs along Blender Y → Godot -Z
+# Overhang: RW/RD each exceed BW/BD by ~8 cm on every side
 roof_parts.append(T.prism(RW * 2, RD * 2, RH, 0, 0, 0))
 
-# Chimney cap — small decorative flange at chimney tip, coloured with the roof
-# In ROOF-local coordinates:
-#   chimney tip Godot Y = PROP_Y + 1.16  (calculated above)
-#   roof instance Godot Y = PROP_Y + 0.85
-#   → chimney tip roof-local Blender Z = 1.16 - 0.85 = 0.31
-CAP_Z = 0.31
-roof_parts.append(T.box(CH_HW + 0.024, CH_HW + 0.024, 0.010,
-                         CHX, CHY, CAP_Z))
+# ─────────────────────────── FENCE ────────────────────────────────────────────
+# Fence mesh centred at Blender Z = 0 → spans ±FHALF.
+# Godot places it at PROP_Y + FHALF so the bottom sits exactly on the ground.
 
-# ── assemble ──────────────────────────────────────────────────────────────────
-for o in body_parts: o.data.materials.append(body_mat)
+PHW    = 0.025   # post half-width
+RAIL_T = 0.009   # rail half-thickness
+PIK_HW = 0.011   # picket half-width
+PIK_HH = 0.100   # picket half-height  (slightly shorter than post for visual clarity)
+PIK_CZ = -0.012  # picket centre Z     (bottom near fence base, top below post top)
+RAIL_ZL = -FHALF + 0.055   # lower rail Z
+RAIL_ZH =  FHALF - 0.054   # upper rail Z
+
+
+def _post(x, y, hh=FHALF):
+    fence_parts.append(T.box(PHW, PHW, hh, x, y, 0))
+
+
+def _sect_x(y, x0, x1, n=3):
+    """Fence panel running in X at constant Y: two rails + n pickets."""
+    cx = (x0 + x1) * 0.5
+    hl = (x1 - x0) * 0.5
+    fence_parts.append(T.box(hl, RAIL_T, RAIL_T, cx, y, RAIL_ZL))
+    fence_parts.append(T.box(hl, RAIL_T, RAIL_T, cx, y, RAIL_ZH))
+    for k in range(n):
+        fx = x0 + (k + 0.5) / n * (x1 - x0)
+        fence_parts.append(T.box(PIK_HW, RAIL_T + 0.003, PIK_HH, fx, y, PIK_CZ))
+
+
+def _sect_y(x, y0, y1, n=3):
+    """Fence panel running in Y at constant X: two rails + n pickets."""
+    cy = (y0 + y1) * 0.5
+    hl = (y1 - y0) * 0.5
+    fence_parts.append(T.box(RAIL_T, hl, RAIL_T, x, cy, RAIL_ZL))
+    fence_parts.append(T.box(RAIL_T, hl, RAIL_T, x, cy, RAIL_ZH))
+    for k in range(n):
+        fy = y0 + (k + 0.5) / n * (y1 - y0)
+        fence_parts.append(T.box(RAIL_T + 0.003, PIK_HW, PIK_HH, x, fy, PIK_CZ))
+
+
+# Corner posts
+for cx, cy in [(-FHW, -FHW), (FHW, -FHW), (-FHW, FHW), (FHW, FHW)]:
+    _post(cx, cy)
+
+# Gate posts on front face (Y = -FHW) — slightly taller for visual emphasis
+_post(-GATE_HW, -FHW, FHALF * 1.14)
+_post( GATE_HW, -FHW, FHALF * 1.14)
+
+# Mid posts on sides and back
+_post(-FHW, 0)   # left mid
+_post( FHW, 0)   # right mid
+_post(0,  FHW)   # back mid
+
+# Back fence — two halves around the mid post
+_sect_x(FHW, -FHW + PHW, -PHW, 3)
+_sect_x(FHW,  PHW,  FHW - PHW, 3)
+
+# Left fence — two halves around the mid post
+_sect_y(-FHW, -FHW + PHW, -PHW, 3)
+_sect_y(-FHW,  PHW,  FHW - PHW, 3)
+
+# Right fence — two halves around the mid post
+_sect_y(FHW, -FHW + PHW, -PHW, 3)
+_sect_y(FHW,  PHW,  FHW - PHW, 3)
+
+# Front fence — two halves with gate opening in the centre
+_sect_x(-FHW, -FHW + PHW,     -GATE_HW - PHW, 2)
+_sect_x(-FHW,  GATE_HW + PHW,  FHW - PHW,     2)
+
+# ─────────────────────── ASSEMBLE & EXPORT ────────────────────────────────────
+for o in body_parts:  o.data.materials.append(body_mat)
 for o in roof_parts:  o.data.materials.append(roof_mat)
+for o in fence_parts: o.data.materials.append(fence_mat)
 
-body_obj = T.join(body_parts, "body")
-T.bevel(body_obj, width=0.018, segments=2)
-
-roof_obj = T.join(roof_parts, "roof")
-T.bevel(roof_obj, width=0.018, segments=2)
+body_obj  = T.join(body_parts,  "body");   T.bevel(body_obj,  width=0.016, segments=2)
+roof_obj  = T.join(roof_parts,  "roof");   T.bevel(roof_obj,  width=0.018, segments=2)
+fence_obj = T.join(fence_parts, "fence");  T.bevel(fence_obj, width=0.007, segments=1)
 
 T.export("house")
 print("HOUSE_DONE")
