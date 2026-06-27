@@ -129,3 +129,70 @@ func _native_restore() -> void:
   (frequency-capped, suppressed by remove-ads).
 - **IAP**: `purchase(product_id, on_done)` / `restore()` from `ui/shop_screen.gd`.
 - **Consent**: gate first launch on `needs_consent()` → `mark_consent(accepted)`.
+
+---
+
+## E. iOS — building on a Mac
+
+iOS is a **separate native build** from Android: different plugins (`.xcframework`, not
+`.aar`), a separate export preset, and it can **only** be built on macOS with Xcode.
+The shared code already supports it — `monetization_config.gd` returns the iOS ad units
+via `_is_ios()`, and the `_native_*` seams stay the same — but on iOS those methods call
+the **iOS** plugin's API, so you'll branch on `OS.get_name() == "iOS"` (or keep a separate
+iOS adapter) behind the same seams.
+
+> ⚠️ Verify the AdMob plugin you picked actually ships an **iOS** build for Godot 4 — the
+> common one (Poing Studios/cropco) has been Android-first. If there's no iOS
+> `.xcframework`, use an iOS-capable plugin or build a small Swift/Obj-C plugin wrapping
+> the Google Mobile Ads SDK.
+
+### E.1 Prerequisites
+- A **Mac** with the latest **Xcode** (from the App Store) + command line tools.
+- An **Apple Developer Program** membership ($99/yr) and a signing **Team**.
+- **CocoaPods**: `sudo gem install cocoapods` (or `brew install cocoapods`).
+- Godot **iOS export templates** for your exact version: *Editor → Manage Export
+  Templates → Download* (or they come bundled with the editor).
+
+### E.2 Install the iOS plugins
+Godot iOS plugins are a `.gdip` config + the native library (`.a` / `.xcframework`).
+1. Copy the **AdMob iOS** plugin and the **StoreKit IAP iOS** plugin into `res://ios/plugins/`
+   (create the folder). Each plugin = its `.gdip` + library files.
+2. In the **iOS export preset** (*Project → Export → iOS*), the plugins appear under a
+   **Plugins** section — enable both. (The Android `.aar` plugin is NOT used here.)
+
+### E.3 Configure the iOS export preset
+- **Bundle Identifier**: `com.toybox.kingdoms` (must match App Store Connect).
+- **Team ID** / signing: your Apple Developer team.
+- **Required reason / privacy**: add the **App Tracking Transparency** usage string —
+  set `NSUserTrackingUsageDescription` (Godot exposes ATT/privacy fields in the preset, or
+  you add it to the generated `Info.plist`), e.g.
+  *"We use your data to show you more relevant ads."*
+- **AdMob App ID**: add `GADApplicationIdentifier` (your iOS AdMob app id) to `Info.plist`.
+- **SKAdNetwork**: add the `SKAdNetworkItems` list (Google publishes the current
+  SKAdNetwork IDs for AdMob) to `Info.plist` so ad attribution works.
+
+### E.4 ATT + consent on iOS
+Wire the ATT prompt inside `_native_apply_consent()` (it runs from `mark_consent`). On
+iOS request tracking authorization (the iOS AdMob/ATT plugin exposes this) **before**
+initializing ads, then continue with UMP for GDPR. Keep ads non-personalized until both
+consent and ATT are resolved.
+
+### E.5 Build / run on Mac
+1. In Godot: **Export → iOS → Export Project** → choose an output folder. Godot generates
+   an **Xcode project** there (and, when a plugin declares pods, a `Podfile`).
+2. In Terminal, `cd` to the export folder and run **`pod install`** (installs the Google
+   Mobile Ads SDK + any plugin pods).
+3. Open the generated **`.xcworkspace`** (not `.xcodeproj`) in Xcode.
+4. Select your **signing Team**, pick a connected device (ads/IAP don't run in the
+   Simulator), and **Run**.
+5. To test IAP: create a **Sandbox tester** in App Store Connect and sign in on the
+   device; create the products (`remove_ads`, `pack_neon/pastel/candy`) in App Store
+   Connect first.
+6. To distribute: **Product → Archive → Distribute** → upload to App Store Connect →
+   **TestFlight** for testing, then submit for review.
+
+### E.6 Notes
+- Keep `USE_TEST_ADS = true` and add your device as an AdMob **test device** until launch.
+- Re-run `pod install` whenever you re-export from Godot if pod dependencies changed.
+- Recommended order: ship **Android first** (buildable on Windows), validate the loop +
+  CPI, then do the iOS build once the numbers justify the extra setup.
