@@ -29,6 +29,7 @@ ScoreManager="*res://core/score_manager.gd"
 AudioManager="*res://core/audio_manager.gd"
 SaveManager="*res://core/save_manager.gd"
 MonetizationManager="*res://core/monetization_manager.gd"
+Analytics="*res://core/analytics.gd"
 GameManager="*res://core/game_manager.gd"
 
 [display]

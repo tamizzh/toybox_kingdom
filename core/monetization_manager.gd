@@ -38,18 +38,23 @@ func maybe_show_interstitial() -> void:
 	if _rounds_since_ad < INTERSTITIAL_EVERY:
 		return
 	_rounds_since_ad = 0
+	Analytics.ad_event("interstitial", "between_rounds", ads_available)
 	if ads_available:
 		pass  # TODO(real-sdk): AdMob.show_interstitial()
 	else:
 		print("[Monetization] (simulated) interstitial")
 
-# Watch a rewarded ad; on_reward is called on success.
-func show_rewarded(on_reward: Callable) -> void:
+# Watch a rewarded ad; on_reward is called on success. `placement` tags which
+# offer triggered it (revive / double_coins / ...) so we can see what players value.
+func show_rewarded(on_reward: Callable, placement: String = "unknown") -> void:
+	Analytics.ad_event("rewarded_request", placement, false)
 	if ads_available:
 		# TODO(real-sdk): load + show rewarded; call on_reward in the reward cb.
+		Analytics.ad_event("rewarded", placement, true)
 		on_reward.call()
 	else:
 		print("[Monetization] (simulated) rewarded granted")
+		Analytics.ad_event("rewarded", placement, true)
 		on_reward.call()
 
 # ── IAP ──────────────────────────────────────────────────────────────────────
@@ -68,6 +73,7 @@ func restore() -> void:
 	print("[Monetization] restore purchases requested")
 
 func _grant(product_id: String) -> void:
+	Analytics.iap_event(product_id, not iap_available)
 	if product_id == "remove_ads":
 		SaveManager.set_remove_ads(true)
 	else:

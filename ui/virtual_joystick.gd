@@ -13,7 +13,8 @@ var radius: float = 110.0
 var player_color: Color = Color("f02828")   # set by touch_controls
 var dynamic: bool = false
 var _touch_index: int = -1
-var _value: Vector2 = Vector2.ZERO
+var _value: Vector2 = Vector2.ZERO           # direction-only heading fed to InputManager
+var _knob: Vector2 = Vector2.ZERO            # visual knob offset (follows the finger)
 var _origin: Vector2 = Vector2.ZERO          # stick centre (dynamic mode)
 var _active: bool = false
 
@@ -44,16 +45,25 @@ func _gui_input(event: InputEvent) -> void:
 	elif event is InputEventScreenDrag and event.index == _touch_index:
 		_set_from(event.position)
 
+const DEADZONE := 0.18   # fraction of radius the finger must clear before we move
+
 func _set_from(pos: Vector2) -> void:
 	var off := pos - _origin
 	if off.length() > radius:
 		off = off.normalized() * radius
-	_value = off / radius
+	_knob = off / radius          # knob still tracks the finger inside the ring
+	# Direction-only: the stick reports a full-magnitude heading once the finger
+	# clears the deadzone — drag distance steers, it does NOT throttle speed.
+	if off.length() > radius * DEADZONE:
+		_value = off.normalized()
+	else:
+		_value = Vector2.ZERO
 	queue_redraw()
 
 func _reset() -> void:
 	_touch_index = -1
 	_value = Vector2.ZERO
+	_knob = Vector2.ZERO
 	if dynamic:
 		_active = false
 	queue_redraw()
@@ -85,7 +95,7 @@ func _draw() -> void:
 
 	# Knob
 	var knob_r := radius * 0.43
-	var knob_c := c + _value * (radius - knob_r * 0.7)
+	var knob_c := c + _knob * (radius - knob_r * 0.7)
 	# Knob shadow
 	draw_circle(knob_c + Vector2(0, 5), knob_r, Color(0, 0, 0, 0.25))
 	# Knob outline

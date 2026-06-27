@@ -16,6 +16,16 @@ const FORCE_MODE := ""
 var is_mobile: bool = false
 var has_touch: bool = false
 
+# Whether we're running in a browser. This is the *graphics budget* flag, kept
+# separate from `is_mobile` (which drives the touch UI). A desktop browser stays
+# is_mobile=false (keyboard UI) but is_web=true so the renderer can drop the
+# expensive post-processing that gl_compatibility (WebGL2) chokes on.
+var is_web: bool = false
+
+# Predicate the renderer should branch on for the lighter graphics path:
+# any web build OR any mobile device.
+var low_gfx: bool = false
+
 func _ready() -> void:
 	# Master switch. OS.has_feature("mobile") is false in the desktop editor and
 	# desktop exports, true on Android/iOS. We deliberately do NOT use
@@ -43,6 +53,11 @@ func _ready() -> void:
 	elif FORCE_MODE == "desktop" or "--desktop" in cli:
 		is_mobile = false
 		has_touch = false
+
+	# Graphics budget. Web (any browser) and mobile both take the lighter render
+	# path. `--web` lets us exercise the web tier from a desktop test run.
+	is_web = OS.has_feature("web") or "--web" in cli
+	low_gfx = is_mobile or is_web
 
 	# Wait one frame so the main window exists before we resize it.
 	_apply_window.call_deferred()

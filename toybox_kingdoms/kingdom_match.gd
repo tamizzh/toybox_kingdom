@@ -40,9 +40,9 @@ const CELL := 0.6
 const HOME_R := 5
 const N_KINGDOMS := 8           # 1 human + 7 AI
 const HUMAN_INPUT_ID := 0
-const HUMAN_SPEED := 5.6          # human's base carve speed (faster than AI_SPEED 5.04) — 20% slower
-const BARRACKS_SPEED := 0.44      # each BARRACKS makes your king carve this much faster — 20% slower
-const SPEED_CAP := 8.8            # speed ceiling so boosts stay controllable — 20% slower
+const HUMAN_SPEED := 6.7          # human's base carve speed (faster than AI_SPEED 5.04) — snappier walk
+const BARRACKS_SPEED := 0.44      # each BARRACKS makes your king carve this much faster
+const SPEED_CAP := 9.8            # speed ceiling so boosts stay controllable
 const AI_SPEED := 5.04            # 20% slower
 var _ai_decide_every: int = 4     # re-run each AI brain every Nth physics frame (~15Hz);
 								  # raised to 6 on mobile (~10Hz) — avatars still move smoothly on cached heading
@@ -99,6 +99,8 @@ var _frame := 0                 # physics frame counter (drives staggered AI dec
 
 var _ended := false
 var _match_t := MATCH_DURATION
+var _elapsed := 0.0              # seconds since the match began (analytics timing)
+var _first_capture_logged := false
 var _ui_layer: CanvasLayer
 
 var _terr_label: Label
@@ -147,6 +149,8 @@ func _ready() -> void:
 	_stage = SaveManager.active_stage()
 	_rival_diffs = Campaign.rival_diffs(_stage)
 	_n_kingdoms = 1 + _rival_diffs.size()
+	Analytics.match_start(_stage, _n_kingdoms, "campaign", _match_t)
+	Analytics.progression("start", "stage_%d" % _stage)
 	AudioManager.play_music("game")
 	_apply_render_scale()
 	if DeviceMode.is_mobile:
@@ -344,6 +348,11 @@ func _castle_radius(tier: int) -> int:
 # by CanvasLayers, so it stays at full crispness. Desktop renders at native scale;
 # set TBK_LOWRES=<0..1> to preview the mobile path on desktop.
 const MOBILE_RENDER_SCALE := 0.75
+# NOTE: we deliberately do NOT downscale 3D on web desktop. On gl_compatibility
+# (WebGL2), enabling viewport 3D resolution scaling forces an offscreen render
+# target + upscale blit, whose extra full-screen pass costs more than the pixels
+# it saves — it measured as a net FPS regression. Native full-res is faster there.
+# (TBK_LOWRES below still forces a scale for explicit testing if ever needed.)
 
 func _apply_render_scale() -> void:
 	var scale := 1.0
@@ -362,6 +371,7 @@ func _physics_process(delta: float) -> void:
 	if _ended:
 		return
 	_match_t = maxf(0.0, _match_t - delta)
+	_elapsed += delta
 	_fx_cooldown = maxf(0.0, _fx_cooldown - delta)
 
 	# 1. drive AI movement (humans move themselves in Avatar3D._physics_process)
@@ -421,7 +431,7 @@ func _physics_process(delta: float) -> void:
 	if _minimap_pending and _minimap_t <= 0.0:
 		_minimap.request_render()
 		_minimap_pending = false
-		_minimap_t = 0.5 if DeviceMode.is_mobile else 0.33
+		_minimap_t = 0.5 if DeviceMode.low_gfx else 0.33
 	_kingdom_tick(delta)
 	_hud_tick(delta)
 	if _fps_label and _fps_label.visible:
@@ -437,7 +447,7 @@ func _kingdom_tick(delta: float) -> void:
 	_kingdom_t -= delta
 	if _kingdom_t > 0.0:
 		return
-	_kingdom_t = 0.6 if DeviceMode.is_mobile else 0.4
+	_kingdom_t = 0.6 if DeviceMode.low_gfx else 0.4
 	# Populace + flags are full-board scans. Skip them when no land changed since the
 	# last build, and alternate them across ticks so only one runs per 0.4s spike.
 	var v: int = grid.version
@@ -457,7 +467,7 @@ func _kingdom_tick(delta: float) -> void:
 	# Roads: rebuild every ~10 kingdom ticks (~4 s desktop, ~6 s mobile) when territory
 	# changed. Each kingdom's rebuild() does its own delta-skip so it's cheap when nothing moved.
 	_road_tick += 1
-	var _road_interval := 6 if not DeviceMode.is_mobile else 8
+	var _road_interval := 8 if DeviceMode.low_gfx else 6
 	if _road_tick >= _road_interval and grid.version != _last_road_version:
 		_last_road_version = grid.version
 		_road_tick = 0
@@ -627,6 +637,8 @@ func _end_match(win: bool, reason: String) -> void:
 	var pct: float = float(grid.territory_count(_rulers[0].kid)) / float(GW * GH)
 	var rank := _human_rank()
 	var coins: int = int(pct * 300.0) + maxi(0, _n_kingdoms - rank) * 15 + (60 if win else 0)
+	Analytics.match_end(win, reason, rank, pct, _elapsed, coins)
+	Analytics.progression("complete" if win else "fail", "stage_%d" % _stage, {"pct": snappedf(pct, 0.001)})
 	SaveManager.add_coins(coins)
 	# Advance the campaign ladder on a win (only the frontier stage unlocks new ground).
 	if win:
@@ -820,6 +832,10 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 			renderer.flash_cells(res.get("cmin", Vector2i(0, 0)), res.get("cmax", Vector2i(-1, 0)),
 				_kid_color[a.kid])
 			if not a.is_ai:
+				# Time-to-first-claim is the #1 onboarding/D1 signal — log it once per match.
+				if not _first_capture_logged:
+					_first_capture_logged = true
+					Analytics.first_capture(_elapsed)
 				AudioManager.play("collect", clampf(1.0 + float(cap) / 1500.0, 1.0, 1.45))
 				camera.punch_zoom(clampf(0.02 + float(cap) / 9000.0, 0.02, 0.06))
 				if cap > 350:
@@ -945,13 +961,20 @@ func _apply_camera_mode(mode: String) -> void:
 func _build_environment() -> void:
 	var world := preload("res://toybox_kingdoms/world.tscn").instantiate()
 	add_child(world)
-	if DeviceMode.is_mobile:
-		var key := world.get_node("KeyLight") as DirectionalLight3D
-		key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-		key.directional_shadow_max_distance = 28.0
+	# Lighter render path for web and mobile. SSAO + multi-pass glow are the
+	# dominant cost on gl_compatibility (WebGL2) and pin a desktop browser at a
+	# few fps, so kill them on ANY web build — not just touch/mobile. Shadows stay
+	# full-quality on web desktop (Balanced choice); only mobile trims them.
+	if DeviceMode.low_gfx:
 		var env := (world.get_node("WorldEnvironment") as WorldEnvironment).environment
 		env.glow_enabled = false
 		env.ssao_enabled = false
+		# Trim the shadow cascade on web + mobile. At the near-top-down camera the
+		# extra cascade splits / long distance barely read, so a single tighter
+		# split saves a meaningful chunk of the depth pass + shadow sampling.
+		var key := world.get_node("KeyLight") as DirectionalLight3D
+		key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		key.directional_shadow_max_distance = 28.0
 
 func _build_ground() -> void:
 	# The play board is an ISLAND: everything outside the grid rectangle is open sea.
@@ -1398,8 +1421,10 @@ func _style_button(b: Button, color: Color, radius: int) -> void:
 func _buy_building(kind: String, cost: int) -> void:
 	if _coins < cost:
 		_toast("Need more coins", Palette.WARN)
+		Analytics.event("building_denied", {"kind": kind, "cost": cost, "coins": _coins})
 		return
 	_coins -= cost
+	Analytics.building_bought(kind, cost)
 	# Every building boosts YOUR own conquest — the economy fuels expansion instead of
 	# sitting on the side. The toast names the effect so the payoff is legible.
 	var fx := ""
