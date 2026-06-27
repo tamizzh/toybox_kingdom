@@ -190,7 +190,7 @@ func _build_bottom_dock() -> void:
 	# ENDLESS button — the score-attack retention loop, a secondary action under PLAY.
 	# Shows your best so the chase is visible right on the menu.
 	var endless := Button.new()
-	endless.text = _endless_label()
+	endless.text = "CONQUER RUSH"
 	endless.focus_mode = Control.FOCUS_NONE
 	endless.add_theme_font_size_override("font_size", 24)
 	endless.add_theme_color_override("font_color", Color.WHITE)
@@ -394,16 +394,16 @@ func _kingdom_color(i: int) -> Color:
 
 
 func _on_play() -> void:
-	# Straight into the match — PLAY plays the active campaign stage with no stage-select
-	# detour (that overlay was pure friction; the ladder lives behind the progress hook).
 	AudioManager.play("tap")
-	SaveManager.set_mode("campaign")
+	SaveManager.set_mode("timed")
+	SaveManager.endless_run_reset()
 	get_tree().change_scene_to_file(KINGDOM_MATCH)
 
 
 func _on_endless() -> void:
+	# CONQUER RUSH — the campaign conquest ladder.
 	AudioManager.play("tap")
-	SaveManager.set_mode("endless")
+	SaveManager.set_mode("campaign")
 	get_tree().change_scene_to_file(KINGDOM_MATCH)
 
 
@@ -442,6 +442,8 @@ func _refresh_hook() -> void:
 func _ken_burns(node: Control, peak: float, secs: float) -> void:
 	var recentre := func() -> void: node.pivot_offset = node.size * 0.5
 	node.resized.connect(recentre)
+	# Await layout — size is (0,0) in _ready() so pivot would be wrong, causing a jump.
+	await node.get_tree().process_frame
 	recentre.call()
 	var tw := node.create_tween().set_loops()
 	tw.tween_property(node, "scale", Vector2(peak, peak), secs) \
@@ -594,6 +596,7 @@ class _PlayButton extends TextureButton:
 		# Gentle "press me" pulse.
 		var recentre := func() -> void: pivot_offset = size * 0.5
 		resized.connect(recentre)
+		await get_tree().process_frame
 		recentre.call()
 		var tw := create_tween().set_loops()
 		tw.tween_property(self, "scale", Vector2(1.05, 1.05), 0.8) \

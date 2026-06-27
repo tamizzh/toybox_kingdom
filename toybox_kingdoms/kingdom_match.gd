@@ -62,12 +62,13 @@ const MATCH_DURATION := 300.0   # seconds (5 min — long enough for the castle-
 # WIN_PCT of the toybox; otherwise you lose.
 const WIN_PCT := 0.50           # land you must hold AT TIMEOUT to win
 
-# ── ENDLESS mode (run-based score attack — the retention loop) ─────────────────
-# Not a campaign stage: a fixed, hard, time-boxed run scored on peak land held +
-# rivals conquered (+ a win bonus). The chase is your persistent best score, not the
-# single match. Reuses the whole match; only setup / scoring / results differ.
-const ENDLESS_DIFFS := [2, 2, 2, 2, 2, 2, 2]   # seven bold rivals
-const ENDLESS_DURATION := 180.0                 # 3-min runs — long enough to swing, short enough to retry
+# ── ENDLESS mode (truly endless — a chain of escalating islands) ───────────────
+# A RUN is a sequence of islands. CLEAR an island (conquer it, or be #1 when the
+# island timer runs out) → fly to the next, harder island with your score carried
+# forward. LOSE all your castles → the run ends and the total score is banked. The
+# island timer is only an anti-stalemate cap; a winning player is never cut off (at
+# the cap, leading = cleared). Each island reloads the scene with a harder config.
+const ENDLESS_ISLAND_TIME := 180.0     # per-island safety cap (clear early by conquest)
 
 var grid
 var renderer
@@ -112,9 +113,10 @@ var _is_first_match := false    # player's first-ever match → guided coach + p
 var _coach: Control             # the first-match coaching banner (dismissed on first claim)
 var _coach_label: Label         # coach text (swaps "draw a loop" → "return home")
 var _mode := "campaign"         # "campaign" | "endless"
-var _peak_pct := 0.0            # highest land fraction the human held this run (endless score)
-var _rivals_conquered := 0      # rival kingdoms the human eliminated this run (endless score)
-var _endless_score := 0
+var _endless_island := 0        # which island of the endless run this is (0-based)
+var _peak_pct := 0.0            # highest land fraction the human held on THIS island
+var _rivals_conquered := 0      # rival kingdoms the human eliminated on THIS island
+var _endless_score := 0         # final run total (set when the run ends)
 var _endless_is_best := false
 var _ui_layer: CanvasLayer
 
@@ -165,11 +167,12 @@ func _ready() -> void:
 	_mode = SaveManager.mode()
 	if OS.get_environment("TBK_ENDLESS") == "1":
 		_mode = "endless"
-	if _mode == "endless":
-		_rival_diffs = ENDLESS_DIFFS.duplicate()
+	if _mode in ["endless", "timed"]:
+		_endless_island = SaveManager.endless_island()
+		_rival_diffs = _endless_rivals_for(_endless_island)
 		_n_kingdoms = 1 + _rival_diffs.size()
 		if fast == "":
-			_match_t = ENDLESS_DURATION
+			_match_t = ENDLESS_ISLAND_TIME
 	else:
 		_stage = SaveManager.active_stage()
 		_rival_diffs = Campaign.rival_diffs(_stage)
@@ -178,9 +181,9 @@ func _ready() -> void:
 			_match_t = Campaign.duration(_stage)
 	# The very first match the player ever starts gets the guided coach + a pure-carve
 	# HUD (no build economy yet). Counted once here so a "Play Again" reload is match 2+.
-	# Endless is never a first-match (returning players only) — no coach / no deferral.
+	# Run modes (endless/timed) are never a first-match — no coach / no deferral.
 	# TBK_FIRSTMATCH=1 forces the first-match path for QA without resetting the save.
-	_is_first_match = _mode != "endless" and (SaveManager.stat("matches_played") == 0 \
+	_is_first_match = _mode == "campaign" and (SaveManager.stat("matches_played") == 0 \
 		or OS.get_environment("TBK_FIRSTMATCH") == "1")
 	SaveManager.bump_stat("matches_played")
 	Analytics.match_start(_stage, _n_kingdoms, _mode, _match_t)
@@ -287,6 +290,15 @@ func _ready() -> void:
 	tc.setup([_player])
 	_build_hud(_ui_layer)
 	_build_fps_overlay(_ui_layer)
+
+	# Endless: on islands after the first, fade in from the clear-wipe cover so the jump
+	# reads as continuous; announce the island either way.
+	if _mode in ["endless", "timed"]:
+		if _endless_island > 0:
+			_endless_intro()
+			_toast("ISLAND %d   ·   Score %s" % [_endless_island + 1, _comma(SaveManager.endless_run_score())], Palette.WARN)
+		else:
+			_toast("ISLAND 1", Palette.WARN)
 
 func _spawn_kingdom(i: int) -> void:
 	var kid: int = i + 1
@@ -658,7 +670,13 @@ func _check_match_end() -> void:
 	elif alive == 1:
 		_end_match(true, "conquest")               # win: last kingdom standing
 	elif _match_t <= 0.0:
-		_end_match(human_pct >= WIN_PCT, "timeout")  # win only if holding >=50% at the buzzer
+		# Campaign: hold >=50% at the buzzer to win. Endless: the cap is just an
+		# anti-stalemate backstop — if you're still alive you SURVIVED the island and
+		# advance (only losing all your castles ends an endless run).
+		if _mode in ["endless", "timed"]:
+			_end_match(true, "survived")
+		else:
+			_end_match(human_pct >= WIN_PCT, "timeout")
 
 func _human_rank() -> int:
 	var mine: int = grid.territory_count(_rulers[0].kid)
@@ -670,10 +688,23 @@ func _human_rank() -> int:
 			rank += 1
 	return rank
 
-# Endless run score: peak land held dominates, each conquered rival is a big bonus,
-# and surviving to a win (last-standing / 50% at the buzzer) caps it off.
-func _compute_endless_score(win: bool) -> int:
-	return int(round(_peak_pct * 100.0)) * 50 + _rivals_conquered * 500 + (2000 if win else 0)
+# Rival line-up for an endless island: the fleet GROWS (3 → 7) and gets BOLDER the
+# deeper the run goes, so each island is a step harder than the last.
+func _endless_rivals_for(island: int) -> Array:
+	var count := clampi(3 + island / 2, 3, 7)
+	var floor_diff := clampi(island / 2, 0, 2)        # difficulty floor rises every 2 islands
+	var diffs: Array = []
+	for i in count:
+		# a few rivals run one notch hotter than the floor for variety
+		var d := floor_diff + (1 if (floor_diff < 2 and i % 3 == 0) else 0)
+		diffs.append(clampi(d, 0, 2))
+	return diffs
+
+# One island's score: peak land held dominates, each conquered rival is a big bonus,
+# clearing pays a bonus that grows with how deep you are.
+func _compute_endless_score(cleared: bool) -> int:
+	var clear_bonus := (1000 + _endless_island * 500) if cleared else 0
+	return int(round(_peak_pct * 100.0)) * 50 + _rivals_conquered * 500 + clear_bonus
 
 # ── match end + results ───────────────────────────────────────────────────────
 func _end_match(win: bool, reason: String) -> void:
@@ -687,16 +718,33 @@ func _end_match(win: bool, reason: String) -> void:
 	var rank := _human_rank()
 	var coins: int = int(pct * 300.0) + maxi(0, _n_kingdoms - rank) * 15 + (60 if win else 0)
 	Analytics.match_end(win, reason, rank, pct, _elapsed, coins)
-	if _mode == "endless":
-		# Score the run, bank the best, and surface it on the results panel.
-		_endless_score = _compute_endless_score(win)
-		coins += _endless_score / 20            # endless also pays coins toward cosmetics
-		_endless_is_best = SaveManager.record_endless(_endless_score)
-		_stage_msg = ""
-		Analytics.event("endless_end", {
-			"score": _endless_score, "best": SaveManager.endless_best(), "is_best": _endless_is_best,
-			"peak_pct": snappedf(_peak_pct, 0.001), "rivals": _rivals_conquered, "win": win,
+	if _mode in ["endless", "timed"]:
+		# win == this island was CLEARED. Bank it; clearing advances to the next island.
+		var island_score := _compute_endless_score(win)
+		SaveManager.endless_run_bank(island_score, win)
+		Analytics.event("endless_island", {
+			"island": _endless_island, "cleared": win, "island_score": island_score,
+			"run_score": SaveManager.endless_run_score(),
+			"peak_pct": snappedf(_peak_pct, 0.001), "rivals": _rivals_conquered,
 		})
+		if win:
+			# Cleared → pay coins for it, celebrate, fly to the next (harder) island.
+			SaveManager.add_coins(island_score / 20)
+			AudioManager.play("round_win")
+			_endless_clear_transition()
+			return
+		# Run over → total it, bank the best, pay coins, show the final results.
+		_endless_score = SaveManager.endless_run_score()
+		_endless_is_best = SaveManager.record_endless(_endless_score)
+		SaveManager.add_coins(_endless_score / 20)
+		AudioManager.play("eliminate")
+		Analytics.event("endless_end", {
+			"score": _endless_score, "best": SaveManager.endless_best(),
+			"is_best": _endless_is_best, "islands": _endless_island,
+		})
+		_show_results(false, reason, rank, pct, _endless_score / 20)
+		SaveManager.endless_run_reset()
+		return
 	else:
 		Analytics.progression("complete" if win else "fail", "stage_%d" % _stage, {"pct": snappedf(pct, 0.001)})
 		# Advance the campaign ladder on a win (only the frontier stage unlocks new ground).
@@ -723,6 +771,64 @@ func _end_match(win: bool, reason: String) -> void:
 		if not is_inside_tree():
 			return
 	_show_results(win, reason, rank, pct, coins)
+
+# Island cleared in an endless run: a quick celebratory orbit, then a "sailing to the
+# next island" card wipes the screen and we reload — _ready reads the advanced island
+# index, builds the next island, and fades IN from the same cover (see _endless_intro).
+func _endless_clear_transition() -> void:
+	if _rulers[0].castles.size() > 0 and is_instance_valid(camera):
+		var cap_cell: Vector2i = _rulers[0].castles[0]["cell"]
+		var focus := _c2w(cap_cell.x, cap_cell.y, 0.0)
+		camera.start_victory_orbit(focus)
+		_victory_fireworks(focus, _kid_color[_rulers[0].kid])
+
+	# Build the transition card over a high layer (above all HUD), starting transparent.
+	var layer := CanvasLayer.new()
+	layer.layer = 80
+	add_child(layer)
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_STOP
+	root.modulate.a = 0.0
+	layer.add_child(root)
+	var cover := ColorRect.new()
+	cover.color = Color(0.05, 0.07, 0.13, 1.0)
+	cover.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_child(cover)
+	var box := VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 14)
+	root.add_child(box)
+	_result_label(box, "ISLAND %d CLEARED!" % (_endless_island + 1), 56, Palette.SAFE)
+	_result_label(box, "⛵  Sailing to Island %d" % (_endless_island + 2), 30, Color.WHITE)
+	_result_label(box, "Score  %s" % _comma(SaveManager.endless_run_score()), 30, Palette.WARN)
+
+	# Let the orbit/fireworks read for a beat, then wipe in and reload.
+	await get_tree().create_timer(0.9).timeout
+	if not is_inside_tree():
+		return
+	root.create_tween().tween_property(root, "modulate:a", 1.0, 0.45)
+	await get_tree().create_timer(0.7).timeout
+	if not is_inside_tree():
+		return
+	get_tree().reload_current_scene()
+
+# Fade the next island IN from the same deep cover the clear wipe ended on, so the jump
+# between islands reads as one continuous move instead of a hard cut.
+func _endless_intro() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 80
+	add_child(layer)
+	var cover := ColorRect.new()
+	cover.color = Color(0.05, 0.07, 0.13, 1.0)
+	cover.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	cover.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(cover)
+	var tw := cover.create_tween()
+	tw.tween_interval(0.15)
+	tw.tween_property(cover, "color:a", 0.0, 0.6)
+	tw.tween_callback(layer.queue_free)
 
 # A few staggered firework bursts over the capital during the victory orbit.
 func _victory_fireworks(focus: Vector3, color: Color) -> void:
@@ -776,15 +882,14 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 		_: sub = "You finished #%d of %d." % [rank, _n_kingdoms]
 	_result_label(vb, sub, 26, Color.WHITE)
 
-	# Endless: the score chase is the headline. Big score, best/NEW BEST, run breakdown.
-	if _mode == "endless":
+	# Run modes: the score chase is the headline. Big score, best/NEW BEST, islands cleared.
+	if _mode in ["endless", "timed"]:
 		_result_label(vb, "SCORE  %s" % _comma(_endless_score), 46, Palette.WARN)
 		if _endless_is_best:
 			_result_label(vb, "★  NEW BEST!  ★", 28, Palette.SAFE)
 		else:
 			_result_label(vb, "Best  %s" % _comma(SaveManager.endless_best()), 22, Color(1, 1, 1, 0.85))
-		_result_label(vb, "Peak %.0f%%   ·   %d conquered" % [_peak_pct * 100.0, _rivals_conquered],
-			20, HUD_DIM)
+		_result_label(vb, "Islands cleared:  %d" % _endless_island, 22, HUD_DIM)
 
 	# Campaign ladder banner (stage cleared / campaign complete / replayed).
 	if _stage_msg != "":
@@ -1119,14 +1224,18 @@ func _build_hud(ui: CanvasLayer) -> void:
 	var ir := _stat_row("coin", HUD_GOLD, "Coins / min")
 	stat_v.add_child(ir["row"]); _income_label = ir["value"]
 
-	# ── top-centre: match countdown ──
+	# ── top-centre: match countdown (campaign) / island indicator (endless) ──
+	# Endless has no doom-clock — only death ends the run — so the centre pill shows
+	# which island you're on instead of a countdown.
 	_timer_panel = _hud_panel(Vector2(Palette.CENTER_X - 84, 14), Vector2(168, 52), 16)
 	ui.add_child(_timer_panel)
 	var th := _pill_row(_timer_panel)
 	th.add_theme_constant_override("separation", 8)
 	th.alignment = BoxContainer.ALIGNMENT_CENTER
-	th.add_child(_glyph(GlyphIcon.new().setup("clock", HUD_GOLD, 22)))
-	_time_label = _hud_text("0:00", 30, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, true)
+	th.add_child(_glyph(GlyphIcon.new().setup("map" if _mode == "endless" else "clock", HUD_GOLD, 22)))
+	var init_t := ("ISLAND %d" % (_endless_island + 1)) if _mode == "endless" else "0:00"
+	_time_label = _hud_text(init_t, 26 if _mode == "endless" else 30, Color.WHITE,
+		HORIZONTAL_ALIGNMENT_CENTER, true)
 	th.add_child(_time_label)
 
 	# ── top-right: coins + population pills, then settings ──
@@ -1682,19 +1791,24 @@ func _hud_tick(delta: float) -> void:
 		bd["btn"].modulate = Color(1, 1, 1, 1.0) if afford else Color(0.78, 0.80, 0.84, 0.92)
 		bd["cost_label"].add_theme_color_override("font_color", HUD_GOLD if afford else Palette.DANGER)
 
-	var secs := int(ceil(_match_t))
-	_time_label.text = "%d:%02d" % [secs / 60, secs % 60]
-	# final-15s urgency: tick red and punch the pill once per second.
-	if secs != _last_secs:
-		_last_secs = secs
-		if secs <= 15 and secs > 0 and _timer_panel != null:
-			_time_label.add_theme_color_override("font_color", Palette.DANGER.lightened(0.15))
-			_timer_panel.pivot_offset = _timer_panel.size * 0.5
-			var tw := _timer_panel.create_tween()
-			tw.tween_property(_timer_panel, "scale", Vector2(1.12, 1.12), 0.10).set_trans(Tween.TRANS_BACK)
-			tw.tween_property(_timer_panel, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK)
-		elif secs > 15:
-			_time_label.add_theme_color_override("font_color", Color.WHITE)
+	# Endless (untimed): the centre pill shows the island, not a countdown.
+	# Timed: shows the countdown clock like campaign but runs the endless scoring system.
+	if _mode == "endless":
+		_time_label.text = "ISLAND %d" % (_endless_island + 1)
+	else:
+		var secs := int(ceil(_match_t))
+		_time_label.text = "%d:%02d" % [secs / 60, secs % 60]
+		# final-15s urgency: tick red and punch the pill once per second.
+		if secs != _last_secs:
+			_last_secs = secs
+			if secs <= 15 and secs > 0 and _timer_panel != null:
+				_time_label.add_theme_color_override("font_color", Palette.DANGER.lightened(0.15))
+				_timer_panel.pivot_offset = _timer_panel.size * 0.5
+				var tw := _timer_panel.create_tween()
+				tw.tween_property(_timer_panel, "scale", Vector2(1.12, 1.12), 0.10).set_trans(Tween.TRANS_BACK)
+				tw.tween_property(_timer_panel, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK)
+			elif secs > 15:
+				_time_label.add_theme_color_override("font_color", Color.WHITE)
 
 	var standings: Array = []
 	for kid in _kids:

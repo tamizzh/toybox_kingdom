@@ -133,7 +133,7 @@ func spend_coins(n: int) -> bool:
 # ── match mode (transient — which mode the NEXT match runs) ───────────────────────
 # Not persisted: the menu sets it before launching kingdom_match; "Play Again" reloads
 # the same scene so it persists in memory across reloads, and a cold launch defaults to
-# campaign. Values: "campaign" | "endless".
+# campaign. Values: "campaign" | "endless" | "timed".
 var _pending_mode := "campaign"
 
 func set_mode(m: String) -> void:
@@ -142,7 +142,30 @@ func set_mode(m: String) -> void:
 func mode() -> String:
 	return _pending_mode
 
-# ── progression: endless score-attack ─────────────────────────────────────────────
+# ── transient endless-run state (a RUN = a chain of islands) ──────────────────────
+# Not persisted: lives in memory across the scene reloads that carry the player from
+# one island to the next. Reset when a fresh run starts (menu ENDLESS / Play Again).
+var _er_island := 0       # 0-based index of the island currently being played
+var _er_score := 0        # score banked from islands already CLEARED this run
+
+func endless_island() -> int:
+	return _er_island
+
+func endless_run_score() -> int:
+	return _er_score
+
+func endless_run_reset() -> void:
+	_er_island = 0
+	_er_score = 0
+
+# Bank one island's result. On a clear we add its score AND advance to the next island;
+# on a failed island we only add the partial score (the run is ending).
+func endless_run_bank(island_score: int, cleared: bool) -> void:
+	_er_score += island_score
+	if cleared:
+		_er_island += 1
+
+# ── progression: endless best (persistent across runs) ─────────────────────────────
 func endless_best() -> int:
 	return int(_cfg.get_value("progress", "endless_best", 0))
 
