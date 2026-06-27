@@ -63,12 +63,11 @@ const MATCH_DURATION := 300.0   # seconds (5 min — long enough for the castle-
 const WIN_PCT := 0.50           # land you must hold AT TIMEOUT to win
 
 # ── ENDLESS mode (truly endless — a chain of escalating islands) ───────────────
-# A RUN is a sequence of islands. CLEAR an island (conquer it, or be #1 when the
-# island timer runs out) → fly to the next, harder island with your score carried
-# forward. LOSE all your castles → the run ends and the total score is banked. The
-# island timer is only an anti-stalemate cap; a winning player is never cut off (at
-# the cap, leading = cleared). Each island reloads the scene with a harder config.
-const ENDLESS_ISLAND_TIME := 180.0     # per-island safety cap (clear early by conquest)
+# A RUN is a sequence of islands. CONQUER an island (be the last kingdom standing) →
+# fly to the next, harder island with your score carried forward. LOSE all your castles
+# → the run ends and the total score is banked. The chain is UNTIMED: there is no clock
+# and no timeout — you advance only by winning, you end only by dying. Each island
+# reloads the scene with a harder config.
 
 # ── DAILY CHALLENGE mode ───────────────────────────────────────────────────────
 # A single, date-SEEDED timed run — the same board for every player that day — scored
@@ -188,11 +187,11 @@ func _ready() -> void:
 		if fast == "":
 			_match_t = DAILY_DURATION
 	elif _mode in ["endless", "timed"]:
+		# UNTIMED: you advance ONLY by conquering the island (last kingdom standing);
+		# only losing all your castles ends the run. No clock, no timeout.
 		_endless_island = SaveManager.endless_island()
 		_rival_diffs = _endless_rivals_for(_endless_island)
 		_n_kingdoms = 1 + _rival_diffs.size()
-		if fast == "":
-			_match_t = ENDLESS_ISLAND_TIME
 	else:
 		_stage = SaveManager.active_stage()
 		_rival_diffs = Campaign.rival_diffs(_stage)
@@ -206,7 +205,7 @@ func _ready() -> void:
 	_is_first_match = _mode == "campaign" and (SaveManager.stat("matches_played") == 0 \
 		or OS.get_environment("TBK_FIRSTMATCH") == "1")
 	SaveManager.bump_stat("matches_played")
-	Analytics.match_start(_stage, _n_kingdoms, _mode, _match_t)
+	Analytics.match_start(_stage, _n_kingdoms, _mode, 0.0 if _mode in ["endless", "timed"] else _match_t)
 	if _mode == "campaign":
 		Analytics.progression("start", "stage_%d" % _stage)
 	AudioManager.play_music("game")
@@ -319,6 +318,9 @@ func _ready() -> void:
 			_toast("ISLAND %d   ·   Score %s" % [_endless_island + 1, _comma(SaveManager.endless_run_score())], Palette.WARN)
 		else:
 			_toast("ISLAND 1", Palette.WARN)
+	elif _mode == "campaign":
+		# Tell the player which stage of the 10-stage campaign they're on.
+		_toast("STAGE %d/%d   ·   %s" % [_stage + 1, Campaign.count(), Campaign.title(_stage)], Palette.WARN)
 
 func _spawn_kingdom(i: int) -> void:
 	var kid: int = i + 1
@@ -688,15 +690,11 @@ func _check_match_end() -> void:
 	if human.eliminated:
 		_end_match(false, "conquered")
 	elif alive == 1:
-		_end_match(true, "conquest")               # win: last kingdom standing
-	elif _match_t <= 0.0:
-		# Campaign: hold >=50% at the buzzer to win. Endless: the cap is just an
-		# anti-stalemate backstop — if you're still alive you SURVIVED the island and
-		# advance (only losing all your castles ends an endless run).
-		if _mode in ["endless", "timed"]:
-			_end_match(true, "survived")
-		else:
-			_end_match(human_pct >= WIN_PCT, "timeout")
+		_end_match(true, "conquest")               # win: last kingdom standing → next island
+	elif _match_t <= 0.0 and _mode in ["campaign", "daily"]:
+		# Only the timed modes end on the clock (hold >=50% to win). The endless island
+		# chain is UNTIMED — it ends only by conquest (advance) or elimination (run over).
+		_end_match(human_pct >= WIN_PCT, "timeout")
 
 func _human_rank() -> int:
 	var mine: int = grid.territory_count(_rulers[0].kid)
@@ -1291,11 +1289,21 @@ func _build_hud(ui: CanvasLayer) -> void:
 	var th := _pill_row(_timer_panel)
 	th.add_theme_constant_override("separation", 8)
 	th.alignment = BoxContainer.ALIGNMENT_CENTER
-	th.add_child(_glyph(GlyphIcon.new().setup("map" if _mode == "endless" else "clock", HUD_GOLD, 22)))
-	var init_t := ("ISLAND %d" % (_endless_island + 1)) if _mode == "endless" else "0:00"
-	_time_label = _hud_text(init_t, 26 if _mode == "endless" else 30, Color.WHITE,
+	var is_chain := _mode in ["endless", "timed"]
+	th.add_child(_glyph(GlyphIcon.new().setup("map" if is_chain else "clock", HUD_GOLD, 22)))
+	var init_t := ("ISLAND %d" % (_endless_island + 1)) if is_chain else "0:00"
+	_time_label = _hud_text(init_t, 26 if is_chain else 30, Color.WHITE,
 		HORIZONTAL_ALIGNMENT_CENTER, true)
 	th.add_child(_time_label)
+
+	# Campaign: a small stage chip under the clock so the player always knows which
+	# stage of the ladder they're on (the campaign was otherwise invisible in-match).
+	if _mode == "campaign":
+		var stage_chip := _hud_panel(Vector2(Palette.CENTER_X - 150, 70), Vector2(300, 32), 12)
+		ui.add_child(stage_chip)
+		var sr := _pill_row(stage_chip); sr.alignment = BoxContainer.ALIGNMENT_CENTER
+		sr.add_child(_hud_text("STAGE %d/%d  ·  %s" % [_stage + 1, Campaign.count(), Campaign.title(_stage)],
+			16, HUD_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
 
 	# ── top-right: coins + population pills, then settings ──
 	var coins := _hud_panel(Vector2(Palette.DESIGN_W - 374, 16), Vector2(158, 48), 14)
@@ -1852,9 +1860,9 @@ func _hud_tick(delta: float) -> void:
 		bd["btn"].modulate = Color(1, 1, 1, 1.0) if afford else Color(0.78, 0.80, 0.84, 0.92)
 		bd["cost_label"].add_theme_color_override("font_color", HUD_GOLD if afford else Palette.DANGER)
 
-	# Endless (untimed): the centre pill shows the island, not a countdown.
-	# Timed: shows the countdown clock like campaign but runs the endless scoring system.
-	if _mode == "endless":
+	# Endless island chain (endless/timed) is UNTIMED: the centre pill shows the island,
+	# not a countdown. Only campaign/daily show the clock.
+	if _mode in ["endless", "timed"]:
 		_time_label.text = "ISLAND %d" % (_endless_island + 1)
 	else:
 		var secs := int(ceil(_match_t))

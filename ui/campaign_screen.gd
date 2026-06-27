@@ -126,6 +126,7 @@ func _stage_card(idx: int, cleared: int, active: int) -> Control:
 	if is_current:
 		row.add_child(_btn("REPLAY" if is_cleared else "CONQUER", Palette.WARN, func() -> void:
 			AudioManager.play("tap")
+			SaveManager.set_mode("campaign")   # PLAY may have left mode on "timed"
 			get_tree().change_scene_to_file(KINGDOM_MATCH), 150.0))
 	elif is_cleared:
 		row.add_child(_status("✓", Palette.SAFE))

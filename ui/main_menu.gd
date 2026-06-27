@@ -190,7 +190,7 @@ func _build_bottom_dock() -> void:
 	# ENDLESS button — the score-attack retention loop, a secondary action under PLAY.
 	# Shows your best so the chase is visible right on the menu.
 	var endless := Button.new()
-	endless.text = "CONQUER RUSH"
+	endless.text = _campaign_label()
 	endless.focus_mode = Control.FOCUS_NONE
 	endless.add_theme_font_size_override("font_size", 24)
 	endless.add_theme_color_override("font_color", Color.WHITE)
@@ -235,6 +235,14 @@ func _build_bottom_dock() -> void:
 func _endless_label() -> String:
 	var best := SaveManager.endless_best()
 	return ("ENDLESS  ·  BEST %s" % best) if best > 0 else "ENDLESS"
+
+
+# CONQUER RUSH (campaign) caption — shows the player's progress on the 10-stage ladder.
+func _campaign_label() -> String:
+	var Campaign := preload("res://toybox_kingdoms/data/campaign.gd")
+	if SaveManager.campaign_complete():
+		return "CONQUER RUSH  ·  DONE"
+	return "CONQUER RUSH  ·  %d/%d" % [SaveManager.active_stage() + 1, Campaign.count()]
 
 
 # ── Top-left coin bar (atlas coinbar + label) ─────────────────────────────────
@@ -401,10 +409,10 @@ func _on_play() -> void:
 
 
 func _on_endless() -> void:
-	# CONQUER RUSH — the campaign conquest ladder.
+	# CONQUER RUSH — open the campaign ladder so the player SEES the 10 stages + their
+	# progress, then launches the current stage from there (campaign_screen sets the mode).
 	AudioManager.play("tap")
-	SaveManager.set_mode("campaign")
-	get_tree().change_scene_to_file(KINGDOM_MATCH)
+	_open_overlay(load("res://ui/campaign_screen.gd").new())
 
 
 func _open_campaign() -> void:
