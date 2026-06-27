@@ -4,7 +4,7 @@ extends Control
 # Added as a child of the main menu; frees itself on Close.
 
 # TODO(store): host a real privacy policy and put its URL here before submission.
-const PRIVACY_URL := "https://example.com/party-pals-arena/privacy"
+const PRIVACY_URL := "https://example.com/toybox-kingdoms/privacy"
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -37,7 +37,7 @@ func _ready() -> void:
 		func(): OS.shell_open(PRIVACY_URL)))
 
 	var credits := Label.new()
-	credits.text = "Party Pals Arena\nMade with Godot. Music & SFX generated in-house."
+	credits.text = "Toybox Kingdoms\nMade with Godot. Music & SFX generated in-house."
 	credits.add_theme_font_size_override("font_size", 14)
 	credits.add_theme_color_override("font_color", Color(Palette.NEUTRAL, 0.9))
 	credits.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
