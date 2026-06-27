@@ -181,6 +181,54 @@ func record_endless(score: int) -> bool:
 	_save()
 	return is_best
 
+# ── daily challenge ───────────────────────────────────────────────────────────
+# One shared, date-seeded run per day (everyone gets the same board). First completion
+# each day pays a streak-scaling coin reward; replays are allowed but only update the
+# day's best score. Keeping consecutive days alive grows the streak.
+func daily_seed() -> int:
+	var d := Time.get_date_dict_from_system()
+	return int(d.year) * 10000 + int(d.month) * 100 + int(d.day)
+
+func _today_str() -> String:
+	return Time.get_date_string_from_system()
+
+func daily_done_today() -> bool:
+	return str(_cfg.get_value("daily", "last_date", "")) == _today_str()
+
+# Best score on TODAY's challenge (0 until today is played; resets each day).
+func daily_best() -> int:
+	if not daily_done_today():
+		return 0
+	return int(_cfg.get_value("daily", "today_best", 0))
+
+func daily_streak() -> int:
+	return int(_cfg.get_value("daily", "streak", 0))
+
+# Record a finished daily run. Returns {first, streak, reward, is_best}. The reward is
+# only granted on the FIRST completion of the day; replays just update the day's best.
+func complete_daily(score: int) -> Dictionary:
+	var today := _today_str()
+	var last := str(_cfg.get_value("daily", "last_date", ""))
+	var first := last != today
+	var streak := daily_streak()
+	var reward := 0
+	var is_best := false
+	if first:
+		var yesterday := Time.get_date_string_from_unix_time(int(Time.get_unix_time_from_system()) - 86400)
+		streak = (streak + 1) if last == yesterday else 1
+		reward = 100 + (streak - 1) * 20
+		_cfg.set_value("daily", "last_date", today)
+		_cfg.set_value("daily", "streak", streak)
+		_cfg.set_value("daily", "today_best", score)
+		_cfg.set_value("daily", "runs", int(_cfg.get_value("daily", "runs", 0)) + 1)
+		is_best = true
+		add_coins(reward)   # add_coins saves + emits
+	elif score > int(_cfg.get_value("daily", "today_best", 0)):
+		_cfg.set_value("daily", "today_best", score)
+		is_best = true
+	_save()
+	return {"first": first, "streak": streak, "reward": reward, "is_best": is_best}
+
 # ── progression: campaign ladder ─────────────────────────────────────────────────
 const Campaign := preload("res://toybox_kingdoms/data/campaign.gd")
 

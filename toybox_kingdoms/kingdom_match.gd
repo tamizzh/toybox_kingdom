@@ -70,6 +70,12 @@ const WIN_PCT := 0.50           # land you must hold AT TIMEOUT to win
 # the cap, leading = cleared). Each island reloads the scene with a harder config.
 const ENDLESS_ISLAND_TIME := 180.0     # per-island safety cap (clear early by conquest)
 
+# ── DAILY CHALLENGE mode ───────────────────────────────────────────────────────
+# A single, date-SEEDED timed run — the same board for every player that day — scored
+# like one endless island. First completion of the day pays a streak reward.
+const DAILY_DURATION := 150.0
+const DAILY_DIFFICULTY := 2             # fixed mid difficulty (≈ endless island 2) for a meaty single run
+
 var grid
 var renderer
 var camera
@@ -116,8 +122,11 @@ var _mode := "campaign"         # "campaign" | "endless"
 var _endless_island := 0        # which island of the endless run this is (0-based)
 var _peak_pct := 0.0            # highest land fraction the human held on THIS island
 var _rivals_conquered := 0      # rival kingdoms the human eliminated on THIS island
-var _endless_score := 0         # final run total (set when the run ends)
+var _endless_score := 0         # final run total (set when the run ends); also the daily score
 var _endless_is_best := false
+var _daily_streak := 0          # daily-challenge results display
+var _daily_reward := 0
+var _daily_first := false
 var _ui_layer: CanvasLayer
 
 var _terr_label: Label
@@ -167,7 +176,18 @@ func _ready() -> void:
 	_mode = SaveManager.mode()
 	if OS.get_environment("TBK_ENDLESS") == "1":
 		_mode = "endless"
-	if _mode in ["endless", "timed"]:
+	if OS.get_environment("TBK_DAILY") == "1":
+		_mode = "daily"
+	if _mode == "daily":
+		# Seed the global RNG from the date so the board (scatter/decor) is identical for
+		# everyone today; AI brains already seed deterministically. A fixed mid difficulty
+		# keeps the daily a single comparable challenge.
+		seed(SaveManager.daily_seed())
+		_rival_diffs = _endless_rivals_for(DAILY_DIFFICULTY)
+		_n_kingdoms = 1 + _rival_diffs.size()
+		if fast == "":
+			_match_t = DAILY_DURATION
+	elif _mode in ["endless", "timed"]:
 		_endless_island = SaveManager.endless_island()
 		_rival_diffs = _endless_rivals_for(_endless_island)
 		_n_kingdoms = 1 + _rival_diffs.size()
@@ -187,7 +207,7 @@ func _ready() -> void:
 		or OS.get_environment("TBK_FIRSTMATCH") == "1")
 	SaveManager.bump_stat("matches_played")
 	Analytics.match_start(_stage, _n_kingdoms, _mode, _match_t)
-	if _mode != "endless":
+	if _mode == "campaign":
 		Analytics.progression("start", "stage_%d" % _stage)
 	AudioManager.play_music("game")
 	_apply_render_scale()
@@ -718,6 +738,31 @@ func _end_match(win: bool, reason: String) -> void:
 	var rank := _human_rank()
 	var coins: int = int(pct * 300.0) + maxi(0, _n_kingdoms - rank) * 15 + (60 if win else 0)
 	Analytics.match_end(win, reason, rank, pct, _elapsed, coins)
+	if _mode == "daily":
+		# Score the daily like one island; record it (first completion pays the streak
+		# reward), pay score coins, then show the daily results. No island chaining.
+		_endless_score = _compute_endless_score(win)
+		var dres := SaveManager.complete_daily(_endless_score)
+		_endless_is_best = dres["is_best"]
+		_daily_first = dres["first"]
+		_daily_streak = dres["streak"]
+		_daily_reward = dres["reward"]
+		SaveManager.add_coins(_endless_score / 20)
+		AudioManager.play("round_win" if win else "eliminate")
+		Analytics.event("daily_end", {
+			"score": _endless_score, "win": win, "first": _daily_first,
+			"streak": _daily_streak, "reward": _daily_reward, "is_best": _endless_is_best,
+		})
+		if win and _rulers[0].castles.size() > 0 and is_instance_valid(camera):
+			var cap: Vector2i = _rulers[0].castles[0]["cell"]
+			var f := _c2w(cap.x, cap.y, 0.0)
+			camera.start_victory_orbit(f)
+			_victory_fireworks(f, _kid_color[_rulers[0].kid])
+			await get_tree().create_timer(2.0).timeout
+			if not is_inside_tree():
+				return
+		_show_results(win, reason, rank, pct, _endless_score / 20 + _daily_reward)
+		return
 	if _mode in ["endless", "timed"]:
 		# win == this island was CLEARED. Bank it; clearing advances to the next island.
 		var island_score := _compute_endless_score(win)
@@ -895,6 +940,15 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 		else:
 			_result_label(vb, "Best  %s" % _comma(SaveManager.endless_best()), 22, Color(1, 1, 1, 0.85))
 		_result_label(vb, "Islands cleared:  %d" % _endless_island, 22, HUD_DIM)
+
+	# Daily challenge: score + streak; the day's reward (first completion only).
+	elif _mode == "daily":
+		_result_label(vb, "DAILY  ·  SCORE  %s" % _comma(_endless_score), 42, Palette.WARN)
+		_result_label(vb, "STREAK  ·  %d DAY%s" % [_daily_streak, "" if _daily_streak == 1 else "S"], 26, Palette.SAFE)
+		if _daily_first:
+			_result_label(vb, "Daily reward  +%d coins" % _daily_reward, 24, HUD_GOLD)
+		else:
+			_result_label(vb, "Already claimed today — best %s" % _comma(SaveManager.daily_best()), 22, HUD_DIM)
 
 	# Campaign ladder banner (stage cleared / campaign complete / replayed).
 	if _stage_msg != "":

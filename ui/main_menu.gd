@@ -167,7 +167,8 @@ func _build_bottom_dock() -> void:
 		AudioManager.play("tap")
 		_open_overlay(load("res://ui/shop_screen.gd").new())))
 	icon_row.add_child(_atlas_icon_btn("rewards", func() -> void:
-		AudioManager.play("tap")))
+		AudioManager.play("tap")
+		_open_overlay(load("res://ui/daily_screen.gd").new())))
 	icon_row.add_child(_atlas_icon_btn("howtoplay", func() -> void:
 		AudioManager.play("tap")
 		_open_overlay(load("res://ui/onboarding_screen.gd").new())))
