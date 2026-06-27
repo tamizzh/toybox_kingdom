@@ -24,10 +24,8 @@ func _ready() -> void:
 
 	_build_top_buttons()
 	_build_currency_chip()
+	_build_logo()
 
-	# The splash background already shows the TOYBOX KINGDOMS title, tagline and the
-	# rival kingdoms, so the menu only overlays the PLAY button, anchored near the
-	# bottom so it doesn't cover the artwork.
 	var col := _play_row()
 	col.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	col.offset_top = -210
@@ -90,7 +88,7 @@ func _open_overlay(node: Control) -> void:
 # the same art (so the sides read as an intentional backdrop, not flat bars) and lay
 # the full, un-cropped poster on top, centred.
 func _build_background() -> void:
-	var bg_tex := AssetKit.tex("res://assets/splash")
+	var bg_tex := AssetKit.tex("res://assets/main_menu_bg")
 	if bg_tex == null:
 		var bg := _BG.new()
 		bg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -98,28 +96,16 @@ func _build_background() -> void:
 		add_child(bg)
 		return
 
-	# Zoomed copy that fully covers the frame, dimmed so it recedes behind the poster.
-	var backdrop := TextureRect.new()
-	backdrop.texture = bg_tex
-	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
-	backdrop.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	backdrop.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	backdrop.modulate = Color(0.45, 0.45, 0.52)
-	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(backdrop)
-	# Slow, deep parallax drift on the recessed backdrop (more travel than the poster
-	# so the two layers separate and the scene reads as 3D, not a flat photo).
-	_ken_burns(backdrop, 1.10, 11.0)
-
-	# The full poster, scaled to fit without cropping (full height, centred).
+	# The hero poster cover-cropped to FILL the whole screen on any aspect (no bars,
+	# no dimmed margins). The title sits in the centre safe-zone so the crop never
+	# eats it. A slow Ken Burns zoom keeps the title screen feeling alive.
 	var photo := TextureRect.new()
 	photo.texture = bg_tex
 	photo.set_anchors_preset(Control.PRESET_FULL_RECT)
 	photo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	photo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	photo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	photo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(photo)
-	# Subtle breathing zoom on the hero poster so the title screen feels alive.
 	_ken_burns(photo, 1.035, 9.0)
 
 	# Drifting confetti above the art (below all chrome) for constant gentle motion.
@@ -127,13 +113,44 @@ func _build_background() -> void:
 	confetti.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(confetti)
 
-	# Gentle scrim along the bottom so the PLAY button + hint text stay legible.
-	var scrim := ColorRect.new()
-	scrim.color = Color(0.07, 0.05, 0.16, 0.30)
-	scrim.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	scrim.offset_top = -240
-	scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(scrim)
+	# Top scrim: dark gradient behind the chrome bar so coins/buttons are always legible.
+	var top_scrim := _GradientRect.new()
+	top_scrim.from_color = Color(0.05, 0.03, 0.12, 0.72)
+	top_scrim.to_color   = Color(0.05, 0.03, 0.12, 0.0)
+	top_scrim.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	top_scrim.offset_bottom = 110
+	top_scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(top_scrim)
+
+	# Bottom scrim: darker gradient so the PLAY button + hint text stay legible.
+	var bot_scrim := _GradientRect.new()
+	bot_scrim.from_color = Color(0.05, 0.03, 0.12, 0.0)
+	bot_scrim.to_color   = Color(0.05, 0.03, 0.12, 0.55)
+	bot_scrim.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	bot_scrim.offset_top = -220
+	bot_scrim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(bot_scrim)
+
+
+# ── Logo overlay ──────────────────────────────────────────────────────────────
+func _build_logo() -> void:
+	var logo_tex := AssetKit.tex("res://assets/logo")
+	if logo_tex == null:
+		return
+	var logo := TextureRect.new()
+	logo.texture = logo_tex
+	logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	# Anchor top-wide, sized so the logo sits comfortably below the chrome bar.
+	# Place logo in the top half, well below the 76px chrome bar, centered.
+	# anchor_top=0.08 keeps it below chrome; anchor_bottom=0.55 gives it room.
+	logo.anchor_left   = 0.1
+	logo.anchor_right  = 0.9
+	logo.anchor_top    = 0.06
+	logo.anchor_bottom = 0.52
+	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	logo.z_index = 5
+	add_child(logo)
 
 
 # ── Top-right SHOP / SETTINGS ──────────────────────────────────────────────────
@@ -467,6 +484,22 @@ class _Confetti extends Control:
 			var hh: float = b["h"]
 			draw_rect(Rect2(-w * 0.5, -hh * 0.5, w, hh), b["color"])
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+
+# ── Vertical gradient rect (top-to-bottom) ──────────────────────────────────────
+class _GradientRect extends Control:
+	var from_color: Color = Color(0, 0, 0, 0.6)
+	var to_color:   Color = Color(0, 0, 0, 0.0)
+	func _draw() -> void:
+		draw_rect(Rect2(Vector2.ZERO, size), from_color)
+		# Simulate gradient by drawing thin horizontal strips.
+		var steps := 32
+		for i in steps:
+			var t := float(i) / float(steps)
+			var c := from_color.lerp(to_color, t)
+			var y := t * size.y
+			var h := size.y / float(steps) + 1.0
+			draw_rect(Rect2(0, y, size.x, h), c)
 
 
 class _PlayButton extends Button:
