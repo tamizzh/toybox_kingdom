@@ -104,12 +104,11 @@ void fragment(){
 	            + sin((w.x + w.y) * 0.05 + t * 1.3) * 0.15;
 	vec3 col = mix(deep, shallow, clamp(swell + 0.5, 0.0, 1.0));
 
-	// Fake sun glint without a lighting pass: a soft drifting sheen band plus tight
-	// sparkles where two high-frequency waves cross — additive highlights = sun on water.
-	float sheen = smoothstep(0.55, 1.0, sin(w.x * 0.045 - w.y * 0.05 + t * 0.8));
-	float spark = sin(w.x * 0.8 + t * 5.0) * sin(w.y * 0.7 - t * 4.0);
-	float glint = smoothstep(0.82, 1.0, spark);
-	col += glint_col * (sheen * 0.10 + glint * 0.30);
+	// Fake sun glint without a lighting pass: a soft, broad drifting sheen band. Kept
+	// LOW-frequency on purpose — a tight sparkle pattern aliases into shimmering white
+	// dots at the 0.75 mobile render scale, so only the smooth sheen survives.
+	float sheen = smoothstep(0.45, 1.0, sin(w.x * 0.045 - w.y * 0.05 + t * 0.8));
+	col += glint_col * sheen * 0.16;
 
 	// Trig-wobbled foam ring — animate the shoreline so it isn't a clean box.
 	vec2 d = abs(w) - board_half;
