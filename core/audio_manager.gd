@@ -15,7 +15,7 @@ const SFX := {
 	"win":       preload("res://assets/audio/sfx_win.wav"),
 }
 const MUSIC := {
-	"menu": preload("res://assets/audio/music_menu.wav"),
+	"menu": preload("res://assets/audio/music_game.wav"),
 	"game": preload("res://assets/audio/music_game.wav"),
 }
 
