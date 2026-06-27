@@ -587,8 +587,6 @@ func _eliminate(b, conq) -> void:
 	b.alive = false
 	grid.clear_trail(b.kid)
 	grid.transfer_all(b.kid, conq.kid)
-	if _roads:
-		_roads.clear_kingdom(b.kid)
 	if b.avatar:
 		b.avatar.visible = false
 	if b.name_tag:

@@ -66,6 +66,17 @@ void fragment(){
 	float crest = smoothstep(0.0, 0.6, shore) * (0.6 + 0.4 * fbm(w * 0.8 - t * 4.0));
 	col = mix(col, foam_col, clamp(shore * 0.5 + crest * 0.6, 0.0, 1.0));
 
+	// Sparkles: a few cells twinkle on the open sea. Each cell gets a unique sine
+	// frequency; only ~0.5% are lit and they pulse gently. Mid-ocean only (never on
+	// the foam line) and faded near the shore so they stay a subtle, occasional glint.
+	vec2  sg  = floor(w * 5.5 + 0.5);
+	float sh1 = hash(sg);
+	float sh2 = hash(sg + vec2(3.71, 9.13));
+	float spark_pulse = max(0.0, sin(TIME * (0.38 + sh2 * 0.55) + sh2 * 6.28));
+	float spark_gate  = step(0.9978, sh1);
+	float spark_zone  = smoothstep(3.5, 9.0, outside) * smoothstep(55.0, 28.0, outside);
+	col += vec3(0.88, 0.94, 1.0) * spark_pulse * spark_gate * spark_zone * 0.40;
+
 	ALBEDO = col;
 	ROUGHNESS = 0.12;     // glossy water → tight sun glint
 	METALLIC = 0.0;
