@@ -440,18 +440,18 @@ func _refresh_hook() -> void:
 # centre, forever. Pivot is kept at the layer's centre as it (re)sizes so the zoom
 # never drifts off-frame. `peak` is the max scale, `secs` one half-cycle's duration.
 func _ken_burns(node: Control, peak: float, secs: float) -> void:
-	# pivot_offset must be the node's visual centre. node.size is (0,0) in _ready() before
-	# layout, so we read the viewport size instead — it's always correct and never triggers
-	# the layout-resized feedback loop that caused the shake.
 	var recentre := func() -> void:
 		node.pivot_offset = Vector2(node.get_viewport().size) * 0.5
-	node.resized.connect(recentre)  # keeps pivot correct if the window is resized (web)
+	node.resized.connect(recentre)
 	recentre.call()
+	# Cosine oscillation: scale = 1.0 + (peak-1) * (1 - cos(t·2π)) / 2
+	# gives perfectly continuous velocity — no jerk at the zoom reversal.
+	# secs is the half-period so the full in-out cycle takes secs*2.
+	var set_scale := func(t: float) -> void:
+		var s := 1.0 + (peak - 1.0) * (1.0 - cos(t * TAU)) * 0.5
+		node.scale = Vector2(s, s)
 	var tw := node.create_tween().set_loops()
-	tw.tween_property(node, "scale", Vector2(peak, peak), secs) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_property(node, "scale", Vector2.ONE, secs) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_method(set_scale, 0.0, 1.0, secs * 2.0)
 
 
 func _panel_style(bg: Color, border: Color, radius: int, border_width: int, padding: int) -> StyleBoxFlat:
