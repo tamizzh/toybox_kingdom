@@ -15,31 +15,18 @@ var _hook_label: Label
 
 func _ready() -> void:
 	AudioManager.play_music("menu")
-
-	# Pre-compile the match's custom shaders while the player is on the menu, so the
-	# board's first frame doesn't stall compiling them (the main load hitch on mobile).
 	add_child(load("res://toybox_kingdoms/tools/shader_warmup.gd").new())
 
-	_build_background()
-
-	_build_top_buttons()
-	_build_currency_chip()
-	_build_logo()
-
-	var col := _play_row()
-	col.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	col.offset_top = -210
-	col.offset_bottom = -36
-	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(col)
+	_build_background()  # cover-cropped art + scrims
+	_build_logo()        # logo centered upper area
+	_build_currency_chip() # coin bar top-left
+	_build_bottom_dock() # icon buttons + PLAY
 
 	_refresh_hook()
 
-	# First launch: show the how-to-play tutorial (marks onboarding done when finished).
 	if not SaveManager.onboarding_done():
 		_open_overlay(load("res://ui/onboarding_screen.gd").new())
 	else:
-		# Returning player: grant the once-a-day login bonus (a reason to come back).
 		var bonus := SaveManager.claim_daily_if_due(50)
 		if bonus > 0:
 			_show_daily(bonus)
@@ -153,41 +140,87 @@ func _build_logo() -> void:
 	add_child(logo)
 
 
-# ── Top-right SHOP / SETTINGS ──────────────────────────────────────────────────
-func _build_top_buttons() -> void:
-	var bar := HBoxContainer.new()
-	bar.add_theme_constant_override("separation", 10)
-	bar.position = Vector2(Palette.DESIGN_W - 500, 22)
-	bar.z_index = 12
-	add_child(bar)
-	bar.add_child(_menu_btn("HOW TO PLAY", Palette.PLAYER_COLORS[1], func() -> void:
-		AudioManager.play("tap")
-		_open_overlay(load("res://ui/onboarding_screen.gd").new()), 176))
-	bar.add_child(_menu_btn("SHOP", Palette.WARN, func() -> void:
+# ── Bottom dock: icon buttons row + PLAY + campaign text ─────────────────────
+func _build_bottom_dock() -> void:
+	# Icon buttons row: SHOP · REWARDS · HOW TO PLAY · SETTINGS
+	var icon_row := HBoxContainer.new()
+	icon_row.add_theme_constant_override("separation", 20)
+	icon_row.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	icon_row.offset_top    = -290
+	icon_row.offset_bottom = -150
+	icon_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	icon_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon_row.z_index = 12
+	add_child(icon_row)
+	icon_row.add_child(_atlas_icon_btn("shop", func() -> void:
 		AudioManager.play("tap")
 		_open_overlay(load("res://ui/shop_screen.gd").new())))
-	bar.add_child(_menu_btn("SETTINGS", Palette.NEUTRAL, func() -> void:
+	icon_row.add_child(_atlas_icon_btn("rewards", func() -> void:
+		AudioManager.play("tap")))
+	icon_row.add_child(_atlas_icon_btn("howtoplay", func() -> void:
+		AudioManager.play("tap")
+		_open_overlay(load("res://ui/onboarding_screen.gd").new())))
+	icon_row.add_child(_atlas_icon_btn("settings", func() -> void:
 		AudioManager.play("tap")
 		_open_overlay(load("res://ui/settings_screen.gd").new())))
 
+	# PLAY button — wide, prominent, centered
+	var play := _PlayButton.new()
+	play.custom_minimum_size = Vector2(460, 110)
+	play.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	play.offset_top    = -132
+	play.offset_bottom = -18
+	play.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	play.pressed.connect(_on_play)
+	play.z_index = 12
+	add_child(play)
 
-# ── Top-left coins / level chip (opens the profile/stats panel) ───────────────────
+	# Campaign hook — small floating text, no background
+	_hook_label = Label.new()
+	_hook_label.add_theme_font_size_override("font_size", 17)
+	_hook_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.88))
+	_hook_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
+	_hook_label.add_theme_constant_override("outline_size", 6)
+	_hook_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hook_label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	_hook_label.offset_top    = -16
+	_hook_label.offset_bottom = 0
+	_hook_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hook_label.z_index = 12
+	add_child(_hook_label)
+
+
+# ── Top-left coin bar (atlas coinbar + label) ─────────────────────────────────
 func _build_currency_chip() -> void:
-	var btn := Button.new()
+	var btn := TextureButton.new()
 	btn.focus_mode = Control.FOCUS_NONE
-	btn.position = Vector2(24, 22)
-	btn.custom_minimum_size = Vector2(232, 46)
-	btn.size = Vector2(232, 46)
+	var tex := AssetKit.tex("res://assets/ui/buttons/coinbar")
+	if tex:
+		btn.texture_normal = tex
+		btn.texture_hover  = tex
+		btn.texture_pressed = tex
+		btn.ignore_texture_size = true
+		btn.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+	var empty := StyleBoxEmpty.new()
+	btn.add_theme_stylebox_override("normal", empty)
+	btn.add_theme_stylebox_override("hover", empty)
+	btn.add_theme_stylebox_override("pressed", empty)
+	btn.add_theme_stylebox_override("focus", empty)
+	btn.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	btn.offset_left   = 14
+	btn.offset_top    = 14
+	btn.offset_right  = 254
+	btn.offset_bottom = 76
 	btn.z_index = 12
-	btn.add_theme_stylebox_override("normal", _panel_style(Color(0, 0, 0, 0.30), Color(Palette.WARN, 0.6), 16, 2, 12))
-	btn.add_theme_stylebox_override("hover", _panel_style(Color(0, 0, 0, 0.42), Palette.WARN, 16, 2, 12))
-	btn.add_theme_stylebox_override("pressed", _panel_style(Color(0, 0, 0, 0.52), Palette.WARN, 16, 2, 12))
 	add_child(btn)
 
 	_coin_label = Label.new()
-	_coin_label.add_theme_font_size_override("font_size", 18)
-	_coin_label.add_theme_color_override("font_color", Color.WHITE)
+	_coin_label.add_theme_font_size_override("font_size", 17)
+	_coin_label.add_theme_color_override("font_color", Color(0.35, 0.22, 0.04))
+	_coin_label.add_theme_color_override("font_outline_color", Color(1, 1, 1, 0.5))
+	_coin_label.add_theme_constant_override("outline_size", 4)
 	_coin_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_coin_label.offset_left = 48
 	_coin_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_coin_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_coin_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -207,19 +240,27 @@ func _on_coins_changed(_total: int) -> void:
 
 func _refresh_currency() -> void:
 	if _coin_label:
-		_coin_label.text = "LV %d     %d COINS" % [SaveManager.level(), SaveManager.coins()]
+		_coin_label.text = "LV %d  •  %d" % [SaveManager.level(), SaveManager.coins()]
 
 
-func _menu_btn(text: String, color: Color, cb: Callable, width: int = 140) -> Button:
-	var b := Button.new()
-	b.text = text
+func _atlas_icon_btn(name: String, cb: Callable) -> TextureButton:
+	var b := TextureButton.new()
 	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_size_override("font_size", 18)
-	b.add_theme_color_override("font_color", Color.WHITE)
-	b.add_theme_stylebox_override("normal", _panel_style(Color(color, 0.20), color, 16, 2, 14))
-	b.add_theme_stylebox_override("hover", _panel_style(Color(color, 0.40), color, 16, 2, 14))
-	b.add_theme_stylebox_override("pressed", _panel_style(Color(color, 0.55), color, 16, 2, 14))
-	b.custom_minimum_size = Vector2(width, 46)
+	var tex := AssetKit.tex("res://assets/ui/buttons/" + name)
+	if tex:
+		b.texture_normal  = tex
+		b.texture_hover   = tex
+		b.texture_pressed = tex
+		b.ignore_texture_size = true
+		b.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+	# Clear any theme styleboxes so no gray box appears
+	var empty := StyleBoxEmpty.new()
+	b.add_theme_stylebox_override("normal", empty)
+	b.add_theme_stylebox_override("hover", empty)
+	b.add_theme_stylebox_override("pressed", empty)
+	b.add_theme_stylebox_override("focus", empty)
+	b.custom_minimum_size = Vector2(130, 130)
+	b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	b.pressed.connect(cb)
 	return b
 
@@ -305,41 +346,8 @@ func _kingdom_color(i: int) -> Color:
 	return Color.from_hsv(fmod(0.02 + float(i) / float(Roster.RULERS.size()), 1.0), 0.85, 0.92)
 
 
-# ── PLAY ─────────────────────────────────────────────────────────────────────────
-func _play_row() -> Control:
-	var wrap := VBoxContainer.new()
-	wrap.add_theme_constant_override("separation", 8)
-	wrap.size_flags_horizontal = Control.SIZE_FILL
-
-	var play := _PlayButton.new()
-	play.custom_minimum_size = Vector2(420, 104)
-	play.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	play.pressed.connect(_on_play)
-	wrap.add_child(play)
-
-	var hint := Label.new()
-	hint.text = "Claim land · conquer every rival · or hold 50% at the buzzer"
-	hint.add_theme_font_size_override("font_size", 16)
-	hint.add_theme_color_override("font_color", Color(Palette.NEUTRAL, 0.9))
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.size_flags_horizontal = Control.SIZE_FILL
-	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrap.add_child(hint)
-
-	_hook_label = Label.new()
-	_hook_label.add_theme_font_size_override("font_size", 18)
-	_hook_label.add_theme_color_override("font_color", Color(Palette.WARN, 0.96))
-	_hook_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_hook_label.size_flags_horizontal = Control.SIZE_FILL
-	_hook_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrap.add_child(_hook_label)
-	return wrap
-
-
 func _on_play() -> void:
 	AudioManager.play("tap")
-	# PLAY opens the campaign map — the conquest ladder is the spine; the player
-	# launches their current stage from there (CONQUER button).
 	_open_overlay(load("res://ui/campaign_screen.gd").new())
 
 
@@ -502,11 +510,17 @@ class _GradientRect extends Control:
 			draw_rect(Rect2(0, y, size.x, h), c)
 
 
-class _PlayButton extends Button:
+class _PlayButton extends TextureButton:
 	func _ready() -> void:
 		focus_mode = Control.FOCUS_NONE
-		flat = true
-		# Gentle "press me" pulse so the eye lands on PLAY. Pivot stays centred.
+		ignore_texture_size = true
+		stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+		var tex := AssetKit.tex("res://assets/ui/buttons/play")
+		if tex:
+			texture_normal  = tex
+			texture_hover   = tex
+			texture_pressed = tex
+		# Gentle "press me" pulse.
 		var recentre := func() -> void: pivot_offset = size * 0.5
 		resized.connect(recentre)
 		recentre.call()
@@ -515,24 +529,3 @@ class _PlayButton extends Button:
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 		tw.tween_property(self, "scale", Vector2.ONE, 0.8) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-
-	func _draw() -> void:
-		DrawKit.card(self, Rect2(Vector2.ZERO, size), 30.0, Palette.SAFE, 4.0, true)
-		var fsize := 38
-		var label := "PLAY"
-		var tw := ArcadeTheme.font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize).x
-		var cx := size.x * 0.5
-		# play glyph (triangle) sits to the left of the centred word
-		var gx := cx - tw * 0.5 - 34.0
-		var gy := size.y * 0.5
-		draw_polygon(
-			PackedVector2Array([
-				Vector2(gx - 4, gy - 18), Vector2(gx + 22, gy), Vector2(gx - 4, gy + 18),
-			]),
-			PackedColorArray([Color.WHITE, Color.WHITE, Color.WHITE])
-		)
-		draw_string(
-			ArcadeTheme.font,
-			Vector2(cx - tw * 0.5 + 6, size.y * 0.5 + fsize * 0.36),
-			label, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color.WHITE
-		)
