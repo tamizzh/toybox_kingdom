@@ -71,6 +71,7 @@ void fragment() {
 var _body: MultiMeshInstance3D
 var _roof: MultiMeshInstance3D
 var _fence: MultiMeshInstance3D       # picket fence surrounding each house (warm wood brown)
+var _lawn: MultiMeshInstance3D        # green grass slab inside fence
 var _cit: MultiMeshInstance3D
 var _tower: MultiMeshInstance3D       # tall kingdom-coloured keep tower
 var _tower_roof: MultiMeshInstance3D  # its pointed roof
@@ -83,32 +84,40 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> 
 	var body_mesh: Mesh
 	var roof_mesh: Mesh
 	var fence_mesh: Mesh
-	# Load house GLB (body + roof + fence submeshes). Falls back to primitives.
+	var lawn_mesh: Mesh
+	# Load house GLB (body + roof + fence + lawn submeshes). Falls back to primitives.
 	var glb = load(HOUSE_GLB) as PackedScene
 	if glb != null:
 		var s := glb.instantiate()
 		var bmi := s.find_child("body",  true, false) as MeshInstance3D
 		var rmi := s.find_child("roof",  true, false) as MeshInstance3D
 		var fmi := s.find_child("fence", true, false) as MeshInstance3D
+		var lmi := s.find_child("lawn",  true, false) as MeshInstance3D
 		if bmi: body_mesh  = bmi.mesh
 		if rmi: roof_mesh  = rmi.mesh
 		if fmi: fence_mesh = fmi.mesh
+		if lmi: lawn_mesh  = lmi.mesh
 		s.free()
 	if body_mesh == null:
 		var bm := BoxMesh.new()
-		bm.size = Vector3(cell * 0.76, 0.66, cell * 0.76)
+		bm.size = Vector3(cell * 0.84, 0.76, cell * 0.84)
 		body_mesh = bm
 	if roof_mesh == null:
 		var pm := PrismMesh.new()
-		pm.size = Vector3(cell * 1.06, 0.46, cell * 1.07)
+		pm.size = Vector3(cell * 1.12, 0.48, cell * 1.13)
 		roof_mesh = pm
 	if fence_mesh == null:
 		var fm := BoxMesh.new()
-		fm.size = Vector3(cell * 0.96, 0.25, cell * 0.96)
+		fm.size = Vector3(cell * 1.05, 0.25, cell * 1.05)
 		fence_mesh = fm
+	if lawn_mesh == null:
+		var lm := BoxMesh.new()
+		lm.size = Vector3(cell * 0.96, 0.01, cell * 0.96)
+		lawn_mesh = lm
 	_body  = _batch(body_mesh,  0.0, true)
 	_roof  = _batch(roof_mesh,  0.0, false, 0.8, 0.5, 1.0)
 	_fence = _batch(fence_mesh, 0.0, false)
+	_lawn  = _batch(lawn_mesh,  0.0, false)
 	var cit_mesh := SphereMesh.new()    # cute low-poly blob citizen (mobile-cheap)
 	cit_mesh.radius = 0.15
 	cit_mesh.height = 0.26
@@ -125,6 +134,7 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> 
 	spire_mesh.height = 0.62
 	spire_mesh.radial_segments = 6
 	_tower_roof = _batch(spire_mesh, 0.0)
+	add_child(_lawn)
 	add_child(_body)
 	add_child(_roof)
 	add_child(_fence)
@@ -246,9 +256,10 @@ func rebuild(tiers: Dictionary = {}) -> void:
 			cit_col.append(col)
 			cit_spawn.append(_spawn_for(i, now))
 
-	# body BH=0.330 → centre +0.330; roof RHH=0.230 → centre 0.660+0.230=0.890; fence FHALF=0.125
-	_fill(_body,  house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.330, 0), Color("f1d8a0"),   true)
-	_fill(_roof,  house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.890, 0), Color.WHITE,       false)
+	# BH=0.380→body_top=0.760; roof embed 12mm: 0.760+0.240-0.012=0.988; fence/lawn FHALF=0.125
+	_fill(_lawn,  house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.125, 0), Color("52A832"),   true)
+	_fill(_body,  house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.380, 0), Color("f1d8a0"),   true)
+	_fill(_roof,  house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.988, 0), Color.WHITE,       false)
 	_fill(_fence, house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.125, 0), Color("6E3F14"),   true)
 	_fill(_cit, cit_pos, cit_col, cit_spawn, Vector3(0, PROP_Y + 0.25, 0), Color.WHITE, false)
 	# Tower keep = cream stone; spire = kingdom colour, perched on top.
