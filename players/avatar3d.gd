@@ -151,31 +151,35 @@ func make_royal(accent: Color) -> void:
 	# as a slab). Built as one double-sided quad in the Y-Z plane facing backward.
 	var cape := Node3D.new()
 	cape.name = "cape"
-	var h := box.size.y * 0.92
-	var wt := r * 0.55          # neck width
-	var wb := r * 1.35          # hem width
+	var h     := box.size.y * 0.85
+	var wt    := r * 0.50          # neck width (narrow at top)
+	var wb    := r * 1.25          # hem width (wide at bottom)
+	var drape := r * 0.65          # hem trails this far behind in local -X
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var nrm := Vector3(-1, 0, 0)
-	var tl := Vector3(0,  h * 0.5, -wt * 0.5)
-	var tr := Vector3(0,  h * 0.5,  wt * 0.5)
-	var bl := Vector3(0, -h * 0.5, -wb * 0.5)
-	var br := Vector3(0, -h * 0.5,  wb * 0.5)
+	# Pivot at top (Y=0, X=0 = back surface). Hem extends backward (-X) and down (-Y)
+	# so the cape is a tilted quad visible from any horizontal camera angle.
+	var tl := Vector3(0.0,    0.0, -wt * 0.5)
+	var tr := Vector3(0.0,    0.0,  wt * 0.5)
+	var bl := Vector3(-drape, -h,  -wb * 0.5)
+	var br := Vector3(-drape, -h,   wb * 0.5)
 	for v in [tl, bl, br, tl, br, tr]:
-		st.set_normal(nrm)
 		st.add_vertex(v)
+	st.generate_normals()
 	var cloth := MeshInstance3D.new()
 	cloth.mesh = st.commit()
 	var cmat := StandardMaterial3D.new()
 	var deep := accent
-	deep.v = clampf(deep.v * 0.80, 0.0, 1.0)   # richer than the body so it pops
+	deep.v = clampf(deep.v * 0.80, 0.0, 1.0)
 	cmat.albedo_color = deep
 	cmat.roughness = 0.55
 	cmat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	cloth.material_override = cmat
 	cape.add_child(cloth)
-	cape.position = Vector3(-r * 0.62, top_y - box.size.y * 0.50, 0)
-	cape.rotation.z = deg_to_rad(14.0)         # billows back off the shoulders
+	# Use the actual AABB back edge (box.position.x) so the cape sits flush regardless
+	# of whether X or Z dominates the radius calculation.
+	var back_x := box.position.x + r * 0.22   # inset so top edge overlaps body
+	cape.position = Vector3(back_x, top_y - r * 0.30, 0)
 	_visual.add_child(cape)
 	_cape = cape
 
@@ -220,11 +224,11 @@ func _process(delta: float) -> void:
 	if not _anim or not _anim.is_playing():
 		_bob_t += delta * 2.8
 		_visual.position.y = sin(_bob_t) * 0.048
-	# Royal cape billows — faster the quicker the king moves.
+	# Royal cape: geometry handles the drape; sway adds cloth flutter.
 	if _cape:
-		_sway_t += delta * (3.0 + velocity.length() * 0.5)
-		_cape.rotation.z = deg_to_rad(14.0 + sin(_sway_t) * 5.0)
-		_cape.rotation.x = deg_to_rad(sin(_sway_t * 0.7) * 4.0)
+		_sway_t += delta * (2.5 + velocity.length() * 0.6)
+		_cape.rotation.z = deg_to_rad(sin(_sway_t) * (5.0 + velocity.length()))
+		_cape.rotation.x = deg_to_rad(sin(_sway_t * 0.65) * 3.0)
 
 func _physics_process(_dt: float) -> void:
 	if not auto_input:
