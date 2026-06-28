@@ -34,6 +34,21 @@ const CaptureFX := preload("res://toybox_kingdoms/fx/capture_fx.gd")
 const Ocean := preload("res://toybox_kingdoms/env/ocean.gd")
 const Roads := preload("res://toybox_kingdoms/kingdom/roads.gd")
 
+# Results-screen art. VictoryDefeat.png holds both headline banners; DefeatMenu.png
+# carries the sad crying-king mascot we show on a loss. Regions are pixel rects into
+# those source sheets (see _banner_tex / _sad_king_tex).
+const TEX_BANNERS := preload("res://assets/VictoryDefeat.png")
+const TEX_DEFEAT_MENU := preload("res://assets/DefeatMenu.png")
+const BANNER_VICTORY_RECT := Rect2(185, 72, 1180, 290)
+const BANNER_DEFEAT_RECT := Rect2(244, 472, 1055, 336)
+const SAD_KING_RECT := Rect2(610, 365, 390, 280)
+# Pill buttons (normal + pressed states) from DefeatMenu.png — green for the primary
+# PLAY AGAIN, blue for MAIN MENU. See _sprite_button.
+const BTN_GREEN_RECT := Rect2(594, 664, 283, 98)
+const BTN_GREEN_PRESSED_RECT := Rect2(893, 664, 278, 98)
+const BTN_BLUE_RECT := Rect2(594, 780, 283, 98)
+const BTN_BLUE_PRESSED_RECT := Rect2(893, 780, 278, 98)
+
 const GW := 128
 const GH := 96
 const CELL := 0.6
@@ -698,6 +713,9 @@ func _offer_continue() -> void:
 	AudioManager.play("eliminate")
 	Analytics.event("continue_offered", {"used": _continues_used, "mode": _mode})
 	_build_continue_panel()
+	# Hard-pause the whole game while we wait for the revive decision / ad. The panel is
+	# PROCESS_MODE_ALWAYS so it stays interactive; create_timer below runs while paused.
+	get_tree().paused = true
 	if OS.get_environment("TBK_AUTOCONTINUE") == "1":
 		await get_tree().create_timer(0.2).timeout
 		if not _continue_resolved:
@@ -711,20 +729,32 @@ func _take_continue() -> void:
 	if _continue_resolved:
 		return
 	_continue_resolved = true
-	# Show a rewarded ad; revive only when it pays out (instant on desktop simulation).
-	MonetizationManager.show_rewarded(_on_continue_reward, "revive")
+	# Show a rewarded ad; revive on reward, and always handle close so a no-reward dismiss
+	# still un-pauses (otherwise the paused game would freeze).
+	MonetizationManager.show_rewarded(_on_continue_reward, "revive", _on_continue_ad_closed)
 
 func _on_continue_reward() -> void:
+	get_tree().paused = false
+	_continue_pending = false
 	_continues_used += 1
 	Analytics.event("continue_taken", {"n": _continues_used, "mode": _mode})
 	_close_continue_panel()
 	_revive_human()
+
+# Rewarded ad closed. If it wasn't earned (dismissed early), resume and end the run.
+func _on_continue_ad_closed(earned: bool) -> void:
+	if earned:
+		return   # _on_continue_reward already handled the revive
+	get_tree().paused = false
 	_continue_pending = false
+	_close_continue_panel()
+	_end_match(false, "conquered")
 
 func _decline_continue() -> void:
 	if _continue_resolved:
 		return
 	_continue_resolved = true
+	get_tree().paused = false
 	Analytics.event("continue_declined", {"used": _continues_used, "mode": _mode})
 	_close_continue_panel()
 	_continue_pending = false
@@ -797,6 +827,7 @@ func _build_continue_panel() -> void:
 	dim.color = Color(0.03, 0.03, 0.09, 0.0)
 	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.process_mode = Node.PROCESS_MODE_ALWAYS   # stay interactive + animate while the game is paused
 	_ui_layer.add_child(dim)
 	dim.create_tween().tween_property(dim, "color:a", 0.66, 0.25)
 	_continue_panel = dim
@@ -1086,8 +1117,43 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	vb.add_theme_constant_override("separation", 10)
 	panel.add_child(vb)
 
-	_result_label(vb, "VICTORY!" if win else "DEFEAT!", 64,
-		Palette.WARN if win else Palette.DANGER)
+	# Headline banner sliced from VictoryDefeat.png (replaces the old text title).
+	var banner := TextureRect.new()
+	var atlas := AtlasTexture.new()
+	atlas.atlas = TEX_BANNERS
+	atlas.region = BANNER_VICTORY_RECT if win else BANNER_DEFEAT_RECT
+	banner.texture = atlas
+	banner.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	banner.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	banner.custom_minimum_size = Vector2(440, 440.0 * atlas.region.size.y / atlas.region.size.x)
+	banner.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	vb.add_child(banner)
+
+	# Body sits below the banner. On defeat the crying toy-king (from DefeatMenu.png)
+	# sits to the LEFT of the stats column so the panel stays short enough for the
+	# 720px-tall landscape screen; on victory the stats take the full width.
+	var body := HBoxContainer.new()
+	body.alignment = BoxContainer.ALIGNMENT_CENTER
+	body.add_theme_constant_override("separation", 18)
+	vb.add_child(body)
+
+	if not win:
+		var king := TextureRect.new()
+		var king_atlas := AtlasTexture.new()
+		king_atlas.atlas = TEX_DEFEAT_MENU
+		king_atlas.region = SAD_KING_RECT
+		king.texture = king_atlas
+		king.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		king.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		king.custom_minimum_size = Vector2(200, 200.0 * SAD_KING_RECT.size.y / SAD_KING_RECT.size.x)
+		king.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		body.add_child(king)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 8)
+	col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	body.add_child(col)
+
 	var sub := ""
 	match reason:
 		"conquest": sub = "You conquered every rival kingdom!"
@@ -1099,33 +1165,33 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 			else:
 				sub = "Time's up — you held %.0f%% (need 50%%), #%d of %d." % [pct * 100.0, rank, _n_kingdoms]
 		_: sub = "You finished #%d of %d." % [rank, _n_kingdoms]
-	_result_label(vb, sub, 26, Color.WHITE)
+	_result_label(col, sub, 26, Color.WHITE)
 
 	# Run modes: the score chase is the headline. Big score, best/NEW BEST, islands cleared.
 	if _mode in ["endless", "timed"]:
-		_result_label(vb, "SCORE  %s" % _comma(_endless_score), 46, Palette.WARN)
+		_result_label(col, "SCORE  %s" % _comma(_endless_score), 46, Palette.WARN)
 		if _endless_is_best:
-			_result_label(vb, "★  NEW BEST!  ★", 28, Palette.SAFE)
+			_result_label(col, "★  NEW BEST!  ★", 28, Palette.SAFE)
 		else:
-			_result_label(vb, "Best  %s" % _comma(SaveManager.endless_best()), 22, Color(1, 1, 1, 0.85))
-		_result_label(vb, "Islands cleared:  %d" % _endless_island, 22, HUD_DIM)
+			_result_label(col, "Best  %s" % _comma(SaveManager.endless_best()), 22, Color(1, 1, 1, 0.85))
+		_result_label(col, "Islands cleared:  %d" % _endless_island, 22, HUD_DIM)
 
 	# Daily challenge: score + streak; the day's reward (first completion only).
 	elif _mode == "daily":
-		_result_label(vb, "DAILY  ·  SCORE  %s" % _comma(_endless_score), 42, Palette.WARN)
-		_result_label(vb, "STREAK  ·  %d DAY%s" % [_daily_streak, "" if _daily_streak == 1 else "S"], 26, Palette.SAFE)
+		_result_label(col, "DAILY  ·  SCORE  %s" % _comma(_endless_score), 42, Palette.WARN)
+		_result_label(col, "STREAK  ·  %d DAY%s" % [_daily_streak, "" if _daily_streak == 1 else "S"], 26, Palette.SAFE)
 		if _daily_first:
-			_result_label(vb, "Daily reward  +%d coins" % _daily_reward, 24, HUD_GOLD)
+			_result_label(col, "Daily reward  +%d coins" % _daily_reward, 24, HUD_GOLD)
 		else:
-			_result_label(vb, "Already claimed today — best %s" % _comma(SaveManager.daily_best()), 22, HUD_DIM)
+			_result_label(col, "Already claimed today — best %s" % _comma(SaveManager.daily_best()), 22, HUD_DIM)
 
 	# Campaign ladder banner (stage cleared / campaign complete / replayed).
 	if _stage_msg != "":
-		_result_label(vb, _stage_msg, 24, Palette.SAFE if win else Color.WHITE)
+		_result_label(col, _stage_msg, 24, Palette.SAFE if win else Color.WHITE)
 
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, 8)
-	vb.add_child(spacer)
+	col.add_child(spacer)
 
 	# final standings
 	var standings: Array = []
@@ -1135,10 +1201,10 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	var total := float(GW * GH)
 	for r in standings.size():
 		var e: Dictionary = standings[r]
-		_result_label(vb, "%d.   %s   %.1f%%" % [r + 1, _kid_name[e["kid"]], 100.0 * e["n"] / total], 24,
+		_result_label(col, "%d.   %s   %.1f%%" % [r + 1, _kid_name[e["kid"]], 100.0 * e["n"] / total], 24,
 			_kid_color[e["kid"]])
 
-	var coin_lbl := _result_label(vb, "+%d coins   (total %d)" % [coins, SaveManager.coins()],
+	var coin_lbl := _result_label(col, "+%d coins   (total %d)" % [coins, SaveManager.coins()],
 		28, Palette.WARN)
 	coin_lbl.add_theme_constant_override("line_spacing", 12)
 
@@ -1147,23 +1213,52 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	btns.add_theme_constant_override("separation", 16)
 	vb.add_child(btns)
 
-	var again := Button.new()
-	again.text = "PLAY AGAIN"
-	again.add_theme_font_size_override("font_size", 30)
-	again.custom_minimum_size = Vector2(240, 64)
+	var again := _sprite_button("PLAY AGAIN", BTN_GREEN_RECT, BTN_GREEN_PRESSED_RECT)
 	again.pressed.connect(func() -> void:
 		AudioManager.play("tap")
 		get_tree().reload_current_scene())
 	btns.add_child(again)
 
-	var menu := Button.new()
-	menu.text = "MAIN MENU"
-	menu.add_theme_font_size_override("font_size", 30)
-	menu.custom_minimum_size = Vector2(240, 64)
+	var menu := _sprite_button("MAIN MENU", BTN_BLUE_RECT, BTN_BLUE_PRESSED_RECT)
 	menu.pressed.connect(func() -> void:
 		AudioManager.play("tap")
 		get_tree().change_scene_to_file("res://ui/main_menu.tscn"))
 	btns.add_child(menu)
+
+# A pill button skinned with the normal/pressed sprites from DefeatMenu.png. The pill
+# caps are kept crisp via a 9-slice (texture_margin) so only the middle stretches.
+func _sprite_button(text: String, normal_rect: Rect2, pressed_rect: Rect2) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.add_theme_font_size_override("font_size", 30)
+	b.add_theme_color_override("font_color", Color.WHITE)
+	b.add_theme_color_override("font_hover_color", Color.WHITE)
+	b.add_theme_color_override("font_pressed_color", Color.WHITE)
+	b.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
+	b.add_theme_constant_override("outline_size", 6)
+	b.custom_minimum_size = Vector2(248, 74)
+	var sb_normal := _button_stylebox(normal_rect)
+	var sb_pressed := _button_stylebox(pressed_rect)
+	b.add_theme_stylebox_override("normal", sb_normal)
+	b.add_theme_stylebox_override("hover", sb_normal)
+	b.add_theme_stylebox_override("focus", sb_normal)
+	b.add_theme_stylebox_override("disabled", sb_normal)
+	b.add_theme_stylebox_override("pressed", sb_pressed)
+	return b
+
+func _button_stylebox(region: Rect2) -> StyleBoxTexture:
+	var atlas := AtlasTexture.new()
+	atlas.atlas = TEX_DEFEAT_MENU
+	atlas.region = region
+	var sb := StyleBoxTexture.new()
+	sb.texture = atlas
+	# 9-slice: keep the rounded caps un-stretched, stretch only the middle band.
+	sb.texture_margin_left = 52
+	sb.texture_margin_right = 52
+	sb.texture_margin_top = 30
+	sb.texture_margin_bottom = 34
+	sb.set_content_margin_all(10)
+	return sb
 
 # Brief floating announcement (pops, conquests) that rises and fades.
 func _toast(text: String, color: Color = Color.WHITE) -> void:

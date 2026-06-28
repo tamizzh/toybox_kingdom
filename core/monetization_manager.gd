@@ -25,6 +25,7 @@ var iap_available: bool = false
 var _rounds_since_ad: int = 0
 var _rewarded_loaded: bool = false
 var _reward_cb: Callable = Callable()    # pending reward callback while a rewarded ad is showing
+var _reward_close_cb: Callable = Callable()  # always fires on close (earned: bool) — lets callers unpause
 var _reward_placement: String = ""
 var _reward_paid: bool = false           # did the current rewarded ad actually earn the reward?
 
@@ -65,12 +66,15 @@ func maybe_show_interstitial() -> void:
 		print("[Monetization] (simulated) interstitial")
 
 # ── ads: rewarded (opt-in; available even with remove-ads) ───────────────────
-# Watch a rewarded ad; on_reward runs only if the ad is actually completed. `placement`
-# tags which offer triggered it (revive / double_coins / ...) so analytics shows value.
-func show_rewarded(on_reward: Callable, placement: String = "unknown") -> void:
+# Watch a rewarded ad; on_reward runs only if the ad is actually completed. on_close (if
+# given) ALWAYS fires when the ad closes with whether it was earned — so callers that
+# paused the game can reliably resume even if the player dismisses without the reward.
+# `placement` tags which offer triggered it (revive / double_coins / ...) for analytics.
+func show_rewarded(on_reward: Callable, placement: String = "unknown", on_close: Callable = Callable()) -> void:
 	Analytics.ad_event("rewarded_request", placement, false)
 	if ads_available and _rewarded_loaded:
 		_reward_cb = on_reward
+		_reward_close_cb = on_close
 		_reward_placement = placement
 		_reward_paid = false
 		_native_show_rewarded()
@@ -80,6 +84,8 @@ func show_rewarded(on_reward: Callable, placement: String = "unknown") -> void:
 	Analytics.ad_event("rewarded", placement, true)
 	if on_reward.is_valid():
 		on_reward.call()
+	if on_close.is_valid():
+		on_close.call(true)
 
 # Called from _native_* when the user earns the reward (the SDK reward callback).
 func _on_rewarded_earned() -> void:
@@ -94,7 +100,10 @@ func _on_rewarded_closed() -> void:
 			_reward_cb.call()
 	else:
 		Analytics.ad_event("rewarded", _reward_placement, false)
+	if _reward_close_cb.is_valid():
+		_reward_close_cb.call(_reward_paid)
 	_reward_cb = Callable()
+	_reward_close_cb = Callable()
 	_reward_placement = ""
 	_rewarded_loaded = false
 	_native_load_rewarded()   # cache the next one
