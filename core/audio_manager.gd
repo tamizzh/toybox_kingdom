@@ -39,6 +39,7 @@ var _current_music: String = ""
 var _music_base_db: float = 0.0
 var _game_music_mode: bool = false
 var _last_game_track: int = -1
+var _game_track_loops_left: int = 0
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -76,7 +77,12 @@ func _enable_loop(s: AudioStream) -> void:
 		(s as AudioStreamMP3).loop = true
 
 func _on_track_finished() -> void:
-	if _game_music_mode:
+	if not _game_music_mode:
+		return
+	if _game_track_loops_left > 0:
+		_game_track_loops_left -= 1
+		_music.play()
+	else:
 		_play_random_game_track()
 
 func _play_random_game_track() -> void:
@@ -88,6 +94,7 @@ func _play_random_game_track() -> void:
 	else:
 		idx = 0
 	_last_game_track = idx
+	_game_track_loops_left = randi_range(2, 3)  # plays 3-4 times total
 	_music.stream = GAME_TRACKS[idx]
 	_music.volume_db = _music_base_db
 	_music.play()
