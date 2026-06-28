@@ -4,12 +4,13 @@ extends Control
 #   COIN PACKS  |  UPGRADES  |  COLOUR PACKS  |  REMOVE ADS
 # Visual kit: panel_frame.png (stone 9-slice) + btn_blue / btn_green CTAs.
 
-const PANEL_FRAME := preload("res://assets/panel_frame.png")
-const BTN_BLUE    := preload("res://assets/btn_blue.png")
-const BTN_GREEN   := preload("res://assets/btn_green.png")
-const COIN_ICON   := preload("res://assets/hud/coin.png")
-const BOOST_ICON  := preload("res://assets/hud/boost.png")
-const SHIELD_ICON := preload("res://assets/hud/shield.png")
+const PANEL_FRAME   := preload("res://assets/panel_frame.png")
+const BTN_BLUE      := preload("res://assets/btn_blue.png")
+const BTN_GREEN     := preload("res://assets/btn_green.png")
+const COIN_ICON     := preload("res://assets/hud/coin.png")
+const BOOST_ICON    := preload("res://assets/hud/boost.png")
+const SHIELD_ICON   := preload("res://assets/hud/shield.png")
+const UpgradesData  := preload("res://theme/upgrades.gd")
 
 # IAP-only coin bundles — the free-earn path fills in for non-payers via colour packs.
 const COIN_PACKS := [
@@ -45,7 +46,6 @@ func _rebuild() -> void:
 	add_child(panel)
 
 	var outer := VBoxContainer.new()
-	outer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	outer.add_theme_constant_override("separation", 8)
 	panel.add_child(outer)
 
@@ -105,7 +105,7 @@ func _rebuild() -> void:
 
 	# Section: UPGRADES
 	inner.add_child(_section_header("UPGRADES"))
-	for id in Upgrades.ids():
+	for id in UpgradesData.ids():
 		inner.add_child(_upgrade_row(id))
 
 	inner.add_child(_divider())
@@ -162,7 +162,7 @@ func _coin_pack_row(pack: Dictionary) -> Control:
 	row.add_child(info)
 
 	var name_l := Label.new()
-	name_l.text = pack.name
+	name_l.text = pack["name"]
 	name_l.add_theme_font_size_override("font_size", 20)
 	name_l.add_theme_color_override("font_color", Color.WHITE)
 	name_l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.45))
@@ -171,7 +171,7 @@ func _coin_pack_row(pack: Dictionary) -> Control:
 	info.add_child(name_l)
 
 	var amt_l := Label.new()
-	amt_l.text = str(pack.amount) + " coins"
+	amt_l.text = str(pack["amount"]) + " coins"
 	amt_l.add_theme_font_size_override("font_size", 14)
 	amt_l.add_theme_color_override("font_color", Palette.WARN)
 	amt_l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.4))
@@ -179,9 +179,9 @@ func _coin_pack_row(pack: Dictionary) -> Control:
 	amt_l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	info.add_child(amt_l)
 
-	var p_amount := pack.amount
-	var p_product := pack.product
-	row.add_child(_stone_btn(pack.price, BTN_BLUE, Palette.WARN, func():
+	var p_amount: int = pack["amount"]
+	var p_product: String = pack["product"]
+	row.add_child(_stone_btn(pack["price"], BTN_BLUE, Palette.WARN, func():
 		MonetizationManager.purchase(p_product, func(_p: String):
 			SaveManager.add_coins(p_amount)
 			_rebuild())))
@@ -196,7 +196,7 @@ func _upgrade_row(id: String) -> Control:
 	row.custom_minimum_size = Vector2(0, 60)
 	wrap.add_child(row)
 
-	var icon_tex: Texture2D = COIN_ICON if Upgrades.icon_of(id) == "coin" else BOOST_ICON
+	var icon_tex: Texture2D = COIN_ICON if UpgradesData.icon_of(id) == "coin" else BOOST_ICON
 	var icon := TextureRect.new()
 	icon.texture = icon_tex
 	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -213,7 +213,7 @@ func _upgrade_row(id: String) -> Control:
 	row.add_child(info)
 
 	var name_l := Label.new()
-	name_l.text = Upgrades.name_of(id)
+	name_l.text = UpgradesData.name_of(id)
 	name_l.add_theme_font_size_override("font_size", 20)
 	name_l.add_theme_color_override("font_color", Color.WHITE)
 	name_l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.45))
@@ -222,7 +222,7 @@ func _upgrade_row(id: String) -> Control:
 	info.add_child(name_l)
 
 	var desc_l := Label.new()
-	desc_l.text = Upgrades.desc_of(id)
+	desc_l.text = UpgradesData.desc_of(id)
 	desc_l.add_theme_font_size_override("font_size", 13)
 	desc_l.add_theme_color_override("font_color", Color(0.78, 0.88, 1.0))
 	desc_l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.4))
@@ -233,7 +233,7 @@ func _upgrade_row(id: String) -> Control:
 	if SaveManager.has_upgrade(id):
 		row.add_child(_tag("OWNED", Palette.SAFE))
 	else:
-		var cost := Upgrades.coin_cost_of(id)
+		var cost := UpgradesData.coin_cost_of(id)
 		var can := SaveManager.coins() >= cost
 		var coin_col := Color.WHITE if can else Color(0.55, 0.55, 0.55)
 		var buy_id := id
@@ -247,8 +247,8 @@ func _upgrade_row(id: String) -> Control:
 		row.add_child(cbtn)
 
 		var iap_id := id
-		row.add_child(_stone_btn(Upgrades.price_of(id), BTN_BLUE, Palette.WARN, func():
-			MonetizationManager.purchase(Upgrades.product_of(iap_id), func(_p: String):
+		row.add_child(_stone_btn(UpgradesData.price_of(id), BTN_BLUE, Palette.WARN, func():
+			MonetizationManager.purchase(UpgradesData.product_of(iap_id), func(_p: String):
 				SaveManager.unlock_upgrade(iap_id)
 				_rebuild())))
 	return wrap

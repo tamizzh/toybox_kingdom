@@ -5,7 +5,7 @@ extends Node
 # "Master" — so the Settings screen can set per-category volume. Music WAVs loop.
 
 const SFX := {
-	"tap":       preload("res://assets/audio/sfx_tap.wav"),
+	"tap":       preload("res://assets/audio/click.mp3"),
 	"count":     preload("res://assets/audio/sfx_count.wav"),
 	"go":        preload("res://assets/audio/sfx_go.wav"),
 	"collect":   preload("res://assets/audio/sfx_collect.wav"),
@@ -18,6 +18,11 @@ const SFX := {
 const MUSIC := {
 	"menu": preload("res://assets/audio/music_menu.mp3"),
 	"game": preload("res://assets/audio/music_game.mp3"),
+}
+
+const SFX_MAX_SEC := {
+	"tap":      1.0,
+	"eliminate": 1.0,
 }
 
 const POOL := 10
@@ -68,10 +73,17 @@ func play(sfx_name: String, pitch: float = 1.0, vol_db: float = 0.0) -> void:
 		return
 	var p := _sfx[_idx]
 	_idx = (_idx + 1) % POOL
-	p.stream = SFX[sfx_name]
+	var s: AudioStream = SFX[sfx_name]
+	p.stream = s
 	p.pitch_scale = pitch
 	p.volume_db = vol_db
 	p.play()
+	if SFX_MAX_SEC.has(sfx_name):
+		var dur: float = SFX_MAX_SEC[sfx_name]
+		var timer := get_tree().create_timer(dur)
+		timer.timeout.connect(func() -> void:
+			if p.stream == s and p.playing:
+				p.stop())
 
 func play_music(which: String) -> void:
 	if which == _current_music and _music.playing:
