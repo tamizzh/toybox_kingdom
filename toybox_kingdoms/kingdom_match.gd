@@ -132,7 +132,7 @@ var _coach: Control             # the first-match coaching banner (dismissed on 
 var _coach_label: Label         # coach text (swaps "draw a loop" → "return home")
 var _coach_trail_started := false   # true once the player first leaves home territory
 var _tutorial_tip_shown := {}       # keys of one-time in-match tips already shown
-var _castle_tip_timer := 0.0        # counts up after first capture; triggers castle tip
+var _trail_tip_timer := 0.0         # counts up once player first leaves home; triggers trail warning
 var _mode := "campaign"         # "campaign" | "endless"
 var _endless_island := 0        # which island of the endless run this is (0-based)
 var _peak_pct := 0.0            # highest land fraction the human held on THIS island
@@ -551,13 +551,14 @@ func _physics_process(delta: float) -> void:
 		if _fps_t <= 0.0:
 			_fps_t = 0.25
 			_update_fps()
-	# First-match castle tip: fires 10 s after the player closes their first loop.
-	if _is_first_match and _first_capture_logged and not _tutorial_tip_shown.has("castle") and not _ended:
-		_castle_tip_timer += delta
-		if _castle_tip_timer >= 10.0:
-			_tutorial_tip_shown["castle"] = true
-			_show_tutorial_tip("Rival Castles!",
-				"Surround a rival's castle completely\nwith your land to capture it.\nA bigger castle always wins!")
+	# "Mind Your Trail" tip: fires 3 s after the player first ventures out.
+	if _is_first_match and _coach_trail_started and not _tutorial_tip_shown.has("trail_warning") and not _ended:
+		_trail_tip_timer += delta
+		if _trail_tip_timer >= 3.0:
+			_tutorial_tip_shown["trail_warning"] = true
+			_show_tutorial_tip("Mind Your Trail!",
+				"Your trail is exposed while you're out.\nA rival can cut it — loop home before they reach you!",
+				"res://assets/screenshots/trail.png")
 	if _dbg:
 		_dbg_tick(delta)
 
@@ -1524,10 +1525,16 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 		a.last_cell = step
 		# Coach two-beat: once the player first steps off their land, swap the hint
 		# from "draw a loop" to "return home to close it".
-		if a == _rulers[0] and _is_first_match and _coach_label != null and not _coach_trail_started:
+		if a == _rulers[0] and _is_first_match and not _coach_trail_started:
 			if grid.get_owner(step.x, step.y) != a.kid:
 				_coach_trail_started = true
-				_coach_label.text = "Return home to close the loop!"
+				if _coach_label != null:
+					_coach_label.text = "Return home to close the loop!"
+				if not _tutorial_tip_shown.has("leave_home"):
+					_tutorial_tip_shown["leave_home"] = true
+					_show_tutorial_tip("Draw a Loop!",
+						"Move outside your land and trace a path.\nLoop back home — everything you circle becomes yours!",
+						"res://assets/screenshots/loop.png")
 		var res: Dictionary = grid.enter_cell(a.kid, step.x, step.y)
 		var killed: int = int(res.get("killed", 0))
 		if killed != 0 and _kid_to_agent.has(killed):
@@ -1645,12 +1652,10 @@ func _kill(a) -> void:
 			_offer_continue("popped")
 		else:
 			_end_match(false, "popped")
-	# First-match pop: pause and explain what happened before the respawn clock ticks.
+	# First-match pop: toast so the player knows what happened (coach may already be gone).
 	elif a == _rulers[0] and _is_first_match and not _tutorial_tip_shown.has("pop"):
 		_tutorial_tip_shown["pop"] = true
-		_show_tutorial_tip("You Got Popped!",
-			"A rival crossed your exposed trail.\nAlways race back to your land before\nrivals can cut through your trail!",
-			"res://assets/screenshots/trail.png")
+		_show_tip_toast("You got popped!", "A rival cut your trail.\nRace home before rivals can reach you!")
 
 func _respawn(a) -> void:
 	# No castles left -> elimination is handled in _check_conquests.
@@ -2202,12 +2207,14 @@ func _show_tip_toast(title: String, body: String, duration: float = 3.0) -> void
 	tw.tween_property(center, "modulate:a", 0.0, 0.6)
 	tw.tween_callback(center.queue_free)
 
-# Celebrate the first loop without pausing — lets the confetti moment breathe.
+# Celebrate the first loop with a paused screenshot tip.
 func _first_claim_celebration() -> void:
-	await get_tree().create_timer(0.8).timeout
+	await get_tree().create_timer(0.5).timeout
 	if not is_inside_tree():
 		return
-	_show_tip_toast("Land Claimed!", "Keep looping to grow your kingdom.\nMore land = a stronger castle!")
+	_show_tutorial_tip("Territory Claimed!",
+		"Keep looping to grow your kingdom.\nSurround a rival's castle completely to capture it!",
+		"res://assets/screenshots/capture2.png")
 
 # Bobbing "YOUR CASTLE" Label3D so new players know where home is.
 # Auto-fades after 8 s to keep the mid-game view clean.

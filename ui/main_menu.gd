@@ -20,13 +20,7 @@ func _ready() -> void:
 	# match the results screen's MAIN MENU brings them here as normal.
 	if _should_cold_open():
 		SaveManager.set_mode("endless")
-		AudioManager.play_music("menu")
-		var onboarding: Node = load("res://ui/onboarding_screen.gd").new()
-		add_child(onboarding)
-		onboarding.tree_exited.connect(func() -> void:
-			if is_inside_tree():
-				get_tree().change_scene_to_file.call_deferred(KINGDOM_MATCH))
-		return
+		SaveManager.set_onboarding_done(true)   # tutorial happens in-match via screenshot tips
 
 	AudioManager.play_music("menu")
 	add_child(load("res://toybox_kingdoms/tools/shader_warmup.gd").new())
@@ -38,12 +32,9 @@ func _ready() -> void:
 
 	_refresh_hook()
 
-	if not SaveManager.onboarding_done():
-		_open_overlay(load("res://ui/onboarding_screen.gd").new())
-	else:
-		var bonus := SaveManager.claim_daily_if_due(50)
-		if bonus > 0:
-			_show_daily(bonus)
+	var bonus := SaveManager.claim_daily_if_due(50)
+	if bonus > 0:
+		_show_daily(bonus)
 
 
 # Floating "welcome back" reward toast, centred near the top, that rises and fades.
