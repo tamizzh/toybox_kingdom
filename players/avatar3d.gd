@@ -227,7 +227,10 @@ func _process(delta: float) -> void:
 		_cape.rotation.x = deg_to_rad(sin(_sway_t * 0.7) * 4.0)
 
 func _physics_process(_dt: float) -> void:
-	if dead or not auto_input:
+	if not auto_input:
+		_set_walking(velocity.length() > 0.1)
+		return
+	if dead:
 		return
 	var mv     := InputManager.get_move(player_id)
 	var target := Vector3(mv.x, 0.0, mv.y) * speed
@@ -300,7 +303,8 @@ func facing_dir() -> Vector2:
 
 func set_dead() -> void:
 	dead = true
-	AudioManager.play("eliminate", randf_range(0.95, 1.08))
+	if player_id == 0:
+		AudioManager.play("eliminate", randf_range(0.95, 1.08))
 	set_deferred("collision_layer", 0)
 	set_deferred("collision_mask",  0)
 	if _visual:

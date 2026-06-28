@@ -55,6 +55,26 @@ func request_render() -> void:
 func set_markers(m: Array) -> void:
 	_markers = m
 
+# A painted frame drawn around the map instead of the procedural card/border. The
+# frame art's transparent window was measured (see prep) so the map texture lands
+# exactly inside it.
+var _frame_tex: Texture2D
+# Window of the frame art as fractions of its size: x:[0.0707,0.9265], y:[0.0984,0.8903].
+const _WIN_L := 0.0386
+const _WIN_R := 0.9496
+const _WIN_T := 0.0635
+const _WIN_B := 0.9048
+
+func set_frame(tex: Texture2D) -> void:
+	_frame_tex = tex
+	queue_redraw()
+
+# Rect (in this control's space) to draw the frame at so its window covers the map.
+func _frame_rect() -> Rect2:
+	var fw := MAP.x / (_WIN_R - _WIN_L)
+	var fh := MAP.y / (_WIN_B - _WIN_T)
+	return Rect2(Vector2(-_WIN_L * fw, -_WIN_T * fh), Vector2(fw, fh))
+
 func _process(_delta: float) -> void:
 	if _dirty and _grid != null:
 		_dirty = false
@@ -83,13 +103,15 @@ func _repaint() -> void:
 const _FRAME := Color(0.05, 0.07, 0.12, 0.92)
 
 func _draw() -> void:
-	# Rounded backing card (slightly larger than the map).
-	_fill_round_rect(Rect2(Vector2(-4, -4), MAP + Vector2(8, 8)), RADIUS + 3.0, _FRAME)
+	if _frame_tex == null:
+		# Rounded backing card (slightly larger than the map).
+		_fill_round_rect(Rect2(Vector2(-4, -4), MAP + Vector2(8, 8)), RADIUS + 3.0, _FRAME)
 	if _tex:
 		draw_texture_rect(_tex, Rect2(Vector2.ZERO, MAP), false)
-		# The texture is square — repaint the four corners with the frame colour so
-		# the map reads as a rounded rect on top of the rounded card.
-		_round_corners(Rect2(Vector2.ZERO, MAP), RADIUS, _FRAME)
+		if _frame_tex == null:
+			# The texture is square — repaint the four corners with the frame colour so
+			# the map reads as a rounded rect on top of the rounded card.
+			_round_corners(Rect2(Vector2.ZERO, MAP), RADIUS, _FRAME)
 	for mk in _markers:
 		var p: Vector2 = mk["pos"] * MAP
 		var c: Color = mk["color"]
@@ -99,8 +121,12 @@ func _draw() -> void:
 		else:
 			draw_circle(p, 4.5, Color(0, 0, 0, 0.6))
 			draw_circle(p, 3.0, c)
-	# Rounded border on top.
-	_stroke_round_rect(Rect2(Vector2.ZERO, MAP), RADIUS, Color(1, 1, 1, 0.30), 2.0)
+	if _frame_tex != null:
+		# Painted frame on top — its transparent window lets the map show through.
+		draw_texture_rect(_frame_tex, _frame_rect(), false)
+	else:
+		# Rounded border on top.
+		_stroke_round_rect(Rect2(Vector2.ZERO, MAP), RADIUS, Color(1, 1, 1, 0.30), 2.0)
 
 # ── Rounded-rect helpers (Godot's draw_* has no native rounded rect) ──
 

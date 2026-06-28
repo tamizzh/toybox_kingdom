@@ -9,14 +9,15 @@ const SFX := {
 	"count":     preload("res://assets/audio/sfx_count.wav"),
 	"go":        preload("res://assets/audio/sfx_go.wav"),
 	"collect":   preload("res://assets/audio/sfx_collect.wav"),
-	"hit":       preload("res://assets/audio/sfx_hit.wav"),
-	"eliminate": preload("res://assets/audio/sfx_eliminate.wav"),
+	"hit":       preload("res://assets/audio/sfx_eliminates.wav"),
+	"eliminate": preload("res://assets/audio/sfx_eliminates.wav"),
 	"round_win": preload("res://assets/audio/sfx_round_win.wav"),
 	"win":       preload("res://assets/audio/sfx_win.wav"),
+	"defeat":    preload("res://assets/audio/sfx_eliminates.wav"),
 }
 const MUSIC := {
-	"menu": preload("res://assets/audio/music_game.wav"),
-	"game": preload("res://assets/audio/music_game.wav"),
+	"menu": preload("res://assets/audio/music_menu.mp3"),
+	"game": preload("res://assets/audio/music_game.mp3"),
 }
 
 const POOL := 10
@@ -58,6 +59,8 @@ func _enable_loop(s: AudioStream) -> void:
 		w.loop_begin = 0
 		# 16-bit mono → 2 bytes per frame
 		w.loop_end = int(w.data.size() / 2)
+	elif s is AudioStreamMP3:
+		(s as AudioStreamMP3).loop = true
 
 # ── playback ─────────────────────────────────────────────────────────────────
 func play(sfx_name: String, pitch: float = 1.0, vol_db: float = 0.0) -> void:

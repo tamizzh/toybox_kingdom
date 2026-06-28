@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://shot_menu"]
+
+[ext_resource type="Script" path="res://toybox_kingdoms/tools/shot_menu.gd" id="1_menu"]
+
+[node name="ShotMenu" type="Node"]
+script = ExtResource("1_menu")

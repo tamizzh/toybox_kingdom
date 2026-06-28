@@ -18,11 +18,11 @@ func _ready() -> void:
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", _panel(Color("141a28"), Color("3f4d69")))
 	panel.custom_minimum_size = Vector2(560, 470)
-	panel.position = Vector2(Palette.CENTER_X - 280, 130)
+	panel.position = Vector2(Palette.CENTER_X - 280, 48)
 	add_child(panel)
 
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 18)
+	col.add_theme_constant_override("separation", 10)
 	panel.add_child(col)
 
 	col.add_child(_title("SETTINGS"))

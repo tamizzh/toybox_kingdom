@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://shotvic0001"]
+
+[ext_resource type="Script" path="res://toybox_kingdoms/tools/shot_victory.gd" id="1_vic"]
+
+[node name="ShotVictory" type="Node"]
+script = ExtResource("1_vic")

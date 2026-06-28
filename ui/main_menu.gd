@@ -19,11 +19,15 @@ func _ready() -> void:
 	# so we also mark the how-to slideshow seen (no double-teaching). After that first
 	# match the results screen's MAIN MENU brings them here as normal.
 	if _should_cold_open():
-		SaveManager.set_onboarding_done(true)
-		SaveManager.set_mode("campaign")
-		# Deferred: the menu node is still being added to the tree here, so swapping the
-		# scene synchronously trips "parent is busy adding/removing children".
-		get_tree().change_scene_to_file.call_deferred(KINGDOM_MATCH)
+		SaveManager.set_mode("endless")
+		AudioManager.play_music("menu")
+		# Show the how-to slides first, then launch the match when the player finishes/skips.
+		# OnboardingScreen._finish() marks onboarding done, so we don't need to do it here.
+		var onboarding: Node = load("res://ui/onboarding_screen.gd").new()
+		add_child(onboarding)
+		onboarding.tree_exited.connect(func() -> void:
+			if is_inside_tree():
+				get_tree().change_scene_to_file.call_deferred(KINGDOM_MATCH))
 		return
 
 	AudioManager.play_music("menu")

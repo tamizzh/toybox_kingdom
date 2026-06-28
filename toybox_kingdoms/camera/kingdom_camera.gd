@@ -18,6 +18,12 @@ var _orbit_focus := Vector3.ZERO
 var _orbit_ang := 0.0
 var _intro := false      # true while a clear/arrive camera move owns the zoom (HUD must not fight it)
 
+var _overview := false
+var _overview_center := Vector3.ZERO
+# Height 57 / tilt 7 at FOV 55° shows the whole island with a modest ocean border —
+# tight enough that kingdoms aren't tiny, wide enough that none clip off-screen.
+const OVERVIEW_POS := Vector3(0.0, 57.0, 7.0)
+
 # While an island-transition camera move is running, the match should NOT drive `zoom`
 # from territory size — let the move own it.
 func intro_active() -> bool:
@@ -52,6 +58,15 @@ func shake(amount: float) -> void:
 func punch_zoom(amount: float) -> void:
 	_zoom_punch = maxf(_zoom_punch, amount)
 
+# Hover above the board center so the player can see the whole map.
+func start_overview(center: Vector3) -> void:
+	_orbit = false
+	_overview = true
+	_overview_center = center
+
+func end_overview() -> void:
+	_overview = false
+
 # Detach from the player and slowly circle a point (their capital) for the win
 # cinematic. Pushes the FOV in for a tighter, more dramatic frame.
 func start_victory_orbit(focus: Vector3) -> void:
@@ -62,6 +77,12 @@ func start_victory_orbit(focus: Vector3) -> void:
 	tw.tween_property(self, "fov", 38.0, 1.4).set_ease(Tween.EASE_OUT)
 
 func _process(delta: float) -> void:
+	if _overview:
+		var want := _overview_center + OVERVIEW_POS
+		var t := clampf(follow_speed * delta, 0.0, 1.0)
+		global_position = global_position.lerp(want, t)
+		look_at(_overview_center, Vector3.UP)
+		return
 	if _orbit:
 		_orbit_ang += delta * 0.32
 		var r := 15.0

@@ -100,19 +100,19 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary, p_homes: Dictionary) -> 
 		s.free()
 	if body_mesh == null:
 		var bm := BoxMesh.new()
-		bm.size = Vector3(cell * 0.84, 0.76, cell * 0.84)
+		bm.size = Vector3(cell * 0.43, 0.40, cell * 0.43)
 		body_mesh = bm
 	if roof_mesh == null:
 		var pm := PrismMesh.new()
-		pm.size = Vector3(cell * 1.12, 0.48, cell * 1.13)
+		pm.size = Vector3(cell * 0.58, 0.25, cell * 0.58)
 		roof_mesh = pm
 	if fence_mesh == null:
 		var fm := BoxMesh.new()
-		fm.size = Vector3(cell * 1.05, 0.25, cell * 1.05)
+		fm.size = Vector3(cell * 0.54, 0.13, cell * 0.54)
 		fence_mesh = fm
 	if lawn_mesh == null:
 		var lm := BoxMesh.new()
-		lm.size = Vector3(cell * 0.96, 0.01, cell * 0.96)
+		lm.size = Vector3(cell * 0.49, 0.01, cell * 0.49)
 		lawn_mesh = lm
 	_body  = _batch(body_mesh,  0.0, true)
 	_roof  = _batch(roof_mesh,  0.0, false, 0.8, 0.5, 1.0)

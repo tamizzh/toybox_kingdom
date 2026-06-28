@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://shotdefeat01"]
+
+[ext_resource type="Script" path="res://toybox_kingdoms/tools/shot_defeat.gd" id="1_defeat"]
+
+[node name="ShotDefeat" type="Node"]
+script = ExtResource("1_defeat")

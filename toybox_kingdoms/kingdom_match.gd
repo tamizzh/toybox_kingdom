@@ -72,9 +72,7 @@ const KING_SCALE := 1.125        # YOUR Crowned Toy King reads bigger than rival
 const MATCH_DURATION := 300.0   # seconds (5 min — long enough for the castle-war to play out)
 # A match ends ONLY two ways: every rival is conquered (last kingdom standing), or
 # the timer runs out. There is NO instant land-threshold win — you play the full
-# clock unless you wipe everyone out. At timeout you WIN only if you hold at least
-# WIN_PCT of the toybox; otherwise you lose.
-const WIN_PCT := 0.50           # land you must hold AT TIMEOUT to win
+# clock unless you wipe everyone out. At timeout you WIN if you hold the most land.
 
 # ── ENDLESS mode (truly endless — a chain of escalating islands) ───────────────
 # A RUN is a sequence of islands. CONQUER an island (be the last kingdom standing) →
@@ -158,7 +156,10 @@ var _continue_resolved := false # the current offer was answered (watch / give u
 var _continues_used := 0
 var _continue_cause := "conquered"  # "popped" | "conquered" — drives the offer/results wording
 var _continue_panel: Control
+var _pause_panel: Control
 var _ui_layer: CanvasLayer
+var _toast_queue: Array[Dictionary] = []
+var _toast_busy: bool = false
 
 var _terr_label: Label
 var _time_label: Label
@@ -233,9 +234,9 @@ func _ready() -> void:
 			_match_t = Campaign.duration(_stage)
 	# The very first match the player ever starts gets the guided coach + a pure-carve
 	# HUD (no build economy yet). Counted once here so a "Play Again" reload is match 2+.
-	# Run modes (endless/timed) are never a first-match — no coach / no deferral.
-	# TBK_FIRSTMATCH=1 forces the first-match path for QA without resetting the save.
-	_is_first_match = _mode == "campaign" and (SaveManager.stat("matches_played") == 0 \
+	# TBK_FIRSTMATCH=1 forces the first-match tutorial path for QA without resetting the save.
+	# Works for any mode (cold-open now launches endless, not campaign).
+	_is_first_match = (SaveManager.stat("matches_played") == 0 \
 		or OS.get_environment("TBK_FIRSTMATCH") == "1")
 	SaveManager.bump_stat("matches_played")
 	Analytics.match_start(_stage, _n_kingdoms, _mode, 0.0 if _mode in ["endless", "timed"] else _match_t)
@@ -406,7 +407,7 @@ func _spawn_kingdom(i: int) -> void:
 	else:
 		_player = pdata
 		av.auto_input = true                # human reads InputManager id 0
-		av.speed = HUMAN_SPEED              # base carve speed (BARRACKS stacks on top)
+		av.speed = HUMAN_SPEED + Upgrades.speed_bonus_of("speed_boost") * (1.0 if SaveManager.has_upgrade("speed_boost") else 0.0)
 		av.make_royal(_kid_color[kid])      # gold crown + cape → you ARE the Toy King
 		_attach_king_aura(av, _kid_color[kid])   # glowing ground ring → never lose your king
 
@@ -905,6 +906,163 @@ func _close_continue_panel() -> void:
 		_continue_panel.queue_free()
 	_continue_panel = null
 
+func _show_pause_panel() -> void:
+	if _pause_panel and is_instance_valid(_pause_panel):
+		return
+	AudioManager.play("tap")
+	var dim := ColorRect.new()
+	dim.color = Color(0.03, 0.03, 0.09, 0.0)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.process_mode = Node.PROCESS_MODE_ALWAYS
+	_ui_layer.add_child(dim)
+	dim.create_tween().tween_property(dim, "color:a", 0.66, 0.2)
+	_pause_panel = dim
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.add_child(center)
+
+	var panel := PanelContainer.new()
+	var st := StyleBoxTexture.new()
+	st.texture = PANEL_FRAME
+	st.texture_margin_left = 20; st.texture_margin_right = 20
+	st.texture_margin_top = 20;  st.texture_margin_bottom = 20
+	st.set_content_margin(SIDE_LEFT, 34)
+	st.set_content_margin(SIDE_RIGHT, 34)
+	st.set_content_margin(SIDE_TOP, 28)
+	st.set_content_margin(SIDE_BOTTOM, 28)
+	panel.add_theme_stylebox_override("panel", st)
+	panel.custom_minimum_size = Vector2(380, 0)
+	center.add_child(panel)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 14)
+	panel.add_child(vb)
+
+	_result_label(vb, "SETTINGS", 38, Color.WHITE)
+
+	var sp0 := Control.new(); sp0.custom_minimum_size = Vector2(0, 4); vb.add_child(sp0)
+
+	# ── Music toggle ──
+	var music_row := HBoxContainer.new()
+	music_row.add_theme_constant_override("separation", 12)
+	vb.add_child(music_row)
+	var music_lbl := Label.new()
+	music_lbl.text = "Music"
+	music_lbl.add_theme_font_size_override("font_size", 26)
+	music_lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+	music_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	music_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	music_row.add_child(music_lbl)
+	var music_btn := Button.new()
+	music_btn.custom_minimum_size = Vector2(110, 44)
+	music_btn.add_theme_font_size_override("font_size", 22)
+	music_btn.add_theme_color_override("font_color", Color.WHITE)
+	music_btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	music_btn.add_theme_color_override("font_pressed_color", Color.WHITE)
+	music_row.add_child(music_btn)
+	var _music_on := SaveManager.music_volume() > 0.01
+	var _update_music_btn := func(on: bool) -> void:
+		music_btn.text = "ON" if on else "OFF"
+		_style_button(music_btn, Color("2a6b46") if on else Color("5a1a1a"), 10, 8)
+	_update_music_btn.call(_music_on)
+	music_btn.pressed.connect(func() -> void:
+		_music_on = not _music_on
+		var vol := 0.5 if _music_on else 0.0
+		SaveManager.set_music_volume(vol)
+		AudioManager.set_music_volume(vol)
+		AudioManager.play("tap")
+		_update_music_btn.call(_music_on))
+
+	# ── SFX toggle ──
+	var sfx_row := HBoxContainer.new()
+	sfx_row.add_theme_constant_override("separation", 12)
+	vb.add_child(sfx_row)
+	var sfx_lbl := Label.new()
+	sfx_lbl.text = "Sound FX"
+	sfx_lbl.add_theme_font_size_override("font_size", 26)
+	sfx_lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+	sfx_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sfx_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	sfx_row.add_child(sfx_lbl)
+	var sfx_btn := Button.new()
+	sfx_btn.custom_minimum_size = Vector2(110, 44)
+	sfx_btn.add_theme_font_size_override("font_size", 22)
+	sfx_btn.add_theme_color_override("font_color", Color.WHITE)
+	sfx_btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	sfx_btn.add_theme_color_override("font_pressed_color", Color.WHITE)
+	sfx_row.add_child(sfx_btn)
+	var _sfx_on := SaveManager.sfx_volume() > 0.01
+	var _update_sfx_btn := func(on: bool) -> void:
+		sfx_btn.text = "ON" if on else "OFF"
+		_style_button(sfx_btn, Color("2a6b46") if on else Color("5a1a1a"), 10, 8)
+	_update_sfx_btn.call(_sfx_on)
+	sfx_btn.pressed.connect(func() -> void:
+		_sfx_on = not _sfx_on
+		var vol := 0.8 if _sfx_on else 0.0
+		SaveManager.set_sfx_volume(vol)
+		AudioManager.set_sfx_volume(vol)
+		if _sfx_on:
+			AudioManager.play("tap")
+		_update_sfx_btn.call(_sfx_on))
+
+	# ── View toggle ──
+	var view_row := HBoxContainer.new()
+	view_row.add_theme_constant_override("separation", 12)
+	vb.add_child(view_row)
+	var view_lbl := Label.new()
+	view_lbl.text = "View"
+	view_lbl.add_theme_font_size_override("font_size", 26)
+	view_lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+	view_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	view_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	view_row.add_child(view_lbl)
+	var view_btn := Button.new()
+	view_btn.custom_minimum_size = Vector2(130, 44)
+	view_btn.add_theme_font_size_override("font_size", 20)
+	view_btn.add_theme_color_override("font_color", Color.WHITE)
+	view_btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	view_btn.add_theme_color_override("font_pressed_color", Color.WHITE)
+	view_row.add_child(view_btn)
+	var _cur_mode := SaveManager.camera_mode()
+	var _update_view_btn := func(mode: String) -> void:
+		view_btn.text = "3/4 View" if mode == "hero" else "Top-Down"
+		_style_button(view_btn, Color("1a3a6b") if mode == "hero" else Color("3a2a6b"), 10, 8)
+	_update_view_btn.call(_cur_mode)
+	view_btn.pressed.connect(func() -> void:
+		_cur_mode = "map" if _cur_mode == "hero" else "hero"
+		SaveManager.set_camera_mode(_cur_mode)
+		_apply_camera_mode(_cur_mode)
+		AudioManager.play("tap")
+		_update_view_btn.call(_cur_mode))
+
+	var sp1 := Control.new(); sp1.custom_minimum_size = Vector2(0, 8); vb.add_child(sp1)
+
+	# ── Action buttons ──
+	var btns := HBoxContainer.new()
+	btns.alignment = BoxContainer.ALIGNMENT_CENTER
+	btns.add_theme_constant_override("separation", 14)
+	vb.add_child(btns)
+
+	var menu_btn := _sprite_button("MAIN MENU", BTN_FRAME_BLUE)
+	menu_btn.pressed.connect(func() -> void:
+		AudioManager.play("tap")
+		get_tree().change_scene_to_file("res://ui/main_menu.tscn"))
+	btns.add_child(menu_btn)
+
+	var resume_btn := _sprite_button("RESUME", BTN_FRAME_GREEN)
+	resume_btn.pressed.connect(_close_pause_panel)
+	btns.add_child(resume_btn)
+
+func _close_pause_panel() -> void:
+	AudioManager.play("tap")
+	if _pause_panel and is_instance_valid(_pause_panel):
+		var tw := _pause_panel.create_tween()
+		tw.tween_property(_pause_panel, "color:a", 0.0, 0.15)
+		tw.tween_callback(_pause_panel.queue_free)
+	_pause_panel = null
+
 func _check_match_end() -> void:
 	var human = _rulers[0]
 	var human_pct: float = float(grid.territory_count(human.kid)) / float(GW * GH)
@@ -921,9 +1079,9 @@ func _check_match_end() -> void:
 	elif alive == 1:
 		_end_match(true, "conquest")               # win: last kingdom standing → next island
 	elif _match_t <= 0.0 and _mode in ["campaign", "daily"]:
-		# Only the timed modes end on the clock (hold >=50% to win). The endless island
+		# Only the timed modes end on the clock (largest land holder wins). The endless island
 		# chain is UNTIMED — it ends only by conquest (advance) or elimination (run over).
-		_end_match(human_pct >= WIN_PCT, "timeout")
+		_end_match(_human_rank() == 1, "timeout")
 
 func _human_rank() -> int:
 	var mine: int = grid.territory_count(_rulers[0].kid)
@@ -974,7 +1132,7 @@ func _end_match(win: bool, reason: String) -> void:
 		_daily_first = dres["first"]
 		_daily_streak = dres["streak"]
 		_daily_reward = dres["reward"]
-		SaveManager.add_coins(_endless_score / 20)
+		SaveManager.add_coins(int(_endless_score / 20 * SaveManager.match_coin_multiplier()))
 		AudioManager.play("round_win" if win else "eliminate")
 		Analytics.event("daily_end", {
 			"score": _endless_score, "win": win, "first": _daily_first,
@@ -1001,14 +1159,14 @@ func _end_match(win: bool, reason: String) -> void:
 		})
 		if win:
 			# Cleared → pay coins for it, celebrate, fly to the next (harder) island.
-			SaveManager.add_coins(island_score / 20)
+			SaveManager.add_coins(int(island_score / 20 * SaveManager.match_coin_multiplier()))
 			AudioManager.play("round_win")
 			_endless_clear_transition()
 			return
 		# Run over → total it, bank the best, pay coins, show the final results.
 		_endless_score = SaveManager.endless_run_score()
 		_endless_is_best = SaveManager.record_endless(_endless_score)
-		SaveManager.add_coins(_endless_score / 20)
+		SaveManager.add_coins(int(_endless_score / 20 * SaveManager.match_coin_multiplier()))
 		AudioManager.play("eliminate")
 		Analytics.event("endless_end", {
 			"score": _endless_score, "best": SaveManager.endless_best(),
@@ -1028,7 +1186,7 @@ func _end_match(win: bool, reason: String) -> void:
 					_stage_msg = "Stage cleared!  Next: %s" % Campaign.title(SaveManager.active_stage())
 			else:
 				_stage_msg = "Stage replayed  ·  %s" % Campaign.title(_stage)
-	SaveManager.add_coins(coins)
+	SaveManager.add_coins(int(coins * SaveManager.match_coin_multiplier()))
 	AudioManager.play("round_win" if win else "defeat")
 	if _dbg:
 		print("[end] win=%s reason=%s rank=%d pct=%.1f coins=%d" % [win, reason, rank, pct * 100.0, coins])
@@ -1173,9 +1331,9 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 		"popped": sub = "You got popped!  Don't let rivals cut your trail."
 		"timeout":
 			if win:
-				sub = "Time's up — you ruled %.0f%% of the toybox!" % (pct * 100.0)
+				sub = "Time's up — you ruled the most land (%.0f%%)!" % (pct * 100.0)
 			else:
-				sub = "Time's up — you held %.0f%% (need 50%%), #%d of %d." % [pct * 100.0, rank, _n_kingdoms]
+				sub = "Time's up — you finished #%d of %d with %.0f%%." % [rank, _n_kingdoms, pct * 100.0]
 		_: sub = "You finished #%d of %d." % [rank, _n_kingdoms]
 	_result_label(vb, sub, 26, Color.WHITE)
 
@@ -1295,16 +1453,27 @@ func _button_stylebox(frame: Texture2D, tint: Color) -> StyleBoxTexture:
 	return sb
 
 # Brief floating announcement (pops, conquests) that rises and fades.
+# Messages are queued so rapid-fire events never overlap.
 func _toast(text: String, color: Color = Color.WHITE) -> void:
 	if _ui_layer == null:
 		return
+	_toast_queue.push_back({"text": text, "color": color})
+	if not _toast_busy:
+		_toast_drain()
+
+func _toast_drain() -> void:
+	if _toast_queue.is_empty():
+		_toast_busy = false
+		return
+	_toast_busy = true
+	var entry: Dictionary = _toast_queue.pop_front()
 	var l := Label.new()
-	l.text = text
+	l.text = entry["text"]
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	l.size = Vector2(get_viewport().get_visible_rect().size.x, 46)
 	l.position = Vector2(0, 156)
 	l.add_theme_font_size_override("font_size", 34)
-	l.add_theme_color_override("font_color", color)
+	l.add_theme_color_override("font_color", entry["color"])
 	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.75))
 	l.add_theme_constant_override("outline_size", 8)
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1313,10 +1482,11 @@ func _toast(text: String, color: Color = Color.WHITE) -> void:
 	var tw := l.create_tween()
 	tw.tween_property(l, "modulate:a", 1.0, 0.18)
 	tw.parallel().tween_property(l, "position:y", 132.0, 0.18).set_trans(Tween.TRANS_BACK)
-	tw.tween_interval(1.0)
-	tw.tween_property(l, "modulate:a", 0.0, 0.5)
-	tw.parallel().tween_property(l, "position:y", 100.0, 0.5)
+	tw.tween_interval(0.8)
+	tw.tween_property(l, "modulate:a", 0.0, 0.4)
+	tw.parallel().tween_property(l, "position:y", 100.0, 0.4)
 	tw.tween_callback(l.queue_free)
+	tw.tween_callback(_toast_drain)
 
 # 12345 -> "12,345" (thousands separators for the endless score readout).
 func _comma(n: int) -> String:
@@ -1412,9 +1582,25 @@ func _is_single_life() -> bool:
 # Dim the lives dots that have been spent.
 func _update_lives_hud() -> void:
 	for i in _life_dots.size():
-		var dot: Panel = _life_dots[i]
+		var dot: Control = _life_dots[i]
 		if is_instance_valid(dot):
 			dot.modulate = Color.WHITE if i < _lives else Color(1, 1, 1, 0.18)
+
+# A small drawn heart for the lives row (no font/emoji dependency → renders everywhere).
+class _Heart extends Control:
+	var col: Color = Color("e8414e")
+	func _draw() -> void:
+		var w := size.x
+		var h := size.y
+		var r := w * 0.26
+		# two top lobes + a bottom point (triangle) → a clean heart silhouette
+		draw_circle(Vector2(w * 0.32, h * 0.33), r, col)
+		draw_circle(Vector2(w * 0.68, h * 0.33), r, col)
+		draw_colored_polygon(PackedVector2Array([
+			Vector2(w * 0.06, h * 0.40),
+			Vector2(w * 0.94, h * 0.40),
+			Vector2(w * 0.5, h * 0.97),
+		]), col)
 
 # A big, brief centred banner so the player clearly sees WHAT happened (e.g. trail cut)
 # and the consequence (lives left) — death is never silent/abrupt.
@@ -1734,18 +1920,12 @@ func _build_hud(ui: CanvasLayer) -> void:
 		lr.add_theme_constant_override("separation", 8)
 		_life_dots.clear()
 		for i in LIVES_PER_ISLAND:
-			var dot := Panel.new()
-			dot.custom_minimum_size = Vector2(18, 18)
-			dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-			dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			var ds := StyleBoxFlat.new()
-			ds.bg_color = Palette.DANGER
-			ds.set_corner_radius_all(9)
-			ds.border_color = Color(0, 0, 0, 0.5)
-			ds.set_border_width_all(2)
-			dot.add_theme_stylebox_override("panel", ds)
-			lr.add_child(dot)
-			_life_dots.append(dot)
+			var heart := _Heart.new()
+			heart.custom_minimum_size = Vector2(24, 22)
+			heart.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			heart.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			lr.add_child(heart)
+			_life_dots.append(heart)
 		_update_lives_hud()
 
 	# ── top-right: coins + population pills, then settings ──
@@ -1794,6 +1974,7 @@ func _build_hud(ui: CanvasLayer) -> void:
 	gear_icon.offset_left = 4; gear_icon.offset_right = -4
 	gear_icon.offset_top = 6; gear_icon.offset_bottom = -6
 	gear.add_child(gear_icon)
+	gear.pressed.connect(_show_pause_panel)
 	_hover_lift(gear)
 	ui.add_child(gear)
 
@@ -1847,12 +2028,13 @@ func _build_hud(ui: CanvasLayer) -> void:
 		lb_v.add_child(rr["row"])
 		_lb_rows.append(rr)
 
-	# First-ever match is pure carve-and-claim: defer the boost/shield action stack so the
-	# player learns the core loop before the systems land.
-	if not _is_first_match:
-		_build_action_stack(ui)
-	else:
+	# First match always shows the coach banner. The action stack is deferred on first
+	# campaign match (the economy tutorial lands next); for endless the action stack still
+	# shows so the player has boost/shield access in a single-life run.
+	if _is_first_match:
 		_build_first_match_coach(ui)
+	if not _is_first_match or _mode != "campaign":
+		_build_action_stack(ui)
 
 	# Minimap paints from grid data (no 3D render) — no environment needed.
 	_minimap = Minimap.new()

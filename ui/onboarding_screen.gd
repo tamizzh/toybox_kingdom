@@ -4,26 +4,34 @@ extends Control
 # and controls. Shown once on first launch (gated by SaveManager.onboarding_done) and
 # replayable from the menu's HOW TO PLAY button. Marks onboarding done when finished.
 
+const ILLO_SHOTS := [
+	"res://assets/onboarding/p0_kingdom.png",
+	"res://assets/onboarding/p1_claim.png",
+	"res://assets/onboarding/p2_trail.png",
+	"res://assets/onboarding/p3_conquer.png",
+	"res://assets/onboarding/p4_victory.png",
+]
+
 const PAGES := [
 	{
 		"title": "RULE YOUR TOY KINGDOM",
-		"body": "Start with a tiny castle and a patch of land.\nGrow it into the biggest kingdom in the toybox!",
+		"body": "You are the Crowned Toy King!\nStart with a small castle and grow your kingdom across the toybox.",
 	},
 	{
 		"title": "CLAIM NEW LAND",
-		"body": "Leave your land to draw a trail, then loop back home.\nEverything you circle becomes your territory!",
+		"body": "Use the joystick (or WASD) to move.\nLeave your land to draw a trail — then loop back home.\nEverything you circle becomes YOUR territory!",
 	},
 	{
 		"title": "MIND YOUR TRAIL",
-		"body": "Out in the open your trail is exposed.\nIf a rival crosses it you pop — so cut theirs first!",
+		"body": "While you're out, your trail is exposed.\nIf a rival touches it, you pop and lose your trail!\nCut theirs first — or race home safely.",
 	},
 	{
 		"title": "CONQUER CASTLES",
-		"body": "Reach a rival's castle to take their whole kingdom —\nif your castle is the same level or higher.",
+		"body": "Fully surround a rival's castle with your land to capture it.\nClaim more land to level up your castle — bigger castle beats smaller castle!",
 	},
 	{
 		"title": "RULE THE TOYBOX",
-		"body": "Conquer every rival kingdom — or hold 50% of the map when time runs out.\nGood luck, ruler!",
+		"body": "Campaign: hold the most land at time-up, or wipe out every rival.\nEndless: chain islands and beat your high score. Good luck, ruler!",
 	},
 ]
 
@@ -49,11 +57,17 @@ func _rebuild() -> void:
 
 	var p: Dictionary = PAGES[_page]
 
-	# Illustration
-	var illo := _Illo.new()
-	illo.page = _page
-	illo.size = Vector2(420, 280)
-	illo.position = Vector2(Palette.CENTER_X - 210, 96)
+	# Game screenshot illustration — real in-game capture per page
+	# Image.load_from_file bypasses the .import requirement so raw PNGs work in dev mode
+	var illo := TextureRect.new()
+	var _img := Image.load_from_file(ILLO_SHOTS[_page])
+	if _img:
+		illo.texture = ImageTexture.create_from_image(_img)
+	illo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	illo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	illo.size = Vector2(560, 280)
+	illo.position = Vector2(Palette.CENTER_X - 280, 96)
+	illo.clip_contents = true
 	illo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(illo)
 
@@ -75,8 +89,8 @@ func _rebuild() -> void:
 	body.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	body.size = Vector2(900, 90)
-	body.position = Vector2(Palette.CENTER_X - 450, 466)
+	body.size = Vector2(900, 120)
+	body.position = Vector2(Palette.CENTER_X - 450, 460)
 	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(body)
 
@@ -85,7 +99,7 @@ func _rebuild() -> void:
 	dots.count = PAGES.size()
 	dots.current = _page
 	dots.size = Vector2(200, 20)
-	dots.position = Vector2(Palette.CENTER_X - 100, 576)
+	dots.position = Vector2(Palette.CENTER_X - 100, 590)
 	dots.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(dots)
 
@@ -99,7 +113,7 @@ func _rebuild() -> void:
 			_page += 1
 			_rebuild())
 	next.custom_minimum_size = Vector2(300, 70)
-	next.position = Vector2(Palette.CENTER_X - 150, 612)
+	next.position = Vector2(Palette.CENTER_X - 150, 620)
 	add_child(next)
 
 	# Skip (top-right) — hidden on the last page
@@ -110,6 +124,32 @@ func _rebuild() -> void:
 		skip.custom_minimum_size = Vector2(110, 46)
 		skip.position = Vector2(Palette.DESIGN_W - 150, 28)
 		add_child(skip)
+
+	# "tap anywhere" hint — pulsing below the dots, hidden on last page
+	if not last:
+		var hint := Label.new()
+		hint.text = "tap anywhere to continue"
+		hint.add_theme_font_size_override("font_size", 18)
+		hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.45))
+		hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		hint.size = Vector2(Palette.DESIGN_W, 28)
+		hint.position = Vector2(0, 700)
+		hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(hint)
+		var tw := hint.create_tween().set_loops()
+		tw.tween_property(hint, "modulate:a", 0.35, 0.9).set_trans(Tween.TRANS_SINE)
+		tw.tween_property(hint, "modulate:a", 1.0, 0.9).set_trans(Tween.TRANS_SINE)
+
+
+func _gui_input(event: InputEvent) -> void:
+	# Tap anywhere (outside the buttons) advances to the next page.
+	var is_tap: bool = (event is InputEventMouseButton and event.pressed
+		and event.button_index == MOUSE_BUTTON_LEFT)
+	var is_touch: bool = (event is InputEventScreenTouch and event.pressed)
+	if (is_tap or is_touch) and _page < PAGES.size() - 1:
+		AudioManager.play("tap")
+		_page += 1
+		_rebuild()
 
 
 func _finish() -> void:
@@ -146,89 +186,6 @@ class _Backdrop extends Control:
 		draw_circle(Vector2(w * 0.18, h * 0.22), 220.0, Color(Palette.PLAYER_COLORS[1], 0.12))
 		draw_circle(Vector2(w * 0.82, h * 0.20), 240.0, Color(Palette.PLAYER_COLORS[0], 0.10))
 		draw_circle(Vector2(w * 0.80, h * 0.82), 260.0, Color(Palette.PLAYER_COLORS[2], 0.10))
-
-
-class _Illo extends Control:
-	var page: int = 0
-	const BLUE := Color("2f7ae0")
-	const RED := Color("e0463a")
-
-	func _draw() -> void:
-		var cx := size.x * 0.5
-		var cy := size.y * 0.5
-		match page:
-			0:  # your kingdom: a patch of land + castle + blob
-				_land(Vector2(cx, cy + 20), 230, 130, BLUE)
-				_castle(Vector2(cx - 30, cy), 1.0, BLUE)
-				_mascot(Vector2(cx + 70, cy + 30), 30.0, BLUE)
-			1:  # claim: home + a trail loop back, enclosed area filled
-				_land(Vector2(cx - 110, cy + 30), 90, 110, BLUE)
-				_dash_rect(Rect2(cx - 110, cy - 70, 200, 150), BLUE)
-				_land(Vector2(cx + 10, cy - 20), 150, 90, Color(BLUE, 0.35))   # claimed area
-				_mascot(Vector2(cx - 110, cy - 70), 22.0, BLUE)
-				_arrow(Vector2(cx + 70, cy + 70), Vector2(cx - 70, cy + 70), Color.WHITE)
-			2:  # mind your trail: rival cutting your exposed trail
-				_dash_line(Vector2(cx - 150, cy + 30), Vector2(cx + 40, cy + 30), BLUE)
-				_mascot(Vector2(cx - 150, cy + 30), 24.0, BLUE)
-				_mascot(Vector2(cx + 30, cy - 30), 26.0, RED)
-				# the X where the rival cuts the trail
-				var p := Vector2(cx + 5, cy + 5)
-				draw_line(p + Vector2(-16, -16), p + Vector2(16, 16), Color.WHITE, 5.0)
-				draw_line(p + Vector2(16, -16), p + Vector2(-16, 16), Color.WHITE, 5.0)
-			3:  # conquer castles: rival castle -> captured (colour flip)
-				_castle(Vector2(cx - 110, cy), 0.95, RED)
-				_arrow(Vector2(cx - 50, cy), Vector2(cx + 40, cy), Color.WHITE)
-				_castle(Vector2(cx + 110, cy), 0.95, BLUE)
-				draw_string(ArcadeTheme.font, Vector2(cx + 70, cy - 70),
-					"Lv ≥", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Palette.WARN)
-			4:  # rule the toybox: crown + 50%
-				DrawKit.crown(self, Vector2(cx, cy - 30), 110.0)
-				DrawKit.star(self, Vector2(cx - 120, cy + 55), 30.0)
-				DrawKit.star(self, Vector2(cx + 120, cy + 55), 30.0)
-				var s := "50%"
-				var tw := ArcadeTheme.font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, 64).x
-				draw_string(ArcadeTheme.font, Vector2(cx - tw * 0.5, cy + 90), s,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 64, Palette.WARN)
-
-	func _mascot(c: Vector2, r: float, col: Color) -> void:
-		DrawKit.blob(self, c, r, col, 5.0)
-		DrawKit.eyes(self, c + Vector2(0, -r * 0.05), r * 0.7)
-
-	func _land(c: Vector2, w: float, h: float, col: Color) -> void:
-		var r := Rect2(c.x - w * 0.5, c.y - h * 0.5, w, h)
-		draw_rect(r, col)
-		draw_rect(r, col.darkened(0.35), false, 4.0)
-
-	func _castle(c: Vector2, s: float, roof: Color) -> void:
-		var stone := Color("d8cdb5")
-		draw_rect(Rect2(c.x - 22 * s, c.y - 8 * s, 44 * s, 32 * s), stone)        # keep body
-		for sx in [-1.0, 1.0]:
-			draw_rect(Rect2(c.x + sx * 26 * s - 7 * s, c.y - 16 * s, 14 * s, 40 * s), stone)  # towers
-			_roof(Vector2(c.x + sx * 26 * s, c.y - 16 * s), 9 * s, roof)
-		_roof(Vector2(c.x, c.y - 8 * s), 24 * s, roof)                            # keep roof
-
-	func _roof(base_c: Vector2, w: float, col: Color) -> void:
-		draw_colored_polygon(PackedVector2Array([
-			base_c + Vector2(-w, 0), base_c + Vector2(w, 0), base_c + Vector2(0, -w * 1.4)]),
-			col)
-
-	func _dash_rect(r: Rect2, col: Color) -> void:
-		_dash_line(r.position, r.position + Vector2(r.size.x, 0), col)
-		_dash_line(r.position + Vector2(r.size.x, 0), r.position + r.size, col)
-		_dash_line(r.position + r.size, r.position + Vector2(0, r.size.y), col)
-		_dash_line(r.position + Vector2(0, r.size.y), r.position, col)
-
-	func _dash_line(a: Vector2, b: Vector2, col: Color) -> void:
-		var n := int(a.distance_to(b) / 14.0)
-		for i in n:
-			if i % 2 == 0:
-				draw_line(a.lerp(b, float(i) / n), a.lerp(b, float(i + 1) / n), col, 5.0)
-
-	func _arrow(a: Vector2, b: Vector2, col: Color) -> void:
-		draw_line(a, b, col, 4.0)
-		var d := (b - a).normalized()
-		var n := Vector2(-d.y, d.x) * 8.0
-		draw_colored_polygon(PackedVector2Array([b, b - d * 16.0 + n, b - d * 16.0 - n]), col)
 
 
 class _Dots extends Control:

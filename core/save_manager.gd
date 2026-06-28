@@ -22,7 +22,7 @@ func _save() -> void:
 
 # ── audio ────────────────────────────────────────────────────────────────────
 func music_volume() -> float:
-	return float(_cfg.get_value("settings", "music", 0.8))
+	return float(_cfg.get_value("settings", "music", 0.5))
 
 func sfx_volume() -> float:
 	return float(_cfg.get_value("settings", "sfx", 0.9))
@@ -295,6 +295,18 @@ func onboarding_done() -> bool:
 func set_onboarding_done(v: bool) -> void:
 	_cfg.set_value("onboarding", "done", v)
 	_save()
+
+# ── permanent upgrades ────────────────────────────────────────────────────────
+func has_upgrade(id: String) -> bool:
+	return bool(_cfg.get_value("upgrades", id, false))
+
+func unlock_upgrade(id: String) -> void:
+	_cfg.set_value("upgrades", id, true)
+	_save()
+
+# Multiplier applied to all match coin payouts when Royal Mint is owned.
+func match_coin_multiplier() -> float:
+	return 1.4 if has_upgrade("coin_boost") else 1.0
 
 # Per-game rule card is shown only the first time each game is played.
 func game_seen(slug: String) -> bool:
