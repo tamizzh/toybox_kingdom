@@ -15,13 +15,18 @@ const SFX := {
 	"win":       preload("res://assets/audio/sfx_win.wav"),
 	"defeat":    preload("res://assets/audio/sfx_eliminates.wav"),
 }
-const MUSIC := {
+
+# Menu music loops; game tracks play through and shuffle on finish.
+const MUSIC_LOOP := {
 	"menu": preload("res://assets/audio/music_menu.mp3"),
-	"game": preload("res://assets/audio/music_game.mp3"),
 }
+const GAME_TRACKS: Array[AudioStream] = [
+	preload("res://assets/audio/music_game.mp3"),
+	preload("res://assets/audio/music_game2.mp3"),
+]
 
 const SFX_MAX_SEC := {
-	"tap":      1.0,
+	"tap":       1.0,
 	"eliminate": 1.0,
 }
 
@@ -32,15 +37,18 @@ var _idx: int = 0
 var _music: AudioStreamPlayer
 var _current_music: String = ""
 var _music_base_db: float = 0.0
+var _game_music_mode: bool = false
+var _last_game_track: int = -1
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_ensure_buses()
-	for s in MUSIC.values():
+	for s in MUSIC_LOOP.values():
 		_enable_loop(s)
 	_music = AudioStreamPlayer.new()
 	_music.bus = "Music"
 	add_child(_music)
+	_music.finished.connect(_on_track_finished)
 	for i in POOL:
 		var p := AudioStreamPlayer.new()
 		p.bus = "SFX"
@@ -67,6 +75,23 @@ func _enable_loop(s: AudioStream) -> void:
 	elif s is AudioStreamMP3:
 		(s as AudioStreamMP3).loop = true
 
+func _on_track_finished() -> void:
+	if _game_music_mode:
+		_play_random_game_track()
+
+func _play_random_game_track() -> void:
+	# Pick a different track from last time when possible.
+	var idx := _last_game_track
+	if GAME_TRACKS.size() > 1:
+		while idx == _last_game_track:
+			idx = randi() % GAME_TRACKS.size()
+	else:
+		idx = 0
+	_last_game_track = idx
+	_music.stream = GAME_TRACKS[idx]
+	_music.volume_db = _music_base_db
+	_music.play()
+
 # ── playback ─────────────────────────────────────────────────────────────────
 func play(sfx_name: String, pitch: float = 1.0, vol_db: float = 0.0) -> void:
 	if not SFX.has(sfx_name):
@@ -88,15 +113,20 @@ func play(sfx_name: String, pitch: float = 1.0, vol_db: float = 0.0) -> void:
 func play_music(which: String) -> void:
 	if which == _current_music and _music.playing:
 		return
-	if not MUSIC.has(which):
-		return
 	_current_music = which
-	_music.stream = MUSIC[which]
-	_music.volume_db = _music_base_db
-	_music.play()
+	if which == "game":
+		_game_music_mode = true
+		_last_game_track = -1
+		_play_random_game_track()
+	elif MUSIC_LOOP.has(which):
+		_game_music_mode = false
+		_music.stream = MUSIC_LOOP[which]
+		_music.volume_db = _music_base_db
+		_music.play()
 
 func stop_music() -> void:
 	_current_music = ""
+	_game_music_mode = false
 	_music.stop()
 
 # ── volume (0..1 linear), called by Settings / SaveManager ──────────────────
