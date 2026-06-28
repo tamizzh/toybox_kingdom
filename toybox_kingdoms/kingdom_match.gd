@@ -42,12 +42,11 @@ const TEX_DEFEAT_MENU := preload("res://assets/DefeatMenu.png")
 const BANNER_VICTORY_RECT := Rect2(185, 72, 1180, 290)
 const BANNER_DEFEAT_RECT := Rect2(244, 472, 1055, 336)
 const SAD_KING_RECT := Rect2(610, 365, 390, 280)
-# Pill buttons (normal + pressed states) from DefeatMenu.png — green for the primary
-# PLAY AGAIN, blue for MAIN MENU. See _sprite_button.
-const BTN_GREEN_RECT := Rect2(594, 664, 283, 98)
-const BTN_GREEN_PRESSED_RECT := Rect2(893, 664, 278, 98)
-const BTN_BLUE_RECT := Rect2(594, 780, 283, 98)
-const BTN_BLUE_PRESSED_RECT := Rect2(893, 780, 278, 98)
+# CTA buttons reuse the kit's stone bar (9-slice) with coloured corner caps — green for
+# the primary PLAY AGAIN, blue for MAIN MENU — so they match the framed HUD/dialog
+# instead of the old glossy candy pills. See _sprite_button.
+const BTN_FRAME_GREEN := preload("res://assets/btn_green.png")
+const BTN_FRAME_BLUE  := preload("res://assets/btn_blue.png")
 
 const GW := 128
 const GH := 96
@@ -133,6 +132,9 @@ var _first_capture_logged := false
 var _is_first_match := false    # player's first-ever match → guided coach + pure-carve HUD
 var _coach: Control             # the first-match coaching banner (dismissed on first claim)
 var _coach_label: Label         # coach text (swaps "draw a loop" → "return home")
+var _coach_trail_started := false   # true once the player first leaves home territory
+var _tutorial_tip_shown := {}       # keys of one-time in-match tips already shown
+var _castle_tip_timer := 0.0        # counts up after first capture; triggers castle tip
 var _mode := "campaign"         # "campaign" | "endless"
 var _endless_island := 0        # which island of the endless run this is (0-based)
 var _peak_pct := 0.0            # highest land fraction the human held on THIS island
@@ -142,11 +144,19 @@ var _endless_is_best := false
 var _daily_streak := 0          # daily-challenge results display
 var _daily_reward := 0
 var _daily_first := false
+# ── lives (endless/timed) ──
+# Endless is NOT instant-death: you get LIVES_PER_ISLAND free respawns per island. Each
+# pop costs a life and respawns you at your castle. Only when lives run out does the
+# rewarded-ad revive offer (then game over) kick in. Refilled on each island + on revive.
+const LIVES_PER_ISLAND := 3
+var _lives := 0
+var _life_dots: Array = []      # HUD heart/dot nodes
 # ── continue-on-death (rewarded-ad revive) ──
 const MAX_CONTINUES := 2        # ad-revives offered per run before it's truly game over
 var _continue_pending := false  # an offer is on screen; the world is frozen
 var _continue_resolved := false # the current offer was answered (watch / give up / timeout)
 var _continues_used := 0
+var _continue_cause := "conquered"  # "popped" | "conquered" — drives the offer/results wording
 var _continue_panel: Control
 var _ui_layer: CanvasLayer
 
@@ -163,16 +173,16 @@ var _coins := 60
 var _income := 12.0             # coins per minute (recomputed from land + farms)
 var _coin_accum := 0.0
 var _farms := 0
-var _towers := 0
 var _barracks := 0
-var _castle_floor := 1          # min castle level bought via the CASTLE button
 var _coins_label: Label
 var _coins_chip: Control        # the top-right coins pill (pops when you earn land)
 var _fx                         # CaptureFX node (confetti + coin bursts)
 var _fx_cooldown := 0.0         # rate-limit player capture bursts
-var _build_btns := {}           # kind -> {"btn","cost","cost_label","icon","title"}
 var _timer_panel: PanelContainer
 var _last_secs := -1
+
+var _map_btn: Button = null
+var _map_active := false        # true while the top-down map view is on
 
 var _dbg := false
 var _dbg_t := 0.0
@@ -210,10 +220,11 @@ func _ready() -> void:
 			_match_t = DAILY_DURATION
 	elif _mode in ["endless", "timed"]:
 		# UNTIMED: you advance ONLY by conquering the island (last kingdom standing);
-		# only losing all your castles ends the run. No clock, no timeout.
+		# only running out of LIVES ends the run. No clock, no timeout.
 		_endless_island = SaveManager.endless_island()
 		_rival_diffs = _endless_rivals_for(_endless_island)
 		_n_kingdoms = 1 + _rival_diffs.size()
+		_lives = LIVES_PER_ISLAND
 	else:
 		_stage = SaveManager.active_stage()
 		_rival_diffs = Campaign.rival_diffs(_stage)
@@ -342,6 +353,10 @@ func _ready() -> void:
 	elif _mode == "campaign":
 		# Tell the player which stage of the 10-stage campaign they're on.
 		_toast("STAGE %d/%d   ·   %s" % [_stage + 1, Campaign.count(), Campaign.title(_stage)], Palette.WARN)
+
+	# First-ever match: a bobbing arrow above the player's castle so they know where home is.
+	if _is_first_match:
+		_build_castle_indicator(_rulers[0].home, _kid_color[_rulers[0].kid])
 
 func _spawn_kingdom(i: int) -> void:
 	var kid: int = i + 1
@@ -535,6 +550,13 @@ func _physics_process(delta: float) -> void:
 		if _fps_t <= 0.0:
 			_fps_t = 0.25
 			_update_fps()
+	# First-match castle tip: fires 10 s after the player closes their first loop.
+	if _is_first_match and _first_capture_logged and not _tutorial_tip_shown.has("castle") and not _ended:
+		_castle_tip_timer += delta
+		if _castle_tip_timer >= 10.0:
+			_tutorial_tip_shown["castle"] = true
+			_show_tutorial_tip("Rival Castles!",
+				"Surround a rival's castle completely\nwith your land to capture it.\nA bigger castle always wins!")
 	if _dbg:
 		_dbg_tick(delta)
 
@@ -691,6 +713,7 @@ func _ring(pos: Vector3, color: Color) -> void:
 func _eliminate(b, conq) -> void:
 	if conq == _rulers[0]:
 		_rivals_conquered += 1          # endless score input
+		AudioManager.play("eliminate")
 	b.eliminated = true
 	b.alive = false
 	grid.clear_trail(b.kid)
@@ -705,7 +728,8 @@ func _eliminate(b, conq) -> void:
 # The human just lost their last castle. Freeze the world and offer a revive: watch a
 # rewarded ad to rise again, or give up to the results screen. Auto-declines after a
 # few seconds of no answer. TBK_AUTOCONTINUE=1 auto-takes it (headless QA).
-func _offer_continue() -> void:
+func _offer_continue(cause: String = "conquered") -> void:
+	_continue_cause = cause
 	_continue_pending = true
 	_continue_resolved = false
 	if _rulers[0].avatar:
@@ -816,6 +840,8 @@ func _revive_human() -> void:
 	human.avatar.collision_mask = 0
 	human.avatar.auto_input = true
 	human.last_cell = spawn
+	_lives = LIVES_PER_ISLAND          # the ad-revive grants a fresh set of lives
+	_update_lives_hud()
 	_ring(_c2w(spawn.x, spawn.y, 0.0), _kid_color[human.kid])
 	if is_instance_valid(camera):
 		camera.shake(0.2)
@@ -835,20 +861,30 @@ func _build_continue_panel() -> void:
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	dim.add_child(center)
+	# Same painted stone frame as the results dialog + HUD pills, so the revive prompt
+	# reads as one kit instead of a flat bordered rect.
 	var panel := PanelContainer.new()
-	var st := StyleBoxFlat.new()
-	st.bg_color = Color("23203f")
-	st.border_color = Color(Palette.DANGER, 0.9)
-	st.set_border_width_all(4)
-	st.set_corner_radius_all(24)
-	st.set_content_margin_all(28)
+	var st := StyleBoxTexture.new()
+	st.texture = PANEL_FRAME
+	st.texture_margin_left = 20
+	st.texture_margin_right = 20
+	st.texture_margin_top = 20
+	st.texture_margin_bottom = 20
+	st.set_content_margin(SIDE_LEFT, 34)
+	st.set_content_margin(SIDE_RIGHT, 34)
+	st.set_content_margin(SIDE_TOP, 28)
+	st.set_content_margin(SIDE_BOTTOM, 28)
 	panel.add_theme_stylebox_override("panel", st)
 	center.add_child(panel)
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 10)
 	panel.add_child(vb)
 
-	_result_label(vb, "CONQUERED!", 56, Palette.DANGER)
+	var title := "TRAIL CUT!" if _continue_cause == "popped" else "CONQUERED!"
+	var why := ("A rival crossed your trail — out of lives!" if _continue_cause == "popped"
+		else "Your last castle was taken!")
+	_result_label(vb, title, 56, Palette.DANGER)
+	_result_label(vb, why, 22, Palette.WARN.lightened(0.1))
 	_result_label(vb, "Watch an ad to rise again and continue your run.", 24, Color.WHITE)
 	var sp := Control.new(); sp.custom_minimum_size = Vector2(0, 8); vb.add_child(sp)
 
@@ -856,21 +892,13 @@ func _build_continue_panel() -> void:
 	btns.alignment = BoxContainer.ALIGNMENT_CENTER
 	btns.add_theme_constant_override("separation", 16)
 	vb.add_child(btns)
-	var watch := _continue_btn("▶  CONTINUE  (Ad)", Palette.SAFE)
+	# Green = take the revive (primary), blue = give up — matches the results-screen CTAs.
+	var watch := _sprite_button("▶  CONTINUE  (Ad)", BTN_FRAME_GREEN)
 	watch.pressed.connect(_take_continue)
 	btns.add_child(watch)
-	var giveup := _continue_btn("GIVE UP", Palette.NEUTRAL)
+	var giveup := _sprite_button("GIVE UP", BTN_FRAME_BLUE)
 	giveup.pressed.connect(_decline_continue)
 	btns.add_child(giveup)
-
-func _continue_btn(text: String, color: Color) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_size_override("font_size", 28)
-	b.custom_minimum_size = Vector2(280, 70)
-	_style_button(b, color, 16)
-	return b
 
 func _close_continue_panel() -> void:
 	if _continue_panel and is_instance_valid(_continue_panel):
@@ -887,7 +915,7 @@ func _check_match_end() -> void:
 	if human.eliminated:
 		# Killed (all castles lost) → offer a rewarded-ad revive before it's game over.
 		if not _ended and not _continue_pending and _continues_used < MAX_CONTINUES:
-			_offer_continue()
+			_offer_continue("conquered")
 		else:
 			_end_match(false, "conquered")
 	elif alive == 1:
@@ -1001,7 +1029,7 @@ func _end_match(win: bool, reason: String) -> void:
 			else:
 				_stage_msg = "Stage replayed  ·  %s" % Campaign.title(_stage)
 	SaveManager.add_coins(coins)
-	AudioManager.play("round_win" if win else "eliminate")
+	AudioManager.play("round_win" if win else "defeat")
 	if _dbg:
 		print("[end] win=%s reason=%s rank=%d pct=%.1f coins=%d" % [win, reason, rank, pct * 100.0, coins])
 	# On a win, play a cinematic victory orbit + fireworks over the capital before the
@@ -1092,6 +1120,7 @@ func _victory_fireworks(focus: Vector3, color: Color) -> void:
 		await get_tree().create_timer(0.5).timeout
 
 func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int) -> void:
+	AudioManager.play_music("menu")
 	var dim := ColorRect.new()
 	dim.color = Color(0.03, 0.03, 0.09, 0.0)
 	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -1103,13 +1132,20 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_ui_layer.add_child(center)
 
+	# Same painted stone frame as the HUD pills (9-slice): blue corner caps + stone
+	# border fixed, navy middle stretches to the dialog size — so the results panel reads
+	# as one kit with the in-match HUD instead of a flat bordered rect.
 	var panel := PanelContainer.new()
-	var st := StyleBoxFlat.new()
-	st.bg_color = Color("23203f")
-	st.border_color = Color(Palette.WARN if win else Palette.DANGER, 0.9)
-	st.set_border_width_all(4)
-	st.set_corner_radius_all(24)
-	st.set_content_margin_all(28)
+	var st := StyleBoxTexture.new()
+	st.texture = PANEL_FRAME
+	st.texture_margin_left = 20
+	st.texture_margin_right = 20
+	st.texture_margin_top = 20
+	st.texture_margin_bottom = 20
+	st.set_content_margin(SIDE_LEFT, 34)
+	st.set_content_margin(SIDE_RIGHT, 34)
+	st.set_content_margin(SIDE_TOP, 28)
+	st.set_content_margin(SIDE_BOTTOM, 28)
 	panel.add_theme_stylebox_override("panel", st)
 	center.add_child(panel)
 
@@ -1129,31 +1165,7 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	banner.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	vb.add_child(banner)
 
-	# Body sits below the banner. On defeat the crying toy-king (from DefeatMenu.png)
-	# sits to the LEFT of the stats column so the panel stays short enough for the
-	# 720px-tall landscape screen; on victory the stats take the full width.
-	var body := HBoxContainer.new()
-	body.alignment = BoxContainer.ALIGNMENT_CENTER
-	body.add_theme_constant_override("separation", 18)
-	vb.add_child(body)
-
-	if not win:
-		var king := TextureRect.new()
-		var king_atlas := AtlasTexture.new()
-		king_atlas.atlas = TEX_DEFEAT_MENU
-		king_atlas.region = SAD_KING_RECT
-		king.texture = king_atlas
-		king.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		king.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		king.custom_minimum_size = Vector2(200, 200.0 * SAD_KING_RECT.size.y / SAD_KING_RECT.size.x)
-		king.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		body.add_child(king)
-
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 8)
-	col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	body.add_child(col)
-
+	# Subtitle / mode lines / campaign banner — centered across the full panel width.
 	var sub := ""
 	match reason:
 		"conquest": sub = "You conquered every rival kingdom!"
@@ -1165,33 +1177,55 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 			else:
 				sub = "Time's up — you held %.0f%% (need 50%%), #%d of %d." % [pct * 100.0, rank, _n_kingdoms]
 		_: sub = "You finished #%d of %d." % [rank, _n_kingdoms]
-	_result_label(col, sub, 26, Color.WHITE)
+	_result_label(vb, sub, 26, Color.WHITE)
 
 	# Run modes: the score chase is the headline. Big score, best/NEW BEST, islands cleared.
 	if _mode in ["endless", "timed"]:
-		_result_label(col, "SCORE  %s" % _comma(_endless_score), 46, Palette.WARN)
+		_result_label(vb, "SCORE  %s" % _comma(_endless_score), 46, Palette.WARN)
 		if _endless_is_best:
-			_result_label(col, "★  NEW BEST!  ★", 28, Palette.SAFE)
+			_result_label(vb, "★  NEW BEST!  ★", 28, Palette.SAFE)
 		else:
-			_result_label(col, "Best  %s" % _comma(SaveManager.endless_best()), 22, Color(1, 1, 1, 0.85))
-		_result_label(col, "Islands cleared:  %d" % _endless_island, 22, HUD_DIM)
+			_result_label(vb, "Best  %s" % _comma(SaveManager.endless_best()), 22, Color(1, 1, 1, 0.85))
+		_result_label(vb, "Islands cleared:  %d" % _endless_island, 22, HUD_DIM)
 
 	# Daily challenge: score + streak; the day's reward (first completion only).
 	elif _mode == "daily":
-		_result_label(col, "DAILY  ·  SCORE  %s" % _comma(_endless_score), 42, Palette.WARN)
-		_result_label(col, "STREAK  ·  %d DAY%s" % [_daily_streak, "" if _daily_streak == 1 else "S"], 26, Palette.SAFE)
+		_result_label(vb, "DAILY  ·  SCORE  %s" % _comma(_endless_score), 42, Palette.WARN)
+		_result_label(vb, "STREAK  ·  %d DAY%s" % [_daily_streak, "" if _daily_streak == 1 else "S"], 26, Palette.SAFE)
 		if _daily_first:
-			_result_label(col, "Daily reward  +%d coins" % _daily_reward, 24, HUD_GOLD)
+			_result_label(vb, "Daily reward  +%d coins" % _daily_reward, 24, HUD_GOLD)
 		else:
-			_result_label(col, "Already claimed today — best %s" % _comma(SaveManager.daily_best()), 22, HUD_DIM)
+			_result_label(vb, "Already claimed today — best %s" % _comma(SaveManager.daily_best()), 22, HUD_DIM)
 
 	# Campaign ladder banner (stage cleared / campaign complete / replayed).
 	if _stage_msg != "":
-		_result_label(col, _stage_msg, 24, Palette.SAFE if win else Color.WHITE)
+		_result_label(vb, _stage_msg, 24, Palette.SAFE if win else Color.WHITE)
 
-	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0, 8)
-	col.add_child(spacer)
+	# Standings row. On a loss the crying toy-king (DefeatMenu.png) sits beside the
+	# list — pairing it with the tall element keeps the panel balanced and short
+	# enough for the 720px-tall landscape screen.
+	var midrow := HBoxContainer.new()
+	midrow.alignment = BoxContainer.ALIGNMENT_CENTER
+	midrow.add_theme_constant_override("separation", 24)
+	midrow.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	vb.add_child(midrow)
+
+	if not win:
+		var king := TextureRect.new()
+		var king_atlas := AtlasTexture.new()
+		king_atlas.atlas = TEX_DEFEAT_MENU
+		king_atlas.region = SAD_KING_RECT
+		king.texture = king_atlas
+		king.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		king.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		king.custom_minimum_size = Vector2(210, 210.0 * SAD_KING_RECT.size.y / SAD_KING_RECT.size.x)
+		king.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		midrow.add_child(king)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 6)
+	col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	midrow.add_child(col)
 
 	# final standings
 	var standings: Array = []
@@ -1204,7 +1238,7 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 		_result_label(col, "%d.   %s   %.1f%%" % [r + 1, _kid_name[e["kid"]], 100.0 * e["n"] / total], 24,
 			_kid_color[e["kid"]])
 
-	var coin_lbl := _result_label(col, "+%d coins   (total %d)" % [coins, SaveManager.coins()],
+	var coin_lbl := _result_label(vb, "+%d coins   (total %d)" % [coins, SaveManager.coins()],
 		28, Palette.WARN)
 	coin_lbl.add_theme_constant_override("line_spacing", 12)
 
@@ -1213,32 +1247,34 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	btns.add_theme_constant_override("separation", 16)
 	vb.add_child(btns)
 
-	var again := _sprite_button("PLAY AGAIN", BTN_GREEN_RECT, BTN_GREEN_PRESSED_RECT)
+	var again := _sprite_button("PLAY AGAIN", BTN_FRAME_GREEN)
 	again.pressed.connect(func() -> void:
 		AudioManager.play("tap")
 		get_tree().reload_current_scene())
 	btns.add_child(again)
 
-	var menu := _sprite_button("MAIN MENU", BTN_BLUE_RECT, BTN_BLUE_PRESSED_RECT)
+	var menu := _sprite_button("MAIN MENU", BTN_FRAME_BLUE)
 	menu.pressed.connect(func() -> void:
 		AudioManager.play("tap")
 		get_tree().change_scene_to_file("res://ui/main_menu.tscn"))
 	btns.add_child(menu)
 
-# A pill button skinned with the normal/pressed sprites from DefeatMenu.png. The pill
-# caps are kept crisp via a 9-slice (texture_margin) so only the middle stretches.
-func _sprite_button(text: String, normal_rect: Rect2, pressed_rect: Rect2) -> Button:
+# A CTA button skinned with the kit's stone bar (9-slice): coloured corner caps + stone
+# border stay crisp, the navy middle stretches. Pressed = the same frame dimmed + nudged
+# down a touch so it reads as a press without a second sprite.
+func _sprite_button(text: String, frame: Texture2D) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.add_theme_font_size_override("font_size", 30)
 	b.add_theme_color_override("font_color", Color.WHITE)
 	b.add_theme_color_override("font_hover_color", Color.WHITE)
 	b.add_theme_color_override("font_pressed_color", Color.WHITE)
-	b.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
-	b.add_theme_constant_override("outline_size", 6)
-	b.custom_minimum_size = Vector2(248, 74)
-	var sb_normal := _button_stylebox(normal_rect)
-	var sb_pressed := _button_stylebox(pressed_rect)
+	b.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.55))
+	b.add_theme_constant_override("outline_size", 5)
+	b.custom_minimum_size = Vector2(264, 88)
+	var sb_normal := _button_stylebox(frame, Color.WHITE)
+	var sb_pressed := _button_stylebox(frame, Color(0.82, 0.82, 0.86))
+	sb_pressed.set_content_margin(SIDE_TOP, 16)   # text dips on press
 	b.add_theme_stylebox_override("normal", sb_normal)
 	b.add_theme_stylebox_override("hover", sb_normal)
 	b.add_theme_stylebox_override("focus", sb_normal)
@@ -1246,16 +1282,14 @@ func _sprite_button(text: String, normal_rect: Rect2, pressed_rect: Rect2) -> Bu
 	b.add_theme_stylebox_override("pressed", sb_pressed)
 	return b
 
-func _button_stylebox(region: Rect2) -> StyleBoxTexture:
-	var atlas := AtlasTexture.new()
-	atlas.atlas = TEX_DEFEAT_MENU
-	atlas.region = region
+func _button_stylebox(frame: Texture2D, tint: Color) -> StyleBoxTexture:
 	var sb := StyleBoxTexture.new()
-	sb.texture = atlas
-	# 9-slice: keep the rounded caps un-stretched, stretch only the middle band.
-	sb.texture_margin_left = 52
-	sb.texture_margin_right = 52
-	sb.texture_margin_top = 30
+	sb.texture = frame
+	sb.modulate_color = tint
+	# 9-slice: keep the stone caps un-stretched, stretch only the middle band.
+	sb.texture_margin_left = 34
+	sb.texture_margin_right = 34
+	sb.texture_margin_top = 34
 	sb.texture_margin_bottom = 34
 	sb.set_content_margin_all(10)
 	return sb
@@ -1267,7 +1301,7 @@ func _toast(text: String, color: Color = Color.WHITE) -> void:
 	var l := Label.new()
 	l.text = text
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	l.size = Vector2(Palette.DESIGN_W, 46)
+	l.size = Vector2(get_viewport().get_visible_rect().size.x, 46)
 	l.position = Vector2(0, 156)
 	l.add_theme_font_size_override("font_size", 34)
 	l.add_theme_color_override("font_color", color)
@@ -1318,6 +1352,12 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 		else:
 			step.y += signi(dy)
 		a.last_cell = step
+		# Coach two-beat: once the player first steps off their land, swap the hint
+		# from "draw a loop" to "return home to close it".
+		if a == _rulers[0] and _is_first_match and _coach_label != null and not _coach_trail_started:
+			if grid.get_owner(step.x, step.y) != a.kid:
+				_coach_trail_started = true
+				_coach_label.text = "Return home to close the loop!"
 		var res: Dictionary = grid.enter_cell(a.kid, step.x, step.y)
 		var killed: int = int(res.get("killed", 0))
 		if killed != 0 and _kid_to_agent.has(killed):
@@ -1347,6 +1387,9 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 					_first_capture_logged = true
 					Analytics.first_capture(_elapsed)
 					_dismiss_coach()
+					if _is_first_match and not _tutorial_tip_shown.has("first_claim"):
+						_tutorial_tip_shown["first_claim"] = true
+						_first_claim_celebration()
 				AudioManager.play("collect", clampf(1.0 + float(cap) / 1500.0, 1.0, 1.45))
 				camera.punch_zoom(clampf(0.02 + float(cap) / 9000.0, 0.02, 0.06))
 				if cap > 350:
@@ -1366,18 +1409,61 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 func _is_single_life() -> bool:
 	return _mode in ["endless", "timed"]
 
+# Dim the lives dots that have been spent.
+func _update_lives_hud() -> void:
+	for i in _life_dots.size():
+		var dot: Panel = _life_dots[i]
+		if is_instance_valid(dot):
+			dot.modulate = Color.WHITE if i < _lives else Color(1, 1, 1, 0.18)
+
+# A big, brief centred banner so the player clearly sees WHAT happened (e.g. trail cut)
+# and the consequence (lives left) — death is never silent/abrupt.
+func _death_flash(title: String, sub: String) -> void:
+	if _ui_layer == null:
+		return
+	var box := VBoxContainer.new()
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.modulate.a = 0.0
+	_ui_layer.add_child(box)
+	var t := _hud_text(title, 60, Palette.DANGER.lightened(0.1), HORIZONTAL_ALIGNMENT_CENTER, true)
+	t.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	box.add_child(t)
+	var s := _hud_text(sub, 30, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, true)
+	s.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	box.add_child(s)
+	var tw := box.create_tween()
+	tw.tween_property(box, "modulate:a", 1.0, 0.12).set_trans(Tween.TRANS_BACK)
+	tw.tween_interval(0.7)
+	tw.tween_property(box, "modulate:a", 0.0, 0.4)
+	tw.tween_callback(box.queue_free)
+
 func _kill(a) -> void:
 	a.alive = false
 	a.respawn_t = RESPAWN_TIME
 	if a.avatar:
 		a.avatar.set_dead()
-	# Single-life: the human dying ends the run → offer a rewarded-ad revive (kingdom
-	# stays intact on a revive, since a pop doesn't take castles). Cap then game over.
+	# Endless/timed: spend a LIFE per pop (free respawn at a castle); only when lives run
+	# out does the rewarded-ad revive offer (then game over) kick in.
 	if a == _rulers[0] and _is_single_life() and not _continue_pending and not _ended:
-		if _continues_used < MAX_CONTINUES:
-			_offer_continue()
+		if _lives > 0:
+			_lives -= 1
+			_update_lives_hud()
+			# clear feedback so the player understands WHY they died (a normal respawn at
+			# a castle follows automatically via _physics_process / _respawn).
+			_death_flash("TRAIL CUT!", "%d %s left" % [_lives, "life" if _lives == 1 else "lives"])
+			if is_instance_valid(camera):
+				camera.shake(0.32)
+		elif _continues_used < MAX_CONTINUES:
+			_offer_continue("popped")
 		else:
 			_end_match(false, "popped")
+	# First-match pop: pause and explain what happened before the respawn clock ticks.
+	elif a == _rulers[0] and _is_first_match and not _tutorial_tip_shown.has("pop"):
+		_tutorial_tip_shown["pop"] = true
+		_show_tutorial_tip("You Got Popped!",
+			"A rival crossed your exposed trail.\nAlways race back to your land before\nrivals can cut through your trail!")
 
 func _respawn(a) -> void:
 	# No castles left -> elimination is handled in _check_conquests.
@@ -1551,45 +1637,68 @@ const HUD_GOLD    := Color("ffd34d")
 const HUD_BLUE    := Color("7cb6ff")
 const HUD_DIM     := Color(0.74, 0.78, 0.84)         # secondary / caption text
 
+# Painted toy sprites for the core HUD glyphs (sliced from assets/hud_assets.png).
+# Anything not in here still falls back to the procedural GlyphIcon.
+const HUD_SPRITES := {
+	"coin":   preload("res://assets/hud/coin.png"),
+	"people": preload("res://assets/hud/population.png"),
+	"clock":  preload("res://assets/hud/clock.png"),
+	"map":    preload("res://assets/hud/map.png"),
+	"boost":  preload("res://assets/hud/boost.png"),
+	"shield": preload("res://assets/hud/shield.png"),
+	"gear":   preload("res://assets/hud/gear.png"),
+	"pause":  preload("res://assets/hud/pause.png"),
+}
+# 9-slice version of the signboard (banner/borders fixed, navy middle stretches) so
+# the frame fits any kingdom count without distorting the art. Margins below match it.
+const LEADERBOARD_NS    := preload("res://assets/leaderboard_ns.png")
+const MINIMAP_FRAME     := preload("res://assets/minimap_frame.png")
+# Painted "your kingdom" card: castle + three colour rows (blue people, gold coins,
+# green land). We drop the live value onto each row (see _statcard_value).
+const STATCARD          := preload("res://assets/statcard.png")
+# Blue-cornered stone pill frame (9-slice): the kit's plain panel, used as the
+# background for every HUD pill so they match the framed cards instead of reading
+# as flat black rounded rects.
+const PANEL_FRAME       := preload("res://assets/panel_frame.png")
+
 # ── HUD: territory readout + live leaderboard ─────────────────────────────────
 func _build_hud(ui: CanvasLayer) -> void:
 	_lb_rows.clear()
 	_build_scrims(ui)                       # top/bottom gradients lift the HUD off the board
 
-	var kc: Color = _kid_color[_rulers[0].kid]
-
-	# ── top-left: your kingdom card (colour accent + big % + stat rows) ──
-	var stat := _hud_panel(Vector2(16, 16), Vector2(194, 112), 14)
+	# ── top-left: your kingdom card (painted sprite, live values on the colour rows) ──
+	# The art bakes a castle + three colour rows (blue=people, gold=coins, green=land);
+	# we just drop the live value right-aligned onto each row.
+	# The PNG is pre-scaled to its display size, so render at native size (no Control
+	# sizing fight) and lay the values on by measured row fractions.
+	var sc_w := float(STATCARD.get_width())
+	var sc_h := float(STATCARD.get_height())
+	var stat := TextureRect.new()
+	stat.texture = STATCARD
+	stat.position = Vector2(16, 14)
+	stat.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui.add_child(stat)
-	var stat_h := HBoxContainer.new()
-	stat_h.add_theme_constant_override("separation", 8)
-	stat_h.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stat.add_child(stat_h)
-	stat_h.add_child(_accent_bar(kc))
-	var stat_v := VBoxContainer.new()
-	stat_v.add_theme_constant_override("separation", 3)
-	stat_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	stat_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stat_h.add_child(stat_v)
-	stat_v.add_child(_hud_text(_display_kingdom_name(_rulers[0].kid).to_upper(), 14, kc.lightened(0.35)))
-	_terr_label = _hud_text("0.0%", 30, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT, true)
-	stat_v.add_child(_terr_label)
-	stat_v.add_child(_thin_rule())
-	var pr := _stat_row("people", HUD_BLUE, "Population")
-	stat_v.add_child(pr["row"]); _pop_label = pr["value"]
-	var ir := _stat_row("coin", HUD_GOLD, "Coins / min")
-	stat_v.add_child(ir["row"]); _income_label = ir["value"]
+	# Row centres measured as fractions of the card height (blue/gold/green bands).
+	_pop_label    = _statcard_value(stat, sc_w, sc_h, 0.242)
+	_income_label = _statcard_value(stat, sc_w, sc_h, 0.505)
+	_terr_label   = _statcard_value(stat, sc_w, sc_h, 0.747)
 
 	# ── top-centre: match countdown (campaign) / island indicator (endless) ──
 	# Endless has no doom-clock — only death ends the run — so the centre pill shows
 	# which island you're on instead of a countdown.
-	_timer_panel = _hud_panel(Vector2(Palette.CENTER_X - 84, 14), Vector2(168, 52), 16)
+	_timer_panel = _hud_panel(Vector2.ZERO, Vector2(168, 52), 16)
 	ui.add_child(_timer_panel)
+	_timer_panel.set_anchor(SIDE_LEFT, 0.5)
+	_timer_panel.set_anchor(SIDE_RIGHT, 0.5)
+	_timer_panel.set_offset(SIDE_LEFT, -84)
+	_timer_panel.set_offset(SIDE_RIGHT, 84)
+	_timer_panel.set_offset(SIDE_TOP, 14)
+	_timer_panel.set_offset(SIDE_BOTTOM, 66)
 	var th := _pill_row(_timer_panel)
 	th.add_theme_constant_override("separation", 8)
 	th.alignment = BoxContainer.ALIGNMENT_CENTER
 	var is_chain := _mode in ["endless", "timed"]
-	th.add_child(_glyph(GlyphIcon.new().setup("map" if is_chain else "clock", HUD_GOLD, 22)))
+	th.add_child(_icon("map" if is_chain else "clock", HUD_GOLD, 30))
 	var init_t := ("ISLAND %d" % (_endless_island + 1)) if is_chain else "0:00"
 	_time_label = _hud_text(init_t, 26 if is_chain else 30, Color.WHITE,
 		HORIZONTAL_ALIGNMENT_CENTER, true)
@@ -1598,76 +1707,182 @@ func _build_hud(ui: CanvasLayer) -> void:
 	# Campaign: a small stage chip under the clock so the player always knows which
 	# stage of the ladder they're on (the campaign was otherwise invisible in-match).
 	if _mode == "campaign":
-		var stage_chip := _hud_panel(Vector2(Palette.CENTER_X - 150, 70), Vector2(300, 32), 12)
+		var stage_chip := _hud_panel(Vector2.ZERO, Vector2(300, 44), 12)
 		ui.add_child(stage_chip)
+		stage_chip.set_anchor(SIDE_LEFT, 0.5)
+		stage_chip.set_anchor(SIDE_RIGHT, 0.5)
+		stage_chip.set_offset(SIDE_LEFT, -150)
+		stage_chip.set_offset(SIDE_RIGHT, 150)
+		stage_chip.set_offset(SIDE_TOP, 70)
+		stage_chip.set_offset(SIDE_BOTTOM, 114)
 		var sr := _pill_row(stage_chip); sr.alignment = BoxContainer.ALIGNMENT_CENTER
 		sr.add_child(_hud_text("STAGE %d/%d  ·  %s" % [_stage + 1, Campaign.count(), Campaign.title(_stage)],
 			16, HUD_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
 
+	# Endless/timed: a lives row (dots) under the island pill so the player always knows
+	# how many free respawns remain before a run-ending offer.
+	if _is_single_life():
+		var lives_chip := _hud_panel(Vector2.ZERO, Vector2(150, 40), 12)
+		ui.add_child(lives_chip)
+		lives_chip.set_anchor(SIDE_LEFT, 0.5)
+		lives_chip.set_anchor(SIDE_RIGHT, 0.5)
+		lives_chip.set_offset(SIDE_LEFT, -75)
+		lives_chip.set_offset(SIDE_RIGHT, 75)
+		lives_chip.set_offset(SIDE_TOP, 70)
+		lives_chip.set_offset(SIDE_BOTTOM, 110)
+		var lr := _pill_row(lives_chip); lr.alignment = BoxContainer.ALIGNMENT_CENTER
+		lr.add_theme_constant_override("separation", 8)
+		_life_dots.clear()
+		for i in LIVES_PER_ISLAND:
+			var dot := Panel.new()
+			dot.custom_minimum_size = Vector2(18, 18)
+			dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			var ds := StyleBoxFlat.new()
+			ds.bg_color = Palette.DANGER
+			ds.set_corner_radius_all(9)
+			ds.border_color = Color(0, 0, 0, 0.5)
+			ds.set_border_width_all(2)
+			dot.add_theme_stylebox_override("panel", ds)
+			lr.add_child(dot)
+			_life_dots.append(dot)
+		_update_lives_hud()
+
 	# ── top-right: coins + population pills, then settings ──
-	var coins := _hud_panel(Vector2(Palette.DESIGN_W - 374, 16), Vector2(158, 48), 14)
+	var coins := _hud_panel(Vector2.ZERO, Vector2(158, 48), 14)
 	ui.add_child(coins)
 	_coins_chip = coins
+	coins.set_anchor(SIDE_LEFT, 1.0)
+	coins.set_anchor(SIDE_RIGHT, 1.0)
+	coins.set_offset(SIDE_LEFT, -374)
+	coins.set_offset(SIDE_RIGHT, -216)
+	coins.set_offset(SIDE_TOP, 16)
+	coins.set_offset(SIDE_BOTTOM, 64)
 	coins.pivot_offset = Vector2(79, 24)   # centre pivot so the earn-pop scales nicely
 	var ch := _pill_row(coins); ch.alignment = BoxContainer.ALIGNMENT_CENTER
-	ch.add_child(_glyph(GlyphIcon.new().setup("coin", HUD_GOLD, 24)))
+	ch.add_child(_icon("coin", HUD_GOLD, 30))
 	_coins_label = _hud_text("0", 22, HUD_GOLD, HORIZONTAL_ALIGNMENT_LEFT, true)
 	ch.add_child(_coins_label)
 
-	var pop := _hud_panel(Vector2(Palette.DESIGN_W - 204, 16), Vector2(132, 48), 14)
+	var pop := _hud_panel(Vector2.ZERO, Vector2(132, 48), 14)
 	ui.add_child(pop)
+	pop.set_anchor(SIDE_LEFT, 1.0)
+	pop.set_anchor(SIDE_RIGHT, 1.0)
+	pop.set_offset(SIDE_LEFT, -204)
+	pop.set_offset(SIDE_RIGHT, -72)
+	pop.set_offset(SIDE_TOP, 16)
+	pop.set_offset(SIDE_BOTTOM, 64)
 	var ph := _pill_row(pop); ph.alignment = BoxContainer.ALIGNMENT_CENTER
-	ph.add_child(_glyph(GlyphIcon.new().setup("people", HUD_BLUE, 24)))
+	ph.add_child(_icon("people", HUD_BLUE, 30))
 	_pop_pill_label = _hud_text("0", 22, HUD_BLUE, HORIZONTAL_ALIGNMENT_LEFT, true)
 	ph.add_child(_pop_pill_label)
 
 	var gear := Button.new()
-	gear.text = "SET"
-	gear.position = Vector2(Palette.DESIGN_W - 60, 16)
-	gear.size = Vector2(44, 48)
 	gear.custom_minimum_size = Vector2(44, 48)
+	gear.set_anchor(SIDE_LEFT, 1.0)
+	gear.set_anchor(SIDE_RIGHT, 1.0)
+	gear.set_offset(SIDE_LEFT, -60)
+	gear.set_offset(SIDE_RIGHT, -16)
+	gear.set_offset(SIDE_TOP, 16)
+	gear.set_offset(SIDE_BOTTOM, 64)
 	gear.mouse_filter = Control.MOUSE_FILTER_STOP
-	_style_button(gear, HUD_INK_HI, 16)
+	var _empty := StyleBoxEmpty.new()
+	for state in ["normal", "hover", "pressed", "focus", "disabled"]:
+		gear.add_theme_stylebox_override(state, _empty)
+	var gear_icon := _icon("gear", Color.WHITE, 34)
+	gear_icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	gear_icon.offset_left = 4; gear_icon.offset_right = -4
+	gear_icon.offset_top = 6; gear_icon.offset_bottom = -6
+	gear.add_child(gear_icon)
 	_hover_lift(gear)
 	ui.add_child(gear)
 
-	# ── right: live leaderboard ──
-	var lb := _hud_panel(Vector2(Palette.DESIGN_W - 200, 78), Vector2(184, 286), 14)
+	# ── right: live leaderboard (9-slice signboard) ──
+	# The frame is a NinePatchRect: the banner + gold borders stay fixed while only the
+	# navy middle stretches, so the sign sizes to the kingdom count (4 or 8) without ever
+	# distorting the art or leaving a big empty panel.
+	const LB_W := 240.0
+	const LB_BANNER := 82.0      # fixed banner+top-border zone (matches the 9-slice top margin)
+	const LB_BOTTOM := 20.0      # fixed bottom-border zone
+	const LB_ROW := 30.0         # vertical pitch per standings row
+	var lb_h: float = LB_BANNER + LB_BOTTOM + LB_ROW * float(_n_kingdoms) + 6.0
+	var lb := NinePatchRect.new()
+	lb.texture = LEADERBOARD_NS
+	lb.patch_margin_left = 13
+	lb.patch_margin_right = 13
+	lb.patch_margin_top = 80
+	lb.patch_margin_bottom = 16
+	lb.set_anchor(SIDE_LEFT, 1.0)
+	lb.set_anchor(SIDE_RIGHT, 1.0)
+	lb.set_offset(SIDE_LEFT, -(LB_W + 40))
+	lb.set_offset(SIDE_RIGHT, -40)
+	lb.set_offset(SIDE_TOP, 70)
+	lb.set_offset(SIDE_BOTTOM, 70 + lb_h)
+	lb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui.add_child(lb)
+	# Title rides the banner ribbon at the top of the frame.
+	var lb_title := _hud_text("LEADERBOARD", 15, Color(1, 1, 1, 0.96), HORIZONTAL_ALIGNMENT_CENTER)
+	lb_title.add_theme_constant_override("outline_size", 5)
+	lb_title.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	lb_title.offset_left = 12
+	lb_title.offset_right = -12
+	lb_title.offset_top = 16
+	lb.add_child(lb_title)
+	# Rows sit in the navy interior, clear of the banner + gold border.
+	var lb_m := MarginContainer.new()
+	lb_m.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	lb_m.add_theme_constant_override("margin_left", 18)
+	lb_m.add_theme_constant_override("margin_right", 16)
+	lb_m.add_theme_constant_override("margin_top", int(LB_BANNER + 2))
+	lb_m.add_theme_constant_override("margin_bottom", int(LB_BOTTOM + 2))
+	lb_m.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lb.add_child(lb_m)
 	var lb_v := VBoxContainer.new()
-	lb_v.add_theme_constant_override("separation", 3)
+	lb_v.add_theme_constant_override("separation", 6)
+	lb_v.alignment = BoxContainer.ALIGNMENT_CENTER
 	lb_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	lb.add_child(lb_v)
-	var lb_title := _hud_text("LEADERBOARD", 16, HUD_DIM, HORIZONTAL_ALIGNMENT_CENTER)
-	lb_title.add_theme_constant_override("outline_size", 4)
-	lb_v.add_child(lb_title)
-	lb_v.add_child(_thin_rule())
+	lb_m.add_child(lb_v)
 	for i in _n_kingdoms:
 		var rr := _make_lb_row()
 		lb_v.add_child(rr["row"])
 		_lb_rows.append(rr)
 
-	# First-ever match is pure carve-and-claim: defer the build economy (toolbar + boost/
-	# shield action stack) so the player learns the core loop before the systems land.
+	# First-ever match is pure carve-and-claim: defer the boost/shield action stack so the
+	# player learns the core loop before the systems land.
 	if not _is_first_match:
 		_build_action_stack(ui)
-		_build_toolbar(ui)
 	else:
 		_build_first_match_coach(ui)
 
 	# Minimap paints from grid data (no 3D render) — no environment needed.
 	_minimap = Minimap.new()
 	_minimap.setup(GW, GH)
-	_minimap.position = Vector2(Palette.DESIGN_W - 286, Palette.DESIGN_H - 202)
+	_minimap.set_frame(MINIMAP_FRAME)
 	ui.add_child(_minimap)
+	_minimap.set_anchor(SIDE_LEFT, 1.0)
+	_minimap.set_anchor(SIDE_RIGHT, 1.0)
+	_minimap.set_anchor(SIDE_TOP, 1.0)
+	_minimap.set_anchor(SIDE_BOTTOM, 1.0)
+	_minimap.set_offset(SIDE_LEFT, -286)
+	_minimap.set_offset(SIDE_RIGHT, -56)
+	_minimap.set_offset(SIDE_TOP, -202)
+	_minimap.set_offset(SIDE_BOTTOM, -30)
 
 # First-match coach: one friendly, pulsing banner just above the controls that teaches
 # the core loop in two beats — "draw a loop" then "return home". Dismissed the instant
 # the player closes their first loop (see _dismiss_coach in the capture path).
 func _build_first_match_coach(ui: CanvasLayer) -> void:
-	var panel := _hud_panel(Vector2(Palette.CENTER_X - 230, Palette.DESIGN_H - 150), Vector2(460, 60), 18)
-	panel.pivot_offset = Vector2(230, 30)
+	var panel := _hud_panel(Vector2.ZERO, Vector2(460, 60), 18)
 	ui.add_child(panel)
+	panel.set_anchor(SIDE_LEFT, 0.5)
+	panel.set_anchor(SIDE_RIGHT, 0.5)
+	panel.set_anchor(SIDE_TOP, 1.0)
+	panel.set_anchor(SIDE_BOTTOM, 1.0)
+	panel.set_offset(SIDE_LEFT, -230)
+	panel.set_offset(SIDE_RIGHT, 230)
+	panel.set_offset(SIDE_TOP, -150)
+	panel.set_offset(SIDE_BOTTOM, -90)
+	panel.pivot_offset = Vector2(230, 30)
 	var row := _pill_row(panel)
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_child(_glyph(GlyphIcon.new().setup("boost", HUD_GOLD, 24)))
@@ -1691,6 +1906,133 @@ func _dismiss_coach() -> void:
 	tw.tween_property(c, "modulate:a", 0.0, 0.4)
 	tw.parallel().tween_property(c, "scale", Vector2(1.2, 1.2), 0.4).set_trans(Tween.TRANS_BACK)
 	tw.tween_callback(c.queue_free)
+
+# Pause the match and show a contextual tip card explaining what just happened.
+# Called fire-and-forget (callers don't await). Auto-dismisses after 5 s.
+func _show_tutorial_tip(title: String, body: String) -> void:
+	if _ui_layer == null or not is_inside_tree():
+		return
+	get_tree().paused = true
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.03, 0.03, 0.09, 0.80)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.process_mode = Node.PROCESS_MODE_ALWAYS
+	_ui_layer.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.process_mode = Node.PROCESS_MODE_ALWAYS
+	dim.add_child(center)
+
+	var panel := _hud_panel(Vector2.ZERO, Vector2(500, 0), 18)
+	panel.process_mode = Node.PROCESS_MODE_ALWAYS
+	center.add_child(panel)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 14)
+	panel.add_child(vb)
+
+	vb.add_child(_hud_text(title, 38, Palette.WARN, HORIZONTAL_ALIGNMENT_CENTER, true))
+
+	var body_l := _hud_text(body, 22, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER)
+	body_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body_l.custom_minimum_size = Vector2(460, 0)
+	vb.add_child(body_l)
+
+	var sp := Control.new()
+	sp.custom_minimum_size = Vector2(0, 6)
+	vb.add_child(sp)
+
+	var btn := Button.new()
+	btn.text = "GOT IT"
+	btn.process_mode = Node.PROCESS_MODE_ALWAYS
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.add_theme_font_size_override("font_size", 28)
+	btn.add_theme_color_override("font_color", Color.WHITE)
+	var bs := StyleBoxFlat.new()
+	bs.bg_color = Color(Palette.SAFE, 0.9)
+	bs.set_corner_radius_all(18)
+	bs.content_margin_left = 32; bs.content_margin_right = 32
+	bs.content_margin_top = 10; bs.content_margin_bottom = 10
+	btn.add_theme_stylebox_override("normal", bs)
+	btn.add_theme_stylebox_override("hover", bs)
+	btn.add_theme_stylebox_override("pressed", bs)
+	btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	vb.add_child(btn)
+
+	var dismissed := [false]
+	btn.pressed.connect(func() -> void:
+		if dismissed[0]:
+			return
+		dismissed[0] = true
+		AudioManager.play("tap")
+		get_tree().paused = false
+		dim.queue_free())
+
+	dim.modulate.a = 0.0
+	dim.create_tween().tween_property(dim, "modulate:a", 1.0, 0.2)
+
+	await get_tree().create_timer(5.0).timeout
+	if not dismissed[0] and is_inside_tree() and is_instance_valid(dim):
+		dismissed[0] = true
+		get_tree().paused = false
+		dim.queue_free()
+
+# Non-pausing toast that celebrates a milestone without interrupting play.
+func _show_tip_toast(title: String, body: String, duration: float = 3.0) -> void:
+	if _ui_layer == null or not is_inside_tree():
+		return
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui_layer.add_child(center)
+	var panel := _hud_panel(Vector2.ZERO, Vector2(480, 0), 18)
+	center.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	panel.add_child(vb)
+	vb.add_child(_hud_text(title, 34, Palette.SAFE, HORIZONTAL_ALIGNMENT_CENTER, true))
+	var bl := _hud_text(body, 21, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER)
+	bl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	bl.custom_minimum_size = Vector2(440, 0)
+	vb.add_child(bl)
+	center.modulate.a = 0.0
+	var tw := center.create_tween()
+	tw.tween_property(center, "modulate:a", 1.0, 0.35)
+	tw.tween_interval(duration)
+	tw.tween_property(center, "modulate:a", 0.0, 0.6)
+	tw.tween_callback(center.queue_free)
+
+# Celebrate the first loop without pausing — lets the confetti moment breathe.
+func _first_claim_celebration() -> void:
+	await get_tree().create_timer(0.8).timeout
+	if not is_inside_tree():
+		return
+	_show_tip_toast("Land Claimed!", "Keep looping to grow your kingdom.\nMore land = a stronger castle!")
+
+# Bobbing "YOUR CASTLE" Label3D so new players know where home is.
+# Auto-fades after 8 s to keep the mid-game view clean.
+func _build_castle_indicator(home: Vector2i, color: Color) -> void:
+	var ind := Label3D.new()
+	ind.text = "▼  YOUR CASTLE"
+	ind.modulate = color
+	ind.outline_modulate = Color(0, 0, 0, 0.9)
+	ind.outline_size = 12
+	ind.font_size = 72
+	ind.pixel_size = 0.011
+	ind.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	var base_y := 8.5
+	ind.position = _c2w(home.x, home.y, 0.0) + Vector3(0, base_y, 0)
+	add_child(ind)
+	var bob := ind.create_tween().set_loops()
+	bob.tween_property(ind, "position:y", base_y + 0.9, 0.7).set_trans(Tween.TRANS_SINE)
+	bob.tween_property(ind, "position:y", base_y, 0.7).set_trans(Tween.TRANS_SINE)
+	var fade := ind.create_tween()
+	fade.tween_interval(8.0)
+	fade.tween_property(ind, "modulate:a", 0.0, 2.0)
+	fade.tween_callback(ind.queue_free)
 
 # A glowing, gently-pulsing ground ring fixed under the human's Crowned Toy King so
 # you can always pick yourself out of a crowded board. Emissive + additive so it
@@ -1784,6 +2126,22 @@ func _glyph(icon: Control) -> Control:
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return icon
 
+# An HBox-ready icon: a painted toy sprite when one exists for `name`, otherwise
+# the procedural GlyphIcon. `color` is only used by the glyph fallback (the sprites
+# carry their own colour). `px` is the box the icon is fit into.
+func _icon(name: String, color: Color, px: int) -> Control:
+	if HUD_SPRITES.has(name):
+		var t := TextureRect.new()
+		t.texture = HUD_SPRITES[name]
+		t.custom_minimum_size = Vector2(px, px)
+		t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE   # honour px, not the texture's native size
+		t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		t.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		t.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		t.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		return t
+	return _glyph(GlyphIcon.new().setup(name, color, px))
+
 # An HBox that fills a pill panel, used to lay an icon beside a value label.
 func _pill_row(panel: PanelContainer) -> HBoxContainer:
 	var hb := HBoxContainer.new()
@@ -1798,7 +2156,7 @@ func _stat_row(glyph: String, color: Color, caption: String) -> Dictionary:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(_glyph(GlyphIcon.new().setup(glyph, color, 14)))
+	row.add_child(_icon(glyph, color, 20))
 	var cap := _hud_text(caption, 14, HUD_DIM)
 	cap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(cap)
@@ -1816,21 +2174,23 @@ func _hover_lift(b: Button, lift := 1.06) -> void:
 	b.mouse_exited.connect(func() -> void:
 		b.create_tween().tween_property(b, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_BACK))
 
-func _hud_panel(pos: Vector2, min_size: Vector2, radius: int) -> PanelContainer:
+func _hud_panel(pos: Vector2, min_size: Vector2, _radius: int) -> PanelContainer:
 	var p := PanelContainer.new()
 	p.position = pos
 	p.custom_minimum_size = min_size
 	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var st := StyleBoxFlat.new()
-	st.bg_color = Color(0.04, 0.05, 0.07, 0.88)
-	st.border_color = Color(1, 1, 1, 0.10)
-	st.set_border_width_all(2)
-	st.set_corner_radius_all(radius)
-	st.set_content_margin_all(11)
-	# soft drop shadow lifts the panel off the busy 3D scene (the polish tell)
-	st.shadow_color = Color(0, 0, 0, 0.35)
-	st.shadow_size = 8
-	st.shadow_offset = Vector2(0, 4)
+	# Painted stone pill frame (9-slice): the blue corner caps + stone border stay fixed
+	# while only the navy middle stretches, so every pill matches the framed cards.
+	var st := StyleBoxTexture.new()
+	st.texture = PANEL_FRAME
+	st.texture_margin_left = 20
+	st.texture_margin_right = 20
+	st.texture_margin_top = 20
+	st.texture_margin_bottom = 20
+	st.set_content_margin(SIDE_LEFT, 18)
+	st.set_content_margin(SIDE_RIGHT, 18)
+	st.set_content_margin(SIDE_TOP, 7)
+	st.set_content_margin(SIDE_BOTTOM, 7)
 	p.add_theme_stylebox_override("panel", st)
 	return p
 
@@ -1840,7 +2200,7 @@ func _make_lb_row() -> Dictionary:
 	# Panel wrapper so the human's row (and the leader) can carry a tinted
 	# highlight behind the rank · chip · name · % layout.
 	var wrap := PanelContainer.new()
-	wrap.custom_minimum_size = Vector2(158, 27)
+	wrap.custom_minimum_size = Vector2(150, 26)
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var bg := StyleBoxFlat.new()
 	bg.bg_color = Color(0, 0, 0, 0)
@@ -1852,11 +2212,11 @@ func _make_lb_row() -> Dictionary:
 	wrap.add_theme_stylebox_override("panel", bg)
 
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
+	row.add_theme_constant_override("separation", 6)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(row)
-	var rank := _hud_text("", 16, Color(1, 1, 1, 0.55))
-	rank.custom_minimum_size = Vector2(18, 0)
+	var rank := _hud_text("", 15, Color(1, 1, 1, 0.55))
+	rank.custom_minimum_size = Vector2(15, 0)
 	var dot := Panel.new()
 	dot.custom_minimum_size = Vector2(12, 12)
 	dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -1867,10 +2227,11 @@ func _make_lb_row() -> Dictionary:
 	dst.border_color = Color(0, 0, 0, 0.45)
 	dst.set_border_width_all(1)
 	dot.add_theme_stylebox_override("panel", dst)
-	var nm := _hud_text("", 16, Color.WHITE)
+	var nm := _hud_text("", 15, Color.WHITE)
 	nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var pct := _hud_text("", 16, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT)
-	pct.custom_minimum_size = Vector2(44, 0)
+	nm.clip_text = true   # fixed-width frame: clip long names instead of overflowing the border
+	var pct := _hud_text("", 15, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT)
+	pct.custom_minimum_size = Vector2(38, 0)
 	row.add_child(rank)
 	row.add_child(dot)
 	row.add_child(nm)
@@ -1892,6 +2253,20 @@ func _hud_text(text: String, size: int, color: Color,
 		l.add_theme_font_override("font", ArcadeTheme.font_heavy)
 	return l
 
+# A live value laid right-aligned onto one colour row of the painted stat card.
+# yfrac is the row's vertical centre as a fraction of the card height.
+func _statcard_value(card: Control, card_w: float, card_h: float, yfrac: float) -> Label:
+	var l := _hud_text("0", 17, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT, true)
+	l.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	l.clip_text = true
+	# Start past the row icon (~50% of card width) and run to 6px inside the right border.
+	var x_start := card_w * 0.50
+	l.position = Vector2(x_start, card_h * yfrac - 13.0)
+	l.size = Vector2(card_w - x_start - 10.0, 26.0)
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	card.add_child(l)
+	return l
+
 func _thin_rule() -> ColorRect:
 	var r := ColorRect.new()
 	r.color = Color(1, 1, 1, 0.15)
@@ -1900,104 +2275,77 @@ func _thin_rule() -> ColorRect:
 	return r
 
 func _build_action_stack(ui: CanvasLayer) -> void:
+	# y values are from top in the 720-tall design space; convert to bottom-anchored
+	# offsets so the stack hugs the lower-left on any screen height.
 	var actions := [
 		{"text": "BOOST", "glyph": "boost", "cost": 80, "y": 400, "color": Color("123c70")},
 		{"text": "SHIELD", "glyph": "shield", "cost": 120, "y": 480, "color": Color("174d7a")},
 		{"text": "MAP", "glyph": "map", "cost": 0, "y": 560, "color": Color("17191f")},
 	]
+	# 80px wide gives "SHIELD" enough room; 68px tall with 5px margins = 58px content,
+	# fitting icon(26) + label(~15px) + cost(~13px) = ~54px comfortably.
+	const BTN_W := 80
+	const BTN_H := 68
 	for a in actions:
 		var b := Button.new()
-		b.position = Vector2(20, int(a["y"]))
-		b.custom_minimum_size = Vector2(72, 68)
-		b.size = Vector2(72, 68)
-		_style_button(b, a["color"], 14)
+		b.custom_minimum_size = Vector2(BTN_W, BTN_H)
+		b.set_anchor(SIDE_LEFT, 0.0)
+		b.set_anchor(SIDE_RIGHT, 0.0)
+		b.set_anchor(SIDE_TOP, 1.0)
+		b.set_anchor(SIDE_BOTTOM, 1.0)
+		b.set_offset(SIDE_LEFT, 16)
+		b.set_offset(SIDE_RIGHT, 16 + BTN_W)
+		var from_bottom := 720 - int(a["y"])
+		b.set_offset(SIDE_TOP, -from_bottom)
+		b.set_offset(SIDE_BOTTOM, -from_bottom + BTN_H)
+		_style_button(b, a["color"], 14, 5)
 		var vb := VBoxContainer.new()
 		vb.alignment = BoxContainer.ALIGNMENT_CENTER
-		vb.add_theme_constant_override("separation", 0)
+		vb.add_theme_constant_override("separation", 1)
 		vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		var icon: Control = GlyphIcon.new().setup(a["glyph"], Color.WHITE, 28)
+		var icon: Control = _icon(a["glyph"], Color.WHITE, 26)
 		icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		vb.add_child(icon)
-		vb.add_child(_hud_text(a["text"], 14, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER))
+		vb.add_child(_hud_text(a["text"], 12, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER))
 		if int(a["cost"]) > 0:
-			vb.add_child(_hud_text(str(a["cost"]), 12, HUD_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
+			vb.add_child(_hud_text(str(a["cost"]), 10, HUD_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
 		b.add_child(vb)
+		if a["text"] == "MAP":
+			_map_btn = b
+			b.pressed.connect(_toggle_map_view)
 		_hover_lift(b)
 		ui.add_child(b)
 
-func _build_toolbar(ui: CanvasLayer) -> void:
-	var hb := HBoxContainer.new()
-	hb.position = Vector2(Palette.CENTER_X - 223, Palette.DESIGN_H - 102)
-	hb.add_theme_constant_override("separation", 10)
-	ui.add_child(hb)
-	_add_build_card(hb, "CASTLE", 500, "castle")
-	_add_build_card(hb, "TOWER", 250, "tower")
-	_add_build_card(hb, "FARM", 200, "farm")
-	_add_build_card(hb, "BARRACKS", 350, "barracks")
+func _toggle_map_view() -> void:
+	if camera == null or camera.intro_active():
+		return
+	_map_active = not _map_active
+	AudioManager.play("tap")
+	var tw: Tween = camera.create_tween()
+	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	if _map_active:
+		# Center of the 128×96 board in world space (board is centred at origin).
+		camera.start_overview(Vector3.ZERO)
+		tw.tween_property(camera, "fov", 55.0, 0.6)
+	else:
+		camera.end_overview()
+		# Return to the saved hero/map preference and restore follow offset.
+		var hero_off := Vector3(0.0, 12.6, 15.2)
+		camera.offset = hero_off
+		tw.tween_property(camera, "fov", 46.0, 0.5)
+	if _map_btn and is_instance_valid(_map_btn):
+		var active_col := Color("2a6b46")   # green tint = map view on
+		var idle_col   := Color("17191f")   # dark = normal
+		_style_button(_map_btn, active_col if _map_active else idle_col, 14, 5)
 
-# Per-building accent — a colour-coded top stripe so the four cards read apart
-# at a glance instead of being four identical dark boxes.
-const BUILD_ACCENT := {
-	"castle": Color("ffd34d"), "tower": Color("7cb6ff"),
-	"farm": Color("64d77a"), "barracks": Color("f06a5a"),
-}
-
-func _add_build_card(parent: Node, label: String, cost: int, kind: String) -> void:
-	var accent: Color = BUILD_ACCENT.get(kind, HUD_GOLD)
-	var b := Button.new()
-	b.custom_minimum_size = Vector2(104, 88)
-	_style_button(b, Color("141b24"), 14)
-	b.pressed.connect(func() -> void: _buy_building(kind, cost))
-	# coloured accent stripe pinned to the top edge of the card
-	var stripe := Panel.new()
-	stripe.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	stripe.offset_left = 10; stripe.offset_right = -10
-	stripe.offset_top = 7; stripe.offset_bottom = 12
-	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var sst := StyleBoxFlat.new()
-	sst.bg_color = accent
-	sst.set_corner_radius_all(3)
-	stripe.add_theme_stylebox_override("panel", sst)
-	b.add_child(stripe)
-	# sticker icon + name + coin-cost, stacked and centred inside the card
-	var vb := VBoxContainer.new()
-	vb.alignment = BoxContainer.ALIGNMENT_CENTER
-	vb.add_theme_constant_override("separation", 1)
-	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var icon: Control = GlyphIcon.new().setup(kind, Color.WHITE, 36)
-	icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	vb.add_child(icon)
-	vb.add_child(_hud_text(label, 14, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER))
-	var cr := _cost_row(cost)
-	vb.add_child(cr["row"])
-	b.add_child(vb)
-	_hover_lift(b, 1.05)
-	parent.add_child(b)
-	_build_btns[kind] = {"btn": b, "cost": cost, "cost_label": cr["label"]}
-
-# Centred "🪙 250" cost row using the DrawKit coin glyph. Returns the row and its
-# value Label so affordability can recolour the number.
-func _cost_row(cost: int) -> Dictionary:
-	var hb := HBoxContainer.new()
-	hb.alignment = BoxContainer.ALIGNMENT_CENTER
-	hb.add_theme_constant_override("separation", 4)
-	hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var c: Control = GlyphIcon.new().setup("coin", HUD_GOLD, 17)
-	c.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	hb.add_child(c)
-	var l := _hud_text(str(cost), 14, HUD_GOLD)
-	hb.add_child(l)
-	return {"row": hb, "label": l}
-
-func _style_button(b: Button, color: Color, radius: int) -> void:
+func _style_button(b: Button, color: Color, radius: int, margin: int = 8) -> void:
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(color, 0.92)
 	st.border_color = Color(1, 1, 1, 0.16)
 	st.set_border_width_all(2)
 	st.set_corner_radius_all(radius)
-	st.set_content_margin_all(8)
+	st.set_content_margin_all(margin)
 	st.shadow_color = Color(0, 0, 0, 0.32)
 	st.shadow_size = 6
 	st.shadow_offset = Vector2(0, 3)
@@ -2011,42 +2359,6 @@ func _style_button(b: Button, color: Color, radius: int) -> void:
 	b.add_theme_color_override("font_color", Color.WHITE)
 	b.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.55))
 	b.add_theme_constant_override("outline_size", 4)
-
-func _buy_building(kind: String, cost: int) -> void:
-	if _coins < cost:
-		_toast("Need more coins", Palette.WARN)
-		Analytics.event("building_denied", {"kind": kind, "cost": cost, "coins": _coins})
-		return
-	_coins -= cost
-	Analytics.building_bought(kind, cost)
-	# Every building boosts YOUR own conquest — the economy fuels expansion instead of
-	# sitting on the side. The toast names the effect so the payoff is legible.
-	var fx := ""
-	match kind:
-		"castle":
-			_castle_floor = mini(_castle_floor + 1, 6)
-			for c in _rulers[0].castles:
-				if c["node"] != null:
-					c["node"].update_tier(maxi(c["node"].tier, _castle_floor))
-			fx = "Castle Lv %d — siege bigger keeps" % _castle_floor
-		"tower":
-			_towers += 1
-			_rulers[0].defense += 1
-			fx = "Defense +1 — harder to conquer (×%d)" % _towers
-		"farm":
-			_farms += 1
-			fx = "Coins/min up — more to spend (×%d)" % _farms
-		"barracks":
-			_barracks += 1
-			_apply_human_speed()
-			fx = "Faster carve — claim more, faster (×%d)" % _barracks
-	_toast(fx, _kid_color[_rulers[0].kid])
-
-# Recompute the human king's carve speed from the base + BARRACKS owned (capped).
-func _apply_human_speed() -> void:
-	if _rulers.is_empty() or _rulers[0].avatar == null:
-		return
-	_rulers[0].avatar.speed = minf(HUMAN_SPEED + float(_barracks) * BARRACKS_SPEED, SPEED_CAP)
 
 func _display_kingdom_name(kid: int) -> String:
 	# Colour-matched names assigned in _assign_kingdom_colors ("Your Kingdom" for the human).
@@ -2153,13 +2465,6 @@ func _hud_tick(delta: float) -> void:
 	_coins_label.text = "%d" % _coins
 	_pop_pill_label.text = "%d" % pop
 
-	# affordability: dim build cards you can't afford, gold→red on the cost.
-	for kind in _build_btns:
-		var bd: Dictionary = _build_btns[kind]
-		var afford: bool = _coins >= int(bd["cost"])
-		bd["btn"].modulate = Color(1, 1, 1, 1.0) if afford else Color(0.78, 0.80, 0.84, 0.92)
-		bd["cost_label"].add_theme_color_override("font_color", HUD_GOLD if afford else Palette.DANGER)
-
 	# Endless island chain (endless/timed) is UNTIMED: the centre pill shows the island,
 	# not a countdown. Only campaign/daily show the clock.
 	if _mode in ["endless", "timed"]:
@@ -2222,8 +2527,15 @@ func _build_fps_overlay(layer: CanvasLayer) -> void:
 	l.add_theme_font_size_override("font_size", 17)
 	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	l.add_theme_constant_override("outline_size", 5)
-	l.position = Vector2(18, Palette.DESIGN_H - 32)
 	layer.add_child(l)
+	l.set_anchor(SIDE_LEFT, 0.0)
+	l.set_anchor(SIDE_RIGHT, 1.0)
+	l.set_anchor(SIDE_TOP, 1.0)
+	l.set_anchor(SIDE_BOTTOM, 1.0)
+	l.set_offset(SIDE_LEFT, 18)
+	l.set_offset(SIDE_RIGHT, 0)
+	l.set_offset(SIDE_TOP, -32)
+	l.set_offset(SIDE_BOTTOM, 0)
 	_fps_label = l
 
 func _toggle_fps() -> void:
