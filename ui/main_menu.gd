@@ -20,8 +20,12 @@ func _ready() -> void:
 	# match the results screen's MAIN MENU brings them here as normal.
 	if _should_cold_open():
 		SaveManager.set_mode("endless")
-		SaveManager.set_onboarding_done(true)   # in-game tutorial teaches the loop
-		get_tree().change_scene_to_file(KINGDOM_MATCH)
+		AudioManager.play_music("menu")
+		var onboarding: Node = load("res://ui/onboarding_screen.gd").new()
+		add_child(onboarding)
+		onboarding.tree_exited.connect(func() -> void:
+			if is_inside_tree():
+				get_tree().change_scene_to_file.call_deferred(KINGDOM_MATCH))
 		return
 
 	AudioManager.play_music("menu")

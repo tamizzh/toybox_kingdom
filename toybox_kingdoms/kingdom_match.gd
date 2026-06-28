@@ -551,6 +551,13 @@ func _physics_process(delta: float) -> void:
 		if _fps_t <= 0.0:
 			_fps_t = 0.25
 			_update_fps()
+	# First-match castle tip: fires 10 s after the player closes their first loop.
+	if _is_first_match and _first_capture_logged and not _tutorial_tip_shown.has("castle") and not _ended:
+		_castle_tip_timer += delta
+		if _castle_tip_timer >= 10.0:
+			_tutorial_tip_shown["castle"] = true
+			_show_tutorial_tip("Rival Castles!",
+				"Surround a rival's castle completely\nwith your land to capture it.\nA bigger castle always wins!")
 	if _dbg:
 		_dbg_tick(delta)
 
@@ -1517,14 +1524,10 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 		a.last_cell = step
 		# Coach two-beat: once the player first steps off their land, swap the hint
 		# from "draw a loop" to "return home to close it".
-		if a == _rulers[0] and _is_first_match and not _coach_trail_started:
+		if a == _rulers[0] and _is_first_match and _coach_label != null and not _coach_trail_started:
 			if grid.get_owner(step.x, step.y) != a.kid:
 				_coach_trail_started = true
-				if not _tutorial_tip_shown.has("leave_home"):
-					_tutorial_tip_shown["leave_home"] = true
-					_show_tutorial_tip("Draw a Loop!",
-						"Move outside your land and trace a path.\nLoop back home — everything you circle becomes yours!",
-						"res://assets/screenshots/loop.png")
+				_coach_label.text = "Return home to close the loop!"
 		var res: Dictionary = grid.enter_cell(a.kid, step.x, step.y)
 		var killed: int = int(res.get("killed", 0))
 		if killed != 0 and _kid_to_agent.has(killed):
@@ -2030,6 +2033,8 @@ func _build_hud(ui: CanvasLayer) -> void:
 	# First match always shows the coach banner. The action stack is deferred on first
 	# campaign match (the economy tutorial lands next); for endless the action stack still
 	# shows so the player has boost/shield access in a single-life run.
+	if _is_first_match:
+		_build_first_match_coach(ui)
 	if not _is_first_match or _mode != "campaign":
 		_build_action_stack(ui)
 
@@ -2197,14 +2202,12 @@ func _show_tip_toast(title: String, body: String, duration: float = 3.0) -> void
 	tw.tween_property(center, "modulate:a", 0.0, 0.6)
 	tw.tween_callback(center.queue_free)
 
-# Celebrate the first loop — brief pause with a screenshot showing the territory mechanic.
+# Celebrate the first loop without pausing — lets the confetti moment breathe.
 func _first_claim_celebration() -> void:
-	await get_tree().create_timer(0.5).timeout
+	await get_tree().create_timer(0.8).timeout
 	if not is_inside_tree():
 		return
-	_show_tutorial_tip("Territory Claimed!",
-		"Keep looping to grow your kingdom.\nSurround a rival's castle completely to capture it!",
-		"res://assets/screenshots/capture2.png")
+	_show_tip_toast("Land Claimed!", "Keep looping to grow your kingdom.\nMore land = a stronger castle!")
 
 # Bobbing "YOUR CASTLE" Label3D so new players know where home is.
 # Auto-fades after 8 s to keep the mid-game view clean.
