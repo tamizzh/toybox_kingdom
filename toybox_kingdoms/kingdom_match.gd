@@ -551,13 +551,6 @@ func _physics_process(delta: float) -> void:
 		if _fps_t <= 0.0:
 			_fps_t = 0.25
 			_update_fps()
-	# First-match castle tip: fires 10 s after the player closes their first loop.
-	if _is_first_match and _first_capture_logged and not _tutorial_tip_shown.has("castle") and not _ended:
-		_castle_tip_timer += delta
-		if _castle_tip_timer >= 10.0:
-			_tutorial_tip_shown["castle"] = true
-			_show_tutorial_tip("Rival Castles!",
-				"Surround a rival's castle completely\nwith your land to capture it.\nA bigger castle always wins!")
 	if _dbg:
 		_dbg_tick(delta)
 
@@ -1524,10 +1517,9 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 		a.last_cell = step
 		# Coach two-beat: once the player first steps off their land, swap the hint
 		# from "draw a loop" to "return home to close it".
-		if a == _rulers[0] and _is_first_match and _coach_label != null and not _coach_trail_started:
+		if a == _rulers[0] and _is_first_match and not _coach_trail_started:
 			if grid.get_owner(step.x, step.y) != a.kid:
 				_coach_trail_started = true
-				_coach_label.text = "Return home to close the loop!"
 				if not _tutorial_tip_shown.has("leave_home"):
 					_tutorial_tip_shown["leave_home"] = true
 					_show_tutorial_tip("Draw a Loop!",
@@ -2038,8 +2030,6 @@ func _build_hud(ui: CanvasLayer) -> void:
 	# First match always shows the coach banner. The action stack is deferred on first
 	# campaign match (the economy tutorial lands next); for endless the action stack still
 	# shows so the player has boost/shield access in a single-life run.
-	if _is_first_match:
-		_build_first_match_coach(ui)
 	if not _is_first_match or _mode != "campaign":
 		_build_action_stack(ui)
 
