@@ -407,7 +407,7 @@ func _spawn_kingdom(i: int) -> void:
 	else:
 		_player = pdata
 		av.auto_input = true                # human reads InputManager id 0
-		av.speed = HUMAN_SPEED + Upgrades.speed_bonus_of("speed_boost") * (1.0 if SaveManager.has_upgrade("speed_boost") else 0.0)
+		av.speed = HUMAN_SPEED + _UpgradesData.speed_bonus_of("speed_boost") * (1.0 if SaveManager.has_upgrade("speed_boost") else 0.0)
 		av.make_royal(_kid_color[kid])      # gold crown + cape → you ARE the Toy King
 		_attach_king_aura(av, _kid_color[kid])   # glowing ground ring → never lose your king
 
@@ -1528,6 +1528,11 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 			if grid.get_owner(step.x, step.y) != a.kid:
 				_coach_trail_started = true
 				_coach_label.text = "Return home to close the loop!"
+				if not _tutorial_tip_shown.has("leave_home"):
+					_tutorial_tip_shown["leave_home"] = true
+					_show_tutorial_tip("Draw a Loop!",
+						"Move outside your land and trace a path.\nLoop back home — everything you circle becomes yours!",
+						"res://assets/screenshots/loop.png")
 		var res: Dictionary = grid.enter_cell(a.kid, step.x, step.y)
 		var killed: int = int(res.get("killed", 0))
 		if killed != 0 and _kid_to_agent.has(killed):
@@ -1649,7 +1654,8 @@ func _kill(a) -> void:
 	elif a == _rulers[0] and _is_first_match and not _tutorial_tip_shown.has("pop"):
 		_tutorial_tip_shown["pop"] = true
 		_show_tutorial_tip("You Got Popped!",
-			"A rival crossed your exposed trail.\nAlways race back to your land before\nrivals can cut through your trail!")
+			"A rival crossed your exposed trail.\nAlways race back to your land before\nrivals can cut through your trail!",
+			"res://assets/screenshots/trail.png")
 
 func _respawn(a) -> void:
 	# No castles left -> elimination is handled in _check_conquests.
@@ -1846,6 +1852,7 @@ const STATCARD          := preload("res://assets/statcard.png")
 # background for every HUD pill so they match the framed cards instead of reading
 # as flat black rounded rects.
 const PANEL_FRAME       := preload("res://assets/panel_frame.png")
+const _UpgradesData     := preload("res://theme/upgrades.gd")
 
 # ── HUD: territory readout + live leaderboard ─────────────────────────────────
 func _build_hud(ui: CanvasLayer) -> void:
@@ -2091,7 +2098,8 @@ func _dismiss_coach() -> void:
 
 # Pause the match and show a contextual tip card explaining what just happened.
 # Called fire-and-forget (callers don't await). Auto-dismisses after 5 s.
-func _show_tutorial_tip(title: String, body: String) -> void:
+# Pass shot="res://assets/screenshots/foo.png" to show a game screenshot above the text.
+func _show_tutorial_tip(title: String, body: String, shot: String = "") -> void:
 	if _ui_layer == null or not is_inside_tree():
 		return
 	get_tree().paused = true
@@ -2115,6 +2123,18 @@ func _show_tutorial_tip(title: String, body: String) -> void:
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 14)
 	panel.add_child(vb)
+
+	if shot != "":
+		var shot_img := TextureRect.new()
+		var raw := Image.load_from_file(shot)
+		if raw:
+			shot_img.texture = ImageTexture.create_from_image(raw)
+		shot_img.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		shot_img.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		shot_img.clip_contents = true
+		shot_img.custom_minimum_size = Vector2(500, 220)
+		shot_img.process_mode = Node.PROCESS_MODE_ALWAYS
+		vb.add_child(shot_img)
 
 	vb.add_child(_hud_text(title, 38, Palette.WARN, HORIZONTAL_ALIGNMENT_CENTER, true))
 
@@ -2187,12 +2207,14 @@ func _show_tip_toast(title: String, body: String, duration: float = 3.0) -> void
 	tw.tween_property(center, "modulate:a", 0.0, 0.6)
 	tw.tween_callback(center.queue_free)
 
-# Celebrate the first loop without pausing — lets the confetti moment breathe.
+# Celebrate the first loop — brief pause with a screenshot showing the territory mechanic.
 func _first_claim_celebration() -> void:
-	await get_tree().create_timer(0.8).timeout
+	await get_tree().create_timer(0.5).timeout
 	if not is_inside_tree():
 		return
-	_show_tip_toast("Land Claimed!", "Keep looping to grow your kingdom.\nMore land = a stronger castle!")
+	_show_tutorial_tip("Territory Claimed!",
+		"Keep looping to grow your kingdom.\nSurround a rival's castle completely to capture it!",
+		"res://assets/screenshots/capture2.png")
 
 # Bobbing "YOUR CASTLE" Label3D so new players know where home is.
 # Auto-fades after 8 s to keep the mid-game view clean.

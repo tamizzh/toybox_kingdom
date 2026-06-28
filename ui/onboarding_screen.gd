@@ -6,9 +6,9 @@ extends Control
 
 const ILLO_SHOTS := [
 	"res://assets/onboarding/p0_kingdom.png",
-	"res://assets/onboarding/p1_claim.png",
-	"res://assets/onboarding/p2_trail.png",
-	"res://assets/onboarding/p3_conquer.png",
+	"res://assets/screenshots/loop.png",
+	"res://assets/screenshots/trail.png",
+	"res://assets/screenshots/capture2.png",
 	"res://assets/onboarding/p4_victory.png",
 ]
 
