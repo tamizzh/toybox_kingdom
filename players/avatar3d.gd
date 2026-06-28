@@ -13,6 +13,7 @@ var player_id: int = 0
 var dead: bool = false
 
 var _visual: Node3D
+var _death_tween: Tween    # the spin-shrink death anim; killed on revive so it can't hide a revived avatar
 var _last_dir: Vector2 = Vector2.RIGHT
 var _body_mats: Array[Material] = []
 
@@ -311,6 +312,7 @@ func _play_death_anim() -> void:
 	# Squish on impact, then spin-shrink to nothing
 	_visual.scale = Vector3(1.45, 0.45, 1.45)
 	var tw := _visual.create_tween()
+	_death_tween = tw
 	tw.tween_property(_visual, "scale", Vector3(1.0, 1.0, 1.0), 0.08) \
 		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
 	tw.parallel().tween_property(_visual, "rotation:y",
@@ -367,6 +369,11 @@ func _spawn_death_burst() -> void:
 
 func revive(pos: Vector3) -> void:
 	dead  = false
+	# Kill any in-flight death animation, else its pending callback (visible=false /
+	# scale→0) fires after this and re-hides the revived avatar.
+	if _death_tween and _death_tween.is_valid():
+		_death_tween.kill()
+		_death_tween = null
 	visible = true
 	global_position = pos
 	if _visual:
