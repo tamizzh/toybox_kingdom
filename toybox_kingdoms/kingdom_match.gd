@@ -1941,6 +1941,7 @@ func _pick_home_cells(n: int) -> Array:
 	# Single largest component first (mainland countries).
 	var chosen := _greedy_pick(comp_candidates[0], n, min_sep)
 	if chosen.size() >= n:
+		print("[HOME] placed %d/%d kingdoms on mainland (min_sep=%d) — cells: %s" % [chosen.size(), n, min_sep, str(chosen)])
 		return chosen
 
 	# Multi-island: distribute slots proportionally across eligible components.
