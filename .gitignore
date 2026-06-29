@@ -4,3 +4,6 @@
 
 # Export output
 /build/
+
+# Natural Earth download caches for tools/gen_country_masks.py (regenerable, large)
+tools/_ne_*cache.geojson
