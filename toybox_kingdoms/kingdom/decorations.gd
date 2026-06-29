@@ -128,42 +128,42 @@ func rebuild(tiers: Dictionary = {}) -> void:
 	var fl_pos := PackedVector3Array()
 	var fl_col := PackedColorArray()
 	var fl_spawn := PackedFloat32Array()
-	# Scan only the owned-land bounding box (see TerritoryGrid.owned_min/max). `i` stays
-	# the flat index so the per-cell placement hashes are identical to a full-board scan.
-	var x0 := 0; var y0 := 0; var x1 := -1; var y1 := -1
-	if grid.has_owned():
-		x0 = grid.owned_min.x; y0 = grid.owned_min.y
-		x1 = grid.owned_max.x; y1 = grid.owned_max.y
-	for cy in range(y0, y1 + 1):
-		var _row := cy * w
-		for cx in range(x0, x1 + 1):
-			var i := _row + cx
-			var oid: int = grid.owner[i]
-			if oid == 0:
-				continue
-			if int(tiers.get(oid, 1)) < MIN_TIER:
-				continue                         # Outpost: no countryside yet
-			var home: Vector2i = _homes.get(oid, Vector2i(cx, cy))
-			var d: int = absi(cx - home.x) + absi(cy - home.y)
-			if d <= 3:
-				continue                         # leave the immediate keep clear
-			var base: Vector3 = _c2w(cx, cy)
-			# Farms ring the town (mid band); a separate hash keeps them off house cells.
-			if d > CORE_R and d <= FARM_MAX and farm_xf.size() < farm_cap:
-				var fb: int = ((i * 2654435761) & 0x7fffffff) % 1000
-				if fb < 48:
-					var ang := 0.0 if ((i * 40503) & 1) == 0 else PI * 0.5
-					var b := Basis(Vector3.UP, ang)
-					farm_xf.append(Transform3D(b, base + Vector3(0, PROP_Y, 0)))
-					farm_spawn.append(_spawn_for(i, now))
+	# Scan each kingdom's own tight bbox — same fix as slabs/populace to avoid iterating
+	# the full global union box once multiple kingdoms spread across the board.
+	for oid_key in tiers.keys():
+		var oid: int = oid_key
+		if int(tiers.get(oid, 1)) < MIN_TIER:
+			continue                               # Outpost: no countryside yet, skip entirely
+		var bb: PackedInt32Array = grid.kid_bbox(oid)
+		if bb.is_empty():
+			continue
+		for cy in range(bb[1], bb[3] + 1):
+			var _row := cy * w
+			for cx in range(bb[0], bb[2] + 1):
+				var i := _row + cx
+				if int(grid.owner[i]) != oid:
 					continue
-			# Flowers anywhere owned (skip core houses by hash); bright, varied.
-			if fl_pos.size() < flower_cap:
-				var pb: int = ((i * 1103515245 + 12345) & 0x7fffffff) % 1000
-				if pb < 34:
-					fl_pos.append(base + Vector3(0, PROP_Y + 0.1, 0))
-					fl_col.append(FLOWER_COLORS[((i * 2246822519) & 0x7fffffff) % FLOWER_COLORS.size()])
-					fl_spawn.append(_spawn_for(i, now))
+				var home: Vector2i = _homes.get(oid, Vector2i(cx, cy))
+				var d: int = absi(cx - home.x) + absi(cy - home.y)
+				if d <= 3:
+					continue                         # leave the immediate keep clear
+				var base: Vector3 = _c2w(cx, cy)
+				# Farms ring the town (mid band); a separate hash keeps them off house cells.
+				if d > CORE_R and d <= FARM_MAX and farm_xf.size() < farm_cap:
+					var fb: int = ((i * 2654435761) & 0x7fffffff) % 1000
+					if fb < 48:
+						var ang := 0.0 if ((i * 40503) & 1) == 0 else PI * 0.5
+						var b := Basis(Vector3.UP, ang)
+						farm_xf.append(Transform3D(b, base + Vector3(0, PROP_Y, 0)))
+						farm_spawn.append(_spawn_for(i, now))
+						continue
+				# Flowers anywhere owned (skip core houses by hash); bright, varied.
+				if fl_pos.size() < flower_cap:
+					var pb: int = ((i * 1103515245 + 12345) & 0x7fffffff) % 1000
+					if pb < 34:
+						fl_pos.append(base + Vector3(0, PROP_Y + 0.1, 0))
+						fl_col.append(FLOWER_COLORS[((i * 2246822519) & 0x7fffffff) % FLOWER_COLORS.size()])
+						fl_spawn.append(_spawn_for(i, now))
 	_fill_xf(_farm, farm_xf, farm_spawn)
 	_fill(_flower, fl_pos, fl_col, fl_spawn)
 	_first = false
@@ -197,11 +197,11 @@ func get_road_nodes(kid: int, tier: int) -> PackedVector3Array:
 	var w: int = grid.w
 	var home: Vector2i = _homes.get(kid, Vector2i(w / 2, grid.h / 2))
 	var limit := 10
-	# Bounded to the owned box and bails as soon as `limit` nodes are found.
+	# Use this kingdom's tight bbox (not the global union) — same fix as rebuild().
+	var bb: PackedInt32Array = grid.kid_bbox(kid)
 	var x0 := 0; var y0 := 0; var x1 := -1; var y1 := -1
-	if grid.has_owned():
-		x0 = grid.owned_min.x; y0 = grid.owned_min.y
-		x1 = grid.owned_max.x; y1 = grid.owned_max.y
+	if not bb.is_empty():
+		x0 = bb[0]; y0 = bb[1]; x1 = bb[2]; y1 = bb[3]
 	for cy in range(y0, y1 + 1):
 		if out.size() >= limit:
 			break

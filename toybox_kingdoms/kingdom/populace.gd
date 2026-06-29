@@ -217,65 +217,66 @@ func rebuild(tiers: Dictionary = {}) -> void:
 		var tr: int = tiers.get(oi, 1)
 		ktier[oi] = tr
 		kdens[oi] = TIER_DENSITY.get(tr, 1.0)
-	# Scan only the box that bounds all owned land — early/mid game this is a small
-	# fraction of the 110k-cell board. `i` stays the flat index so the per-cell hashes
-	# (and therefore the placement) are byte-identical to a full-board scan.
-	var x0 := 0; var y0 := 0; var x1 := -1; var y1 := -1
-	if grid.has_owned():
-		x0 = grid.owned_min.x; y0 = grid.owned_min.y
-		x1 = grid.owned_max.x; y1 = grid.owned_max.y
-	for cy in range(y0, y1 + 1):
-		var _row := cy * w
-		for cx in range(x0, x1 + 1):
-			var i := _row + cx
-			var oid: int = grid.owner[i]
-			if oid == 0:
-				continue
-			# Cluster density by distance from this kingdom's castle.
-			var d: int = absi(cx - hx[oid]) + absi(cy - hy[oid])
-			var base: Vector3 = _c2w(cx, cy)
-			var col: Color = kcol[oid] if kcol[oid] != null else Color.WHITE
-			var tier: int = ktier[oid]
-			var dens: float = kdens[oid]
-			# Sparse towers (separate hash) in the core/mid ring → studded skyline. Only a
-			# Town (T3+) sprouts keep towers; lower tiers stay low-rise.
-			var tbucket: int = ((i * 2246822519) & 0x7fffffff) % 1000
-			var tower_thr: int = 0
-			if tier >= TOWER_MIN_TIER:
-				tower_thr = 14 if d <= CORE_R else (6 if d <= MID_R else 0)
-			if tower_thr > 0 and tbucket < tower_thr and tower_pos.size() < tower_cap:
-				tower_pos.append(base)
-				tower_col.append(col)
-				tower_spawn.append(_spawn_for(i, now))
-				continue
-			var bucket: int = ((i * 1103515245 + 12345) & 0x7fffffff) % 1000
-			var house_thr: int
-			var cit_thr: int
-			if d <= CORE_R:
-				house_thr = 55; cit_thr = 120        # dense village core
-			elif d <= MID_R:
-				house_thr = 25; cit_thr = 65
-			else:
-				house_thr = 7; cit_thr = 22          # sparse outskirts
-			# Town crowds up as the kingdom levels (Outpost sparse → Capital busy).
-			house_thr = int(house_thr * dens)
-			cit_thr = int(cit_thr * dens)
-			if bucket >= cit_thr:
-				continue
-			if bucket < house_thr:
-				if house_pos.size() < house_cap:
-					house_pos.append(base)
-					house_col.append(col)
-					house_spawn.append(_spawn_for(i, now))
-			elif cit_pos.size() < cit_cap:
-				# Stagger: offset X/Z within the cell using stable per-cell hashes so
-				# citizens don't land on a uniform grid. Max ±35% of a cell in each axis.
-				var jx: float = (((i * 374761393 + 6271) & 0x7fffffff) % 1000) / 1000.0 - 0.5
-				var jz: float = (((i * 1664525 + 1013904223) & 0x7fffffff) % 1000) / 1000.0 - 0.5
-				var jpos := base + Vector3(jx * cell * 0.7, 0.0, jz * cell * 0.7)
-				cit_pos.append(jpos)
-				cit_col.append(col)
-				cit_spawn.append(_spawn_for(i, now))
+	# Scan each kingdom's own tight bbox (grid.kid_bbox) rather than the global union —
+	# 4 kingdoms at ~3k cells each vs one ~87k-cell union box once kingdoms spread out.
+	# `i` stays the flat index so per-cell hashes (and placement) are identical to a
+	# full-board scan.
+	for oid_key in colors.keys():
+		var oid: int = oid_key
+		var bb: PackedInt32Array = grid.kid_bbox(oid)
+		if bb.is_empty():
+			continue
+		for cy in range(bb[1], bb[3] + 1):
+			var _row := cy * w
+			for cx in range(bb[0], bb[2] + 1):
+				var i := _row + cx
+				if int(grid.owner[i]) != oid:
+					continue
+				# Cluster density by distance from this kingdom's castle.
+				var d: int = absi(cx - hx[oid]) + absi(cy - hy[oid])
+				var base: Vector3 = _c2w(cx, cy)
+				var col: Color = kcol[oid] if kcol[oid] != null else Color.WHITE
+				var tier: int = ktier[oid]
+				var dens: float = kdens[oid]
+				# Sparse towers (separate hash) in the core/mid ring → studded skyline. Only a
+				# Town (T3+) sprouts keep towers; lower tiers stay low-rise.
+				var tbucket: int = ((i * 2246822519) & 0x7fffffff) % 1000
+				var tower_thr: int = 0
+				if tier >= TOWER_MIN_TIER:
+					tower_thr = 14 if d <= CORE_R else (6 if d <= MID_R else 0)
+				if tower_thr > 0 and tbucket < tower_thr and tower_pos.size() < tower_cap:
+					tower_pos.append(base)
+					tower_col.append(col)
+					tower_spawn.append(_spawn_for(i, now))
+					continue
+				var bucket: int = ((i * 1103515245 + 12345) & 0x7fffffff) % 1000
+				var house_thr: int
+				var cit_thr: int
+				if d <= CORE_R:
+					house_thr = 55; cit_thr = 120        # dense village core
+				elif d <= MID_R:
+					house_thr = 25; cit_thr = 65
+				else:
+					house_thr = 7; cit_thr = 22          # sparse outskirts
+				# Town crowds up as the kingdom levels (Outpost sparse → Capital busy).
+				house_thr = int(house_thr * dens)
+				cit_thr = int(cit_thr * dens)
+				if bucket >= cit_thr:
+					continue
+				if bucket < house_thr:
+					if house_pos.size() < house_cap:
+						house_pos.append(base)
+						house_col.append(col)
+						house_spawn.append(_spawn_for(i, now))
+				elif cit_pos.size() < cit_cap:
+					# Stagger: offset X/Z within the cell using stable per-cell hashes so
+					# citizens don't land on a uniform grid. Max ±35% of a cell in each axis.
+					var jx: float = (((i * 374761393 + 6271) & 0x7fffffff) % 1000) / 1000.0 - 0.5
+					var jz: float = (((i * 1664525 + 1013904223) & 0x7fffffff) % 1000) / 1000.0 - 0.5
+					var jpos := base + Vector3(jx * cell * 0.7, 0.0, jz * cell * 0.7)
+					cit_pos.append(jpos)
+					cit_col.append(col)
+					cit_spawn.append(_spawn_for(i, now))
 
 	# BH=0.380→body_top=0.760; roof embed 12mm: 0.760+0.240-0.012=0.988; fence/lawn FHALF=0.125
 	_fill(_lawn,  house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.125, 0), Color("52A832"),   true)
@@ -311,11 +312,11 @@ func get_road_nodes(kid: int, tier: int) -> Dictionary:
 	# Roads only need a representative sample, not the full MultiMesh count
 	var hlimit := 16 if not DeviceMode.is_mobile else 10
 	var tlimit := 6
-	# Bounded to the owned box; `i` stays the flat index so the hashes match rebuild().
+	# Use this kingdom's tight bbox (not the global union) — same fix as rebuild().
+	var bb: PackedInt32Array = grid.kid_bbox(kid)
 	var x0 := 0; var y0 := 0; var x1 := -1; var y1 := -1
-	if grid.has_owned():
-		x0 = grid.owned_min.x; y0 = grid.owned_min.y
-		x1 = grid.owned_max.x; y1 = grid.owned_max.y
+	if not bb.is_empty():
+		x0 = bb[0]; y0 = bb[1]; x1 = bb[2]; y1 = bb[3]
 	for cy in range(y0, y1 + 1):
 		if houses.size() >= hlimit and towers.size() >= tlimit:
 			break

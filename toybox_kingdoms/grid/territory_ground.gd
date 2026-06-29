@@ -24,13 +24,13 @@ uniform vec3 kcolors[8];
 uniform vec2 grid_size = vec2(128.0, 96.0);
 uniform vec2 active_half = vec2(38.4, 28.8);  // world-unit half-extents of the active (non-frozen) zone
 uniform sampler2D land_mask : filter_nearest;  // R=1 land, R=0 ocean; default all-white (no mask)
-// PAPER look: every surface is flat matte cardstock. No tile texture, no grass
-// detail — just clean saturated colour with a soft bevel + a lighter ribbon where
-// two regions meet, exactly like simple_target.png.
-uniform vec3 paper_neutral = vec3(0.24, 0.65, 0.13); // spring lawn green — B pulled −0.02 lifts sat from 77%→80% without touching brightness; hue moves 2° warmer
-uniform vec3 sand_col = vec3(0.88, 0.79, 0.55);       // warm sandy BEACH where the island meets the sea
+uniform vec3 paper_neutral = vec3(0.24, 0.65, 0.13);
+uniform vec3 sand_col = vec3(0.88, 0.79, 0.55);
 uniform float bump_amp = 0.045;
-uniform float plateau = 0.115;                // claimed land rises into thicker toy-board plates
+uniform float plateau = 0.115;
+// low_gfx=1 on web/mobile: skip all vnoise() calls (each is 4 sin() evals;
+// at 28k verts + ~1M neutral frags per frame they dominate WebGL2 GPU time).
+uniform float low_gfx = 0.0;
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 float vnoise(vec2 p){
@@ -44,8 +44,8 @@ varying vec3 v_world;
 
 void vertex(){
 	vec3 w = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	float bump = vnoise(w.xz * 1.2) * bump_amp + vnoise(w.xz * 5.0) * bump_amp * 0.4;
-	// claimed land rises into a gentle plateau (small, so props stay aligned)
+	// Skip vertex noise on web/mobile — eliminates 2× vnoise() per vertex on a 28k-vert mesh.
+	float bump = (low_gfx < 0.5) ? (vnoise(w.xz * 1.2) * bump_amp + vnoise(w.xz * 5.0) * bump_amp * 0.4) : 0.0;
 	float claimed = texture(own_l, UV).a;
 	VERTEX.y += bump + smoothstep(0.1, 0.85, claimed) * plateau;
 	v_world = w;
@@ -55,8 +55,6 @@ void fragment(){
 	vec2 uv = UV;
 	vec2 px = 1.0 / grid_size;
 
-	// ── Country shape: discard ocean cells so the island has the right silhouette.
-	// land_mask is all-white by default (no-op); set per-country in WORLD_CONQUEST mode.
 	float is_land = texture(land_mask, uv).r;
 	if (is_land < 0.5) {
 		discard;
@@ -68,8 +66,6 @@ void fragment(){
 	bool is_claimed = claimed > 0.5;
 	vec2 cuv = fract(uv * grid_size);
 
-	// border: where a neighbour cell has a DIFFERENT owner. In the target this reads
-	// as a clean LIGHTER ribbon (not a dark AO gap), so two regions separate crisply.
 	float border = 0.0;
 	border += float(texture(own, uv + vec2(px.x, 0)).r != here.r);
 	border += float(texture(own, uv - vec2(px.x, 0)).r != here.r);
@@ -77,30 +73,30 @@ void fragment(){
 	border += float(texture(own, uv - vec2(0, px.y)).r != here.r);
 	float rim = clamp(border, 0.0, 1.0);
 
-	// per-cell bevel normal — the soft paper-board edge that reads as subtle tiles.
 	vec2 fc = abs(cuv - 0.5);
 	vec2 tilt = vec2(smoothstep(0.35, 0.5, fc.x), smoothstep(0.35, 0.5, fc.y));
 	vec2 sgn = sign(cuv - 0.5);
 	vec3 nrm = normalize(vec3(tilt.x * sgn.x * mix(0.09, 0.18, claimed), 1.0, tilt.y * sgn.y * mix(0.09, 0.18, claimed)));
 	NORMAL = normalize((VIEW_MATRIX * vec4(nrm, 0.0)).xyz);
 
-	// ── Coastline: sandy rim wherever a land cell borders an ocean cell.
-	// Sample the 4 orthogonal neighbours; a missing land neighbour = close to shore.
+	// Coastline — 4 land_mask samples (needed even on low_gfx for beach colour).
 	float n_land = texture(land_mask, uv + vec2(0.0,  px.y)).r
 	             + texture(land_mask, uv - vec2(0.0,  px.y)).r
 	             + texture(land_mask, uv + vec2(px.x,  0.0)).r
 	             + texture(land_mask, uv - vec2(px.x,  0.0)).r;
-	// n_land ∈ [0,4]; cells with fewer land neighbours are closer to the coast.
-	// Also keep the grid-edge beach for the rectangular frozen-zone mode.
 	float edge_rect = min(min(uv.x, 1.0 - uv.x) * grid_size.x,
 	                      min(uv.y, 1.0 - uv.y) * grid_size.y);
 	float coast_rect = smoothstep(0.0, 5.0, edge_rect);
-	float coast_mask = smoothstep(2.5, 4.0, n_land);   // 0 at shore, 1 far inland
-	float coast = min(coast_rect, coast_mask);          // whichever says "beach" wins
+	float coast_mask = smoothstep(2.5, 4.0, n_land);
+	float coast = min(coast_rect, coast_mask);
 
 	vec3 base;
 	if (is_claimed) {
 		base = kcolors[idx];
+	} else if (low_gfx > 0.5) {
+		// Flat neutral colour on web/mobile — skip all vnoise() fragment calls.
+		// The border rim still reads as a lighter separation line.
+		base = mix(paper_neutral, mix(paper_neutral, vec3(1.0), 0.4), rim * 0.5);
 	} else {
 		float sn  = vnoise(v_world.xz * 0.22 + 7.0);
 		float sn2 = vnoise(v_world.xz * 0.55 + 19.3);
@@ -155,10 +151,13 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	var mesh := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
 	pm.size = Vector2(_w * p_cell, _h * p_cell)
-	# One quad per cell gives per-cell clay bumps; on low_gfx (mobile + web) we halve the
-	# subdivision (~12k -> ~3k verts) — the ownership tint is sampled per-fragment from the
-	# texture so only the geometric relief softens, which is invisible at the play camera.
-	var sub_div: int = 2 if DeviceMode.low_gfx else 1
+	# Subdivision controls vertex count for the bump displacement. On web the vertex
+	# shader noise is disabled entirely, so subdivision only matters for geometry
+	# smoothness — use sub_div=4 (6.9k verts vs 28k at sub_div=2) on web. On mobile
+	# (native GL) keep sub_div=2 for the slight relief effect.
+	var sub_div: int = 1
+	if DeviceMode.is_web: sub_div = 4
+	elif DeviceMode.is_mobile: sub_div = 2
 	pm.subdivide_width = _w / sub_div
 	pm.subdivide_depth = _h / sub_div
 	mesh.mesh = pm
@@ -170,10 +169,9 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	mat.set_shader_parameter("own", _tex)
 	mat.set_shader_parameter("own_l", _tex)
 	mat.set_shader_parameter("grid_size", Vector2(_w, _h))
-	mat.set_shader_parameter("bump_amp", BUMP)
-	# Claimed land is now raised by the separate slab layer (territory_slabs.gd), so the
-	# plane stays flat — no plateau ramp poking through the slab edges.
+	mat.set_shader_parameter("bump_amp", 0.0 if DeviceMode.low_gfx else BUMP)
 	mat.set_shader_parameter("plateau", 0.0)
+	mat.set_shader_parameter("low_gfx", 1.0 if DeviceMode.low_gfx else 0.0)
 	# Kingdom tiles use the exact same base colour as castle roofs.
 	var pal := PackedVector3Array()
 	pal.resize(8)

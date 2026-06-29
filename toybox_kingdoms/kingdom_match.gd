@@ -110,7 +110,8 @@ var _rulers: Array = []         # Array[RulerAgent]
 var _kid_to_agent := {}
 var _kids: Array = []
 var _kid_color := {}
-var _kid_label := {}        # colour-matched HUD/leaderboard name ("Your Kingdom" for the human)
+var _kid_label := {}
+var _kid_avatar := {}       # emoji avatar per kid (shown in leaderboard + join/leave toasts)
 var _kid_name := {}
 var _kid_tier := {}        # kid -> castle tier (1..4); gates which decorations unlock
 var _minimap
@@ -191,6 +192,7 @@ var _pop_label: Label
 var _pop_pill_label: Label
 var _income_label: Label
 var _lb_rows: Array = []        # Array[Label]
+var _lb_notif_box: VBoxContainer = null   # join/leave feed below the leaderboard
 var _hud_t := 0.0
 
 # ── in-match economy (the human's kingdom) ───────────────────────────────────
@@ -209,6 +211,28 @@ var _last_secs := -1
 var _map_btn: Button = null
 var _map_active := false        # true while the top-down map view is on
 
+# ── power-ups ─────────────────────────────────────────────────────────────────
+const PU_SPEED       := "speed"   # 5 s speed burst to SPEED_CAP
+const PU_GHOST       := "ghost"   # 6 s ghost — trail cannot be cut by enemies
+const PU_BOMB        := "bomb"    # instant radius-4 land grab
+const PU_CLEAR       := "clear"   # instant trail erase — panic button
+const PU_FREEZE      := "freeze"  # 5 s — all enemies move at 40% speed
+const PU_MAGNET      := "magnet"  # instant radius-6 neutral land pull
+const PU_SPEED_DUR   := 5.0
+const PU_GHOST_DUR   := 6.0
+const PU_FREEZE_DUR  := 5.0
+const PU_BOMB_RADIUS   := 4
+const PU_MAGNET_RADIUS := 6
+const PU_SPAWN_INTERVAL := 25.0   # seconds between spawn waves
+const PU_PER_WAVE    := 3         # how many pickups appear per wave
+const PU_SPEED_BOOST := 3.5       # extra speed added on top of current avatar speed
+
+var _powerup_cells  := {}   # Vector2i -> String (type)
+var _powerup_nodes  := {}   # Vector2i -> Node3D (the pickup mesh+light)
+var _pu_spawn_t     := 10.0 # countdown to first wave (short delay so match starts clean)
+var _freeze_t: float = 0.0  # board-level freeze remaining (seconds)
+var _freeze_by: int  = 0    # kid who cast freeze (not affected by the slow)
+
 var _dbg := false
 var _dbg_t := 0.0
 var _fps_label: Label           # on-screen perf overlay (toggle with F3)
@@ -221,6 +245,7 @@ var _rival_diffs: Array = []     # per-rival AI difficulty for this stage
 var _stage_msg := ""             # results banner ("Stage cleared!" / "Campaign complete!")
 
 func _ready() -> void:
+	_make_dbg_overlay()
 	_dbg = OS.get_environment("TBK_DEBUG") == "1"
 	var fast := OS.get_environment("TBK_FASTMATCH")
 	if fast != "":
@@ -387,6 +412,7 @@ func _ready() -> void:
 	tc.setup([_player])
 	_build_hud(_ui_layer)
 	_build_fps_overlay(_ui_layer)
+	_fake_join_intro()
 
 	# Endless: on islands after the first, fade in from the clear-wipe cover so the jump
 	# reads as continuous; announce the island either way.
@@ -542,12 +568,42 @@ func _apply_render_scale() -> void:
 	vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
 	vp.scaling_3d_scale = scale
 
+const _PT_WINDOW := 60
+var _pt := {}
+var _pt_frame := 0
+var _pt_peak := {}      # peak µs seen per key, for spike detection
+var _dbg_label: Label   # on-screen timing overlay (null when not shown)
+var _last_terr_us := 0  # last [TERR] ground+slabs cost, updated each rebuild
+var _last_cap_us  := 0  # last capture cost
+
+func _pt_add(k: String, v: int) -> void:
+	_pt[k] = int(_pt.get(k, 0)) + v
+	if v > int(_pt_peak.get(k, 0)):
+		_pt_peak[k] = v
+
+func _make_dbg_overlay() -> void:
+	var cl := CanvasLayer.new(); cl.layer = 128; add_child(cl)
+	var bg := ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.72)
+	bg.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	bg.size = Vector2(370, 200)
+	bg.position = Vector2(6, 6)
+	cl.add_child(bg)
+	_dbg_label = Label.new()
+	_dbg_label.add_theme_font_size_override("font_size", 13)
+	_dbg_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_dbg_label.position = Vector2(10, 8)
+	_dbg_label.size = Vector2(360, 190)
+	cl.add_child(_dbg_label)
+
 func _physics_process(delta: float) -> void:
 	if _ended or _continue_pending:
 		return    # frozen while a continue offer is on screen
 	_match_t = maxf(0.0, _match_t - delta)
 	_elapsed += delta
 	_fx_cooldown = maxf(0.0, _fx_cooldown - delta)
+
+	var _t0 := Time.get_ticks_usec()
 
 	# 1. drive AI movement (humans move themselves in Avatar3D._physics_process)
 	# The AI brain (pathfinding/territory eval) is the heaviest per-frame CPU cost, so
@@ -559,10 +615,13 @@ func _physics_process(delta: float) -> void:
 			if (_frame + a.kid) % _ai_decide_every == 0:
 				a.cached_dir = a.ai.decide(a, self)
 			var dir: Vector2 = a.cached_dir
-			a.avatar.velocity = Vector3(dir.x, 0.0, dir.y) * AI_SPEED
+			var freeze_mult := 0.4 if (_freeze_t > 0.0 and a.kid != _freeze_by) else 1.0
+			a.avatar.velocity = Vector3(dir.x, 0.0, dir.y) * AI_SPEED * freeze_mult
 			a.avatar.move_and_slide()
 			if dir.length() > 0.1:
 				a.avatar.face(dir)
+
+	var _t1 := Time.get_ticks_usec()
 
 	# 2. grid stepping + respawn for every ruler
 	for a in _rulers:
@@ -586,27 +645,30 @@ func _physics_process(delta: float) -> void:
 		if c != a.last_cell:
 			_advance_agent(a, c)
 
+	var _t2 := Time.get_ticks_usec()
+
 	# 3. render + ui
 	# Trail cubes are static per cell, so only rebuild the trail MultiMesh when a trail
 	# actually changed (extend / capture / death) instead of every frame.
 	if grid.trail_version != _last_trail_version:
 		_last_trail_version = grid.trail_version
 		renderer.update_trails(_kids)
+
+	var _t3 := Time.get_ticks_usec()
+
 	# Throttle full territory rebuilds to <=10/s — mobile safeguard (claims still
 	# show instantly via the flash; the slab catches up within 0.1s).
 	_terr_rebuild_t -= delta
 	_minimap_t -= delta
 	if grid.has_dirty() and _terr_rebuild_t <= 0.0:
-		# Only repaint the cells that actually changed since the last tick (the grid's
-		# dirty rect) instead of rescanning all 12k cells. A small capture touches a
-		# tiny rect; only a board-spanning event (a whole kingdom falling) approaches
-		# the old full-scan cost.
 		var dmin: Vector2i = grid.dirty_min
 		var dmax: Vector2i = grid.dirty_max
-		_ground.update(dmin.x, dmin.y, dmax.x, dmax.y)
-		if _slabs:
-			_slabs.rebuild()   # raised colour cutouts catch up with the new ownership
-		_minimap_pending = true     # board changed → queue an aerial refresh
+		var _tg0 := Time.get_ticks_usec(); _ground.update(dmin.x, dmin.y, dmax.x, dmax.y)
+		var _ts0 := Time.get_ticks_usec(); if _slabs: _slabs.rebuild()
+		var _te0 := Time.get_ticks_usec()
+		_last_terr_us = (_te0 - _tg0)
+		print("[TERR] ground=%dµs  slabs=%dµs" % [_ts0-_tg0, _te0-_ts0])
+		_minimap_pending = true
 		grid.reset_dirty()
 		_terr_rebuild_t = 0.1
 	# The minimap is a full SECOND scene render, so cap it to ~3/s and always render
@@ -615,8 +677,53 @@ func _physics_process(delta: float) -> void:
 		_minimap.request_render()
 		_minimap_pending = false
 		_minimap_t = 0.5 if DeviceMode.low_gfx else 0.33
+
+	var _t4 := Time.get_ticks_usec()
+
 	_kingdom_tick(delta)
+
+	var _t5 := Time.get_ticks_usec()
+
+	_tick_powerups(delta)
+	_pu_spawn_t -= delta
+	if _pu_spawn_t <= 0.0:
+		_pu_spawn_t = PU_SPAWN_INTERVAL
+		_spawn_powerup_wave()
 	_hud_tick(delta)
+
+	var _t6 := Time.get_ticks_usec()
+	_pt_add("1_ai_move",   _t1 - _t0)
+	_pt_add("2_grid_step", _t2 - _t1)
+	_pt_add("3_trails",    _t3 - _t2)
+	_pt_add("4_terr",      _t4 - _t3)
+	_pt_add("5_kingdom",   _t5 - _t4)
+	_pt_add("6_hud_pu",    _t6 - _t5)
+	_pt_frame += 1
+	if _pt_frame >= _PT_WINDOW:
+		var keys := _pt.keys(); keys.sort()
+		var out := "[TICK/%d] " % _PT_WINDOW
+		for k in keys:
+			out += "%s=%dµs  " % [k, _pt[k] / _PT_WINDOW]
+		print(out)
+		# Update on-screen overlay
+		if _dbg_label:
+			var total_avg := 0
+			for k in _pt: total_avg += _pt[k]
+			total_avg /= _PT_WINDOW
+			var fps_now := int(1.0 / maxf(get_process_delta_time(), 0.001))
+			var txt := "── TICK TIMING (avg/%d frames) ──\n" % _PT_WINDOW
+			for k in keys:
+				var avg_us: int = _pt[k] / _PT_WINDOW
+				var pk: int = int(_pt_peak.get(k, 0))
+				txt += "  %s  avg=%dµs  peak=%dµs\n" % [k, avg_us, pk]
+			txt += "  TOTAL avg=%dµs\n" % total_avg
+			txt += "── SPIKES ──\n"
+			txt += "  terr(last)=%dµs\n" % _last_terr_us
+			txt += "  capture(last)=%dµs\n" % _last_cap_us
+			txt += "  FPS=%d\n" % fps_now
+			_dbg_label.text = txt
+		_pt_peak.clear()
+		_pt.clear(); _pt_frame = 0
 	if _fps_label and _fps_label.visible:
 		_fps_t -= delta
 		if _fps_t <= 0.0:
@@ -651,26 +758,29 @@ func _kingdom_tick(delta: float) -> void:
 	if _decor_cooldown <= 0.0:
 		if _decor_phase == 0:
 			if v != _last_pop_version:
-				_populace.rebuild(_kid_tier)
+				var _tp0 := Time.get_ticks_usec(); _populace.rebuild(_kid_tier)
+				print("[KT] populace=%dµs" % (Time.get_ticks_usec()-_tp0))
 				_last_pop_version = v
 			_decor_phase = 1
 		else:
 			if v != _last_decor_version:
-				_decor.rebuild(_kid_tier)
+				var _td0 := Time.get_ticks_usec(); _decor.rebuild(_kid_tier)
+				print("[KT] decor=%dµs" % (Time.get_ticks_usec()-_td0))
 				_last_decor_version = v
 			_decor_phase = 0
 		_decor_cooldown = 1.2 if DeviceMode.low_gfx else 0.0
-	_windmills.rebuild(_kid_tier)
-	# Roads: rebuild every ~10 kingdom ticks (~4 s desktop, ~6 s mobile) when territory
-	# changed. Each kingdom's rebuild() does its own delta-skip so it's cheap when nothing moved.
+	var _tw0 := Time.get_ticks_usec(); _windmills.rebuild(_kid_tier)
+	print("[KT] windmills=%dµs" % (Time.get_ticks_usec()-_tw0))
 	_road_tick += 1
-	var _road_interval := 8 if DeviceMode.low_gfx else 6
+	var _road_interval := 16 if DeviceMode.low_gfx else 12
 	if _road_tick >= _road_interval and grid.version != _last_road_version:
 		_last_road_version = grid.version
 		_road_tick = 0
+		var _tr0 := Time.get_ticks_usec()
 		for a in _rulers:
 			if not a.eliminated:
 				_roads.rebuild(a.kid, _kid_tier.get(a.kid, 1), grid.territory_count(a.kid))
+		print("[KT] roads=%dµs" % (Time.get_ticks_usec()-_tr0))
 	_minimap.update_territory(grid, _kid_color)
 	for a in _rulers:
 		if a.eliminated:
@@ -801,7 +911,23 @@ func _eliminate(b, conq) -> void:
 		b.avatar.visible = false
 	if b.name_tag:
 		b.name_tag.visible = false
-	_toast("%s conquered %s!" % [_kid_name[conq.kid], _kid_name[b.kid]], _kid_color[conq.kid])
+	var em_b: String = _kid_avatar.get(b.kid, "🐱")
+	if conq == _rulers[0]:
+		_toast("%s  %s was eliminated!" % [em_b, _kid_name[b.kid]], _kid_color[conq.kid])
+	elif b == _rulers[0]:
+		_toast("%s  %s took your land!" % [_kid_avatar.get(conq.kid, "🐱"), _kid_name[conq.kid]], Palette.DANGER)
+	else:
+		_lb_notify("%s  %s left the match" % [em_b, _kid_name[b.kid]], Color(_kid_color[b.kid], 0.9))
+
+# Staggered "joined" entries in the leaderboard notification strip at match start.
+func _fake_join_intro() -> void:
+	for i in range(1, _n_kingdoms):
+		var kid := i + 1
+		await get_tree().create_timer(0.5 + (i - 1) * 0.5).timeout
+		if not is_inside_tree() or _ended:
+			return
+		var em: String = _kid_avatar.get(kid, "🐱")
+		_lb_notify("%s  %s joined" % [em, _kid_name[kid]], _kid_color[kid].lightened(0.2))
 
 # ── continue-on-death (rewarded-ad revive) ────────────────────────────────────
 # The human just lost their last castle. Freeze the world and offer a revive: watch a
@@ -1645,6 +1771,32 @@ func _toast_drain() -> void:
 	tw.tween_callback(l.queue_free)
 	tw.tween_callback(_toast_drain)
 
+# Small join/leave entry appended to the strip below the leaderboard.
+# Fades in, lingers 2.5 s, fades out. Caps at 3 visible lines.
+func _lb_notify(text: String, color: Color) -> void:
+	if _lb_notif_box == null or not is_instance_valid(_lb_notif_box):
+		return
+	while _lb_notif_box.get_child_count() >= 3:
+		var oldest: Node = _lb_notif_box.get_child(0)
+		if is_instance_valid(oldest):
+			oldest.queue_free()
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 12)
+	l.add_theme_color_override("font_color", color)
+	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.75))
+	l.add_theme_constant_override("outline_size", 4)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	l.clip_text = true
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.modulate.a = 0.0
+	_lb_notif_box.add_child(l)
+	var tw := l.create_tween()
+	tw.tween_property(l, "modulate:a", 0.85, 0.18)
+	tw.tween_interval(2.5)
+	tw.tween_property(l, "modulate:a", 0.0, 0.4)
+	tw.tween_callback(l.queue_free)
+
 # 12345 -> "12,345" (thousands separators for the endless score readout).
 func _comma(n: int) -> String:
 	var s := str(absi(n))
@@ -1691,7 +1843,13 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 					_show_tutorial_tip("Draw a Loop!",
 						"Move outside your land and trace a path.\nLoop back home — everything you circle becomes yours!",
 						"res://assets/screenshots/loop.png")
+		var _ec0 := Time.get_ticks_usec()
 		var res: Dictionary = grid.enter_cell(a.kid, step.x, step.y)
+		var _ec1 := Time.get_ticks_usec()
+		if int(res.get("captured",0)) > 0:
+			_last_cap_us = _ec1 - _ec0
+			print("[CAP] enter_cell=%dµs cap=%d" % [_last_cap_us, int(res.get("captured",0))])
+		_check_powerup_pickup(a, step)
 		var killed: int = int(res.get("killed", 0))
 		if killed != 0 and _kid_to_agent.has(killed):
 			var victim = _kid_to_agent[killed]
@@ -2215,12 +2373,15 @@ const KINGDOM_COLORS := [
 	Color("8a3fc0"), Color("23a6ad"), Color("e87b14"), Color("e2479a"),
 ]
 const FAKE_PLAYER_NAMES := [
-	"BlazeFox", "IronClaw", "SilverWing", "DarkRider",
-	"ProKing99", "CoolCat42", "BlueHawk7", "StormKing",
-	"NightOwl", "SpeedRun", "EagleEye", "GoldRush",
-	"PixelKnight", "ShadowFox", "RocketKid", "ThunderAce",
-	"CrazyRider", "BossMode", "EpicRider", "WildCard",
-	"NinjaPro", "TrueKing", "HyperWave", "RedPhoenix",
+	"jake_99", "emma.k", "miguel_r", "sarah_xo", "tommy_g",
+	"alex_win", "lucy_k", "kevin88", "mia_2024", "ryan_rx",
+	"zoe_kat", "noah_gx", "lily_rx", "ethan_x", "ava_win",
+	"mason_g", "olivia99", "liam_top", "sofia_xx", "james_77",
+	"aiden_k", "ella_pro", "henry_f", "grace_rx",
+]
+const FAKE_PLAYER_AVATARS := [
+	"🐱", "🦊", "🐻", "🐼", "🦁", "🐯", "🐺", "🦝",
+	"🐸", "🐧", "🦉", "🦋", "🐬", "🦄", "🐲", "🦅",
 ]
 
 func _kingdom_color(i: int, n: int) -> Color:
@@ -2235,18 +2396,22 @@ func _assign_kingdom_colors() -> void:
 	var human_col: Color = Cosmetics.king_color(SaveManager.selected_pack())
 	_kid_color[1] = human_col
 	_kid_label[1] = "You"
+	_kid_avatar[1] = "👑"
 	# Colors: sorted by distance from the human's color so rivals read as distinct.
 	var pairs: Array = []
 	for i in KINGDOM_COLORS.size():
 		pairs.append({"col": KINGDOM_COLORS[i]})
 	pairs.sort_custom(func(a, b): return _col_dist(a.col, human_col) > _col_dist(b.col, human_col))
-	# Names: shuffled independently from the pool so every match has different "players".
+	# Names + avatars: shuffled independently from their pools each match.
 	var name_pool: Array = FAKE_PLAYER_NAMES.duplicate()
+	var avatar_pool: Array = FAKE_PLAYER_AVATARS.duplicate()
 	name_pool.shuffle()
+	avatar_pool.shuffle()
 	for i in range(1, _n_kingdoms):          # rivals: i = 1.._n-1 → kid = i + 1
 		var p: Dictionary = pairs[(i - 1) % pairs.size()]
 		_kid_color[i + 1] = p.col
 		_kid_label[i + 1] = name_pool[(i - 1) % name_pool.size()]
+		_kid_avatar[i + 1] = avatar_pool[(i - 1) % avatar_pool.size()]
 
 func _col_dist(a: Color, b: Color) -> float:
 	return absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)
@@ -2599,6 +2764,21 @@ func _build_hud(ui: CanvasLayer) -> void:
 		var rr := _make_lb_row()
 		lb_v.add_child(rr["row"])
 		_lb_rows.append(rr)
+
+	# Join/leave notification strip — sits flush below the leaderboard frame.
+	var notif := VBoxContainer.new()
+	notif.set_anchor(SIDE_LEFT, 1.0)
+	notif.set_anchor(SIDE_RIGHT, 1.0)
+	notif.set_anchor(SIDE_TOP, 0.0)
+	notif.set_anchor(SIDE_BOTTOM, 0.0)
+	notif.set_offset(SIDE_LEFT, -(LB_W + 40))
+	notif.set_offset(SIDE_RIGHT, -40)
+	notif.set_offset(SIDE_TOP, 70 + lb_h + 4)
+	notif.set_offset(SIDE_BOTTOM, 70 + lb_h + 4 + 96)
+	notif.add_theme_constant_override("separation", 2)
+	notif.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(notif)
+	_lb_notif_box = notif
 
 	# First match always shows the coach banner. The action stack is deferred on first
 	# campaign match (the economy tutorial lands next); for endless the action stack still
@@ -2966,13 +3146,11 @@ func _hud_panel(pos: Vector2, min_size: Vector2, _radius: int) -> PanelContainer
 	p.add_theme_stylebox_override("panel", st)
 	return p
 
-# One leaderboard row: rank · colour chip · kingdom name · right-aligned %.
+# One leaderboard row: rank · emoji avatar · name · right-aligned %.
 # Returns the parts so _hud_tick can repaint them each refresh.
 func _make_lb_row() -> Dictionary:
-	# Panel wrapper so the human's row (and the leader) can carry a tinted
-	# highlight behind the rank · chip · name · % layout.
 	var wrap := PanelContainer.new()
-	wrap.custom_minimum_size = Vector2(150, 26)
+	wrap.custom_minimum_size = Vector2(164, 28)
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var bg := StyleBoxFlat.new()
 	bg.bg_color = Color(0, 0, 0, 0)
@@ -2984,31 +3162,41 @@ func _make_lb_row() -> Dictionary:
 	wrap.add_theme_stylebox_override("panel", bg)
 
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
+	row.add_theme_constant_override("separation", 5)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(row)
-	var rank := _hud_text("", 15, Color(1, 1, 1, 0.55))
-	rank.custom_minimum_size = Vector2(15, 0)
-	var dot := Panel.new()
-	dot.custom_minimum_size = Vector2(12, 12)
-	dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var dst := StyleBoxFlat.new()
-	dst.bg_color = Color.GRAY
-	dst.set_corner_radius_all(7)
-	dst.border_color = Color(0, 0, 0, 0.45)
-	dst.set_border_width_all(1)
-	dot.add_theme_stylebox_override("panel", dst)
-	var nm := _hud_text("", 15, Color.WHITE)
+	var rank := _hud_text("", 14, Color(1, 1, 1, 0.55))
+	rank.custom_minimum_size = Vector2(14, 0)
+
+	# Avatar: small rounded square in the kingdom's color, emoji inside.
+	var av_panel := Panel.new()
+	av_panel.custom_minimum_size = Vector2(22, 22)
+	av_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	av_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var av_style := StyleBoxFlat.new()
+	av_style.bg_color = Color.GRAY
+	av_style.set_corner_radius_all(5)
+	av_style.border_color = Color(0, 0, 0, 0.4)
+	av_style.set_border_width_all(1)
+	av_panel.add_theme_stylebox_override("panel", av_style)
+	var av_emoji := Label.new()
+	av_emoji.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	av_emoji.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	av_emoji.add_theme_font_size_override("font_size", 13)
+	av_emoji.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	av_emoji.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	av_panel.add_child(av_emoji)
+
+	var nm := _hud_text("", 14, Color.WHITE)
 	nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	nm.clip_text = true   # fixed-width frame: clip long names instead of overflowing the border
-	var pct := _hud_text("", 15, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT)
-	pct.custom_minimum_size = Vector2(38, 0)
+	nm.clip_text = true
+	var pct := _hud_text("", 14, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT)
+	pct.custom_minimum_size = Vector2(36, 0)
 	row.add_child(rank)
-	row.add_child(dot)
+	row.add_child(av_panel)
 	row.add_child(nm)
 	row.add_child(pct)
-	return {"row": wrap, "bg": bg, "rank": rank, "chip": dst, "name": nm, "pct": pct}
+	return {"row": wrap, "bg": bg, "rank": rank, "chip": av_style, "avatar": av_emoji, "name": nm, "pct": pct}
 
 func _hud_text(text: String, size: int, color: Color,
 		align = HORIZONTAL_ALIGNMENT_LEFT, heavy := false) -> Label:
@@ -3269,17 +3457,28 @@ func _hud_tick(delta: float) -> void:
 		var kc: Color = _kid_color[e["kid"]]
 		var lead := r == 0
 		var mine: bool = e["kid"] == human_kid
-		rr["rank"].text = "%d" % (r + 1)
-		rr["chip"].bg_color = kc
+		var agent = _kid_to_agent.get(e["kid"])
+		var is_elim: bool = agent != null and agent.eliminated
+		var dim: float = 0.38 if is_elim else 1.0
+		rr["rank"].text = "" if is_elim else "%d" % (r + 1)
+		rr["chip"].bg_color = Color(kc, dim)
+		rr["avatar"].text = _kid_avatar.get(e["kid"], "🐱")
+		rr["avatar"].modulate = Color(1, 1, 1, dim)
 		rr["name"].text = _display_kingdom_name(e["kid"])
-		rr["name"].add_theme_color_override("font_color",
-			Color.WHITE if (lead or mine) else Color(0.84, 0.87, 0.91))
+		var name_col: Color
+		if is_elim:
+			name_col = Color(0.55, 0.58, 0.62)
+		elif lead or mine:
+			name_col = Color.WHITE
+		else:
+			name_col = Color(0.84, 0.87, 0.91)
+		rr["name"].add_theme_color_override("font_color", name_col)
 		rr["name"].add_theme_font_override("font",
-			ArcadeTheme.font_heavy if (lead or mine) else ArcadeTheme.font)
-		# tint your own row so you can find yourself at a glance; leader gets a faint gold wash.
-		rr["bg"].bg_color = (Color(kc, 0.22) if mine else (Color(HUD_GOLD, 0.08) if lead else Color(0, 0, 0, 0)))
-		rr["pct"].text = "%.1f%%" % (100.0 * e["n"] / total)
-		rr["pct"].add_theme_color_override("font_color", kc.lightened(0.3) if (lead or mine) else Color(0.84, 0.87, 0.91))
+			ArcadeTheme.font_heavy if (lead or mine) and not is_elim else ArcadeTheme.font)
+		rr["bg"].bg_color = (Color(kc, 0.22) if mine and not is_elim else (Color(HUD_GOLD, 0.08) if lead and not is_elim else Color(0, 0, 0, 0)))
+		rr["pct"].text = "left" if is_elim else "%.1f%%" % (100.0 * e["n"] / total)
+		var pct_col: Color = Color(0.5, 0.52, 0.55) if is_elim else (kc.lightened(0.3) if (lead or mine) else Color(0.84, 0.87, 0.91))
+		rr["pct"].add_theme_color_override("font_color", pct_col)
 
 	# minimap ruler dots
 	var marks: Array = []
@@ -3334,6 +3533,185 @@ func _update_fps() -> void:
 	elif fps < 55:
 		col = Color(1.0, 0.92, 0.5)          # yellow: marginal
 	_fps_label.add_theme_color_override("font_color", col)
+
+# ── power-up system ───────────────────────────────────────────────────────────
+
+func _pu_is_land(cx: int, cy: int) -> bool:
+	if WORLD_CONQUEST and _land_mask.size() > 0:
+		return _land_mask[cy * GW + cx] == 1
+	return cx >= 0 and cx < GW and cy >= 0 and cy < GH
+
+func _spawn_powerup_wave() -> void:
+	var types := [PU_SPEED, PU_GHOST, PU_BOMB, PU_CLEAR, PU_FREEZE, PU_MAGNET]
+	var placed := 0
+	var attempts := 0
+	while placed < PU_PER_WAVE and attempts < 400:
+		attempts += 1
+		var cx := randi_range(4, GW - 5)
+		var cy := randi_range(4, GH - 5)
+		var cell := Vector2i(cx, cy)
+		if _powerup_cells.has(cell):
+			continue
+		if not _pu_is_land(cx, cy):
+			continue
+		var t: String = types[placed % types.size()]
+		_powerup_cells[cell] = t
+		var node := _make_pu_node(t, cx, cy)
+		add_child(node)
+		_powerup_nodes[cell] = node
+		placed += 1
+
+func _make_pu_node(type: String, cx: int, cy: int) -> Node3D:
+	var root := Node3D.new()
+	root.position = _c2w(cx, cy, CLAIMED_LIFT + 0.45)
+
+	# Load the Blender-generated GLB model for this power-up type.
+	var glb_path := "res://assets/powerups/pu_%s.glb" % type
+	var scene = load(glb_path) if ResourceLoader.exists(glb_path) else null
+	var model: Node3D
+	if scene:
+		model = scene.instantiate()
+	else:
+		var fallback := MeshInstance3D.new()
+		var sph := SphereMesh.new()
+		sph.radius = 0.36; sph.height = 0.72
+		fallback.mesh = sph
+		model = fallback
+	model.scale = Vector3.ONE * 2.5   # make models clearly visible from across the board
+	root.add_child(model)
+
+	# Colour-matched point light gives each pickup a glow halo in the scene.
+	var light := OmniLight3D.new()
+	light.omni_range   = 5.5
+	light.light_energy = 3.8
+	match type:
+		PU_SPEED:  light.light_color = Color(0.05, 0.55, 0.1)
+		PU_GHOST:  light.light_color = Color(1.0,  0.80, 0.05)
+		PU_BOMB:   light.light_color = Color(1.0,  0.08, 0.05)
+		PU_CLEAR:  light.light_color = Color(0.9, 0.95, 1.0)
+		PU_FREEZE: light.light_color = Color(0.0, 0.8,  1.0)
+		PU_MAGNET: light.light_color = Color(0.8, 0.2,  1.0)
+	root.add_child(light)
+
+	# Bob up and down continuously.
+	var bob := root.create_tween()
+	bob.set_loops()
+	bob.tween_property(root, "position:y", root.position.y + 0.14, 0.6).set_trans(Tween.TRANS_SINE)
+	bob.tween_property(root, "position:y", root.position.y,        0.6).set_trans(Tween.TRANS_SINE)
+
+	# Slow Y-spin so the shape reads from all angles.
+	var spin := model.create_tween()
+	spin.set_loops()
+	spin.tween_property(model, "rotation:y", TAU, 3.2).set_trans(Tween.TRANS_LINEAR)
+
+	return root
+
+const PU_PICKUP_RADIUS := 2   # cells — grab a powerup within this Chebyshev distance
+
+func _check_powerup_pickup(a, cell: Vector2i) -> void:
+	for pc in _powerup_cells.keys():
+		if absi(cell.x - pc.x) <= PU_PICKUP_RADIUS and absi(cell.y - pc.y) <= PU_PICKUP_RADIUS:
+			var type: String = _powerup_cells[pc]
+			_powerup_cells.erase(pc)
+			var node: Node3D = _powerup_nodes.get(pc)
+			_powerup_nodes.erase(pc)
+			if node and is_instance_valid(node):
+				node.queue_free()
+			_apply_powerup(a, type)
+			return   # one pickup per step
+
+func _apply_powerup(a, type: String) -> void:
+	match type:
+		PU_SPEED:
+			if a.base_speed == 0.0:
+				a.base_speed = a.avatar.speed
+			a.avatar.speed = a.base_speed + PU_SPEED_BOOST
+			a.powerup_type = PU_SPEED
+			a.powerup_t    = PU_SPEED_DUR
+		PU_GHOST:
+			a.powerup_type = PU_GHOST
+			a.powerup_t    = PU_GHOST_DUR
+			grid.ghost_kids[a.kid] = true
+		PU_BOMB:
+			_apply_bomb(a)
+			return
+		PU_CLEAR:
+			_apply_clear(a)
+			return
+		PU_FREEZE:
+			_freeze_t  = PU_FREEZE_DUR
+			_freeze_by = a.kid
+			a.powerup_type = PU_FREEZE
+			a.powerup_t    = PU_FREEZE_DUR
+		PU_MAGNET:
+			_apply_magnet(a)
+			return
+	if not a.is_ai:
+		var label := ""
+		match type:
+			PU_SPEED:  label = "Speed Burst!  +%.0fs" % PU_SPEED_DUR
+			PU_GHOST:  label = "Ghost Trail!  +%.0fs" % PU_GHOST_DUR
+			PU_FREEZE: label = "Enemies Frozen!  +%.0fs" % PU_FREEZE_DUR
+		_toast(label, Color(1.0, 0.95, 0.3))
+
+func _apply_bomb(a) -> void:
+	var cx: int = a.last_cell.x
+	var cy: int = a.last_cell.y
+	var cap: int = grid.bomb_capture(a.kid, cx, cy, PU_BOMB_RADIUS)
+	if cap > 0:
+		var r := PU_BOMB_RADIUS
+		renderer.flash_cells(
+			Vector2i(cx - r, cy - r),
+			Vector2i(cx + r, cy + r),
+			_kid_color[a.kid])
+		if not a.is_ai:
+			_toast("Land Bomb!  +%d cells" % cap, Color(1.0, 0.5, 0.1))
+			camera.shake(0.18)
+		if _fx and _fx_cooldown <= 0.0:
+			_fx_cooldown = 0.18
+			_fx.burst(_c2w(cx, cy, 0.0), _kid_color[a.kid])
+
+func _apply_clear(a) -> void:
+	grid.clear_trail(a.kid)
+	if not a.is_ai:
+		_toast("Trail Erased!", Color(0.9, 0.95, 1.0))
+
+func _apply_magnet(a) -> void:
+	var cx: int = a.last_cell.x
+	var cy: int = a.last_cell.y
+	var cap: int = grid.magnet_capture(a.kid, cx, cy, PU_MAGNET_RADIUS)
+	if cap > 0:
+		var r := PU_MAGNET_RADIUS
+		renderer.flash_cells(
+			Vector2i(cx - r, cy - r),
+			Vector2i(cx + r, cy + r),
+			_kid_color[a.kid])
+		if not a.is_ai:
+			_toast("Magnet!  +%d cells" % cap, Color(0.8, 0.3, 1.0))
+		if _fx and _fx_cooldown <= 0.0:
+			_fx_cooldown = 0.18
+			_fx.burst(_c2w(cx, cy, 0.0), _kid_color[a.kid])
+
+func _tick_powerups(delta: float) -> void:
+	for a in _rulers:
+		if a.powerup_t <= 0.0:
+			continue
+		a.powerup_t -= delta
+		if a.powerup_t <= 0.0:
+			a.powerup_t = 0.0
+			_expire_powerup(a)
+
+func _expire_powerup(a) -> void:
+	match a.powerup_type:
+		PU_SPEED:
+			a.avatar.speed = a.base_speed if a.base_speed > 0.0 else (HUMAN_SPEED if not a.is_ai else AI_SPEED)
+			a.base_speed = 0.0
+		PU_GHOST:
+			grid.ghost_kids.erase(a.kid)
+		PU_FREEZE:
+			_freeze_t  = 0.0
+			_freeze_by = 0
+	a.powerup_type = ""
 
 func _dbg_tick(delta: float) -> void:
 	_dbg_t -= delta

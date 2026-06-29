@@ -47,7 +47,7 @@ const W_PRIMARY   := 0.22
 const W_SECONDARY := 0.14
 
 # A* hard iteration cap per path (prevents stalls on fragmented territory)
-const ASTAR_CAP   := 700
+const ASTAR_CAP   := 250
 
 # ── External refs (assigned by kingdom_match._ready) ─────────────────────
 var grid                  # TerritoryGrid  (has .owner: PackedByteArray)
@@ -112,26 +112,26 @@ func rebuild(kid: int, tier: int, territory_count: int) -> void:
 
 	var home: Vector2i = _homes.get(kid, Vector2i(GW / 2, GH / 2))
 
-	# Collect all road cells from A* paths (deduplicated by cell key)
 	var road_cells: Dictionary = {}   # Vector2i → int (1=path, 2=plaza)
 	for c: Conn in conns:
-		var raw := _astar(kid, c.from_cell, c.to_cell)
-		for v: Vector2 in raw:
+		for v: Vector2 in _bresenham(c.from_cell, c.to_cell):
 			var cell := Vector2i(int(v.x), int(v.y))
 			if not road_cells.has(cell):
 				road_cells[cell] = 1
 
-	if road_cells.is_empty():
-		return
-
-	# Castle plaza: square of cells around home (overrides path type → larger tile)
 	for dx in range(-PLAZA_R, PLAZA_R + 1):
 		for dz in range(-PLAZA_R, PLAZA_R + 1):
 			var pc := home + Vector2i(dx, dz)
 			if _inb(pc):
 				road_cells[pc] = 2
 
-	var mesh := _build_tile_mesh(road_cells)
+	var owned_cells: Dictionary = {}
+	for cell: Vector2i in road_cells:
+		var ct: int = road_cells[cell]
+		if ct == 2 or (int(grid.owner[cell.y * GW + cell.x]) == kid):
+			owned_cells[cell] = ct
+
+	var mesh := _build_tile_mesh(owned_cells)
 	if mesh == null:
 		return
 
@@ -190,14 +190,20 @@ func _plan(nodes: Array, pct: float, tier: int) -> Array:
 	if pct >= 0.05 and houses.size() > 0:
 		out.append(_mk(castle.cell, _nearest(castle.cell, houses).cell, W_PRIMARY))
 
-	# 10%+: Castle → each windmill
+	# 10%+: Castle → nearest windmills (capped — each gets a primary A* path)
 	if pct >= 0.10:
-		for wm: RoadNode in mills:
+		var sorted_mills := mills.duplicate()
+		sorted_mills.sort_custom(func(a: RoadNode, b: RoadNode) -> bool:
+			return _mdist(castle.cell, a.cell) < _mdist(castle.cell, b.cell))
+		for wm: RoadNode in sorted_mills.slice(0, 3):
 			out.append(_mk(castle.cell, wm.cell, W_PRIMARY))
 
-	# 20%+: Castle → towers; begin house web (up to 4 edges)
+	# 20%+: Castle → nearest towers (capped); begin house web (up to 4 edges)
 	if pct >= 0.20:
-		for t: RoadNode in towers:
+		var sorted_towers := towers.duplicate()
+		sorted_towers.sort_custom(func(a: RoadNode, b: RoadNode) -> bool:
+			return _mdist(castle.cell, a.cell) < _mdist(castle.cell, b.cell))
+		for t: RoadNode in sorted_towers.slice(0, 2):
 			out.append(_mk(castle.cell, t.cell, W_PRIMARY))
 		out.append_array(_mst(houses, W_SECONDARY, 4))
 

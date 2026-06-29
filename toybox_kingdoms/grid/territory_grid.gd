@@ -28,6 +28,7 @@ var trail_owner: PackedByteArray = PackedByteArray()  # w*h, pending-trail overl
 
 # Per-kingdom bookkeeping (kept incrementally so the HUD never scans the grid).
 var _count := {}     # id -> int   territory cell count
+var ghost_kids := {} # id -> true  — trail of this ruler cannot be cut while listed
 var _trail := {}     # id -> Array[int]   ordered trail cell indices
 
 # Dirty rectangle so a future renderer only re-uploads what changed this frame.
@@ -56,11 +57,34 @@ var _last_cap_max := Vector2i(-1, -1)
 var owned_min := Vector2i(0, 0)
 var owned_max := Vector2i(-1, -1)
 
+# Per-kingdom tight bounding boxes: each kingdom grows its own box as it claims cells.
+# Never shrunk (loose is correct); individual boxes stay far tighter than the global union
+# once multiple kingdoms spread across the board. Used by slabs/decor to avoid scanning
+# irrelevant regions for each kingdom's border cells.
+# Storage: oid -> PackedInt32Array([min_x, min_y, max_x, max_y]). Empty = no cells yet.
+var _kid_bbox := {}
+
+func kid_bbox(id: int) -> PackedInt32Array:
+	return _kid_bbox.get(id, PackedInt32Array())
+
+func _grow_kid_bbox(x: int, y: int, id: int) -> void:
+	var bb: PackedInt32Array = _kid_bbox.get(id, PackedInt32Array())
+	if bb.is_empty():
+		var nb := PackedInt32Array([x, y, x, y])
+		_kid_bbox[id] = nb
+		return
+	if x < bb[0]: bb[0] = x
+	if y < bb[1]: bb[1] = y
+	if x > bb[2]: bb[2] = x
+	if y > bb[3]: bb[3] = y
+	_kid_bbox[id] = bb  # PackedInt32Array is a value type — must write back.
+
 # Reusable scratch buffers for _capture()'s flood — sized once in setup() so a capture
 # (every few seconds in play) does a cheap memset instead of allocating two w*h byte
 # arrays + churning the GC each time.
 var _blocked := PackedByteArray()
 var _visited := PackedByteArray()
+var _stack   := PackedInt32Array()   # DFS stack for _capture flood (pre-sized, no alloc per push)
 
 func setup(width: int, height: int) -> void:
 	w = width
@@ -73,8 +97,11 @@ func setup(width: int, height: int) -> void:
 	_blocked.resize(w * h)
 	_visited = PackedByteArray()
 	_visited.resize(w * h)
+	_stack = PackedInt32Array()
+	_stack.resize(w * h)
 	_count.clear()
 	_trail.clear()
+	_kid_bbox.clear()
 	reset_dirty()
 	owned_min = Vector2i(0, 0)
 	owned_max = Vector2i(-1, -1)
@@ -184,6 +211,35 @@ func seed_kingdom(id: int, cx: int, cy: int, radius: int) -> void:
 				if in_bounds(x, y):
 					_set_owner(x, y, id)
 
+# Instantly claim all cells within `radius` of (cx,cy) for `id`. Used by the
+# bomb power-up. Returns the number of cells newly captured.
+func bomb_capture(id: int, cx: int, cy: int, radius: int) -> int:
+	var r2 := radius * radius
+	var captured := 0
+	for dy in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			if dx * dx + dy * dy <= r2:
+				var x := cx + dx
+				var y := cy + dy
+				if in_bounds(x, y) and int(owner[y * w + x]) != id:
+					_set_owner(x, y, id)
+					captured += 1
+	return captured
+
+# Like bomb_capture but only pulls NEUTRAL cells — does not steal enemy land.
+func magnet_capture(id: int, cx: int, cy: int, radius: int) -> int:
+	var r2 := radius * radius
+	var captured := 0
+	for dy in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			if dx * dx + dy * dy <= r2:
+				var x := cx + dx
+				var y := cy + dy
+				if in_bounds(x, y) and int(owner[y * w + x]) == NEUTRAL:
+					_set_owner(x, y, id)
+					captured += 1
+	return captured
+
 # ── the movement seam ────────────────────────────────────────────────────────
 # Call once whenever a ruler's avatar crosses into a NEW cell. Returns what
 # happened so the match controller can fire VFX / deaths / score.
@@ -199,9 +255,10 @@ func enter_cell(id: int, x: int, y: int) -> Dictionary:
 	if t == id:
 		pass  # Self-crossing is harmless; just continue normally.
 	elif t != NEUTRAL:
-		# Cut a rival's trail before they could close it -> they die, we live.
-		_kill_trail(t)
-		res["killed"] = t
+		# Ghost shield: if the trail's owner is shielded, the step passes harmlessly.
+		if not ghost_kids.has(t):
+			_kill_trail(t)
+			res["killed"] = t
 
 	# 2. Territory logic.
 	var o := int(owner[idx])
@@ -227,7 +284,7 @@ func _capture(id: int) -> int:
 	if trail.is_empty():
 		return 0
 
-	# Record bbox of the trail for the capture-flash VFX (renderer uses this).
+	# VFX bbox from trail cells.
 	var fx0 := w; var fy0 := h; var fx1 := -1; var fy1 := -1
 	for cell in trail:
 		var cx: int = cell % w; var cy: int = cell / w
@@ -236,22 +293,28 @@ func _capture(id: int) -> int:
 	_last_cap_min = Vector2i(fx0, fy0)
 	_last_cap_max = Vector2i(fx1, fy1)
 
-	# Work box = bbox of (this kingdom's territory ∪ its trail). The enclosure can only
-	# touch cells inside this box, so the per-capture build + finalize loops scan it
-	# instead of the whole 110k-cell board. (The owned box is the global owned extent —
-	# a safe superset of this kingdom's territory.) The flood itself still runs over the
-	# whole board so concave notches can't leak; only the O(n) scans are bounded.
+	# Work box: bbox of (trail ∪ THIS kingdom's territory). Per-kingdom bbox keeps this
+	# tight even when other kingdoms are far away. The enclosure is always contained here,
+	# so the flood never needs to leave this box.
 	var bx0 := fx0; var by0 := fy0; var bx1 := fx1; var by1 := fy1
-	if owned_max.x >= owned_min.x:
-		bx0 = mini(bx0, owned_min.x); by0 = mini(by0, owned_min.y)
-		bx1 = maxi(bx1, owned_max.x); by1 = maxi(by1, owned_max.y)
+	var kb: PackedInt32Array = _kid_bbox.get(id, PackedInt32Array())
+	if not kb.is_empty():
+		bx0 = mini(bx0, kb[0]); by0 = mini(by0, kb[1])
+		bx1 = maxi(bx1, kb[2]); by1 = maxi(by1, kb[3])
 
-	# blocked = our own soil OR our trail (the flood may not pass through either).
-	# Reused scratch buffers: memset to 0, then stamp only the work box.
-	var blocked := _blocked
-	var visited := _visited
-	blocked.fill(0)
-	visited.fill(0)
+	# Expand by 1 for border seeding (clamped to board).
+	var bx0e := maxi(0, bx0 - 1); var by0e := maxi(0, by0 - 1)
+	var bx1e := mini(w - 1, bx1 + 1); var by1e := mini(h - 1, by1 + 1)
+
+	# Zero only the expanded-bbox strip of the scratch buffers — not the full 110k board.
+	var blocked := _blocked; var visited := _visited
+	for by in range(by0e, by1e + 1):
+		var brow := by * w
+		for bx in range(bx0e, bx1e + 1):
+			blocked[brow + bx] = 0
+			visited[brow + bx] = 0
+
+	# Stamp blocked = our own soil + our trail within the work bbox.
 	for by in range(by0, by1 + 1):
 		var brow := by * w
 		for bx in range(bx0, bx1 + 1):
@@ -259,64 +322,67 @@ func _capture(id: int) -> int:
 			if int(owner[bi]) == id or int(trail_owner[bi]) == id:
 				blocked[bi] = 1
 
-	# Flood the OUTSIDE from the world perimeter. Using the world boundary instead
-	# of just the trail bbox prevents the flood from leaking through concave gaps in
-	# the territory wall — a neutral notch inside the bbox edge would seed the flood
-	# inside the enclosure with the old bbox approach.
-	var stack: Array[int] = []
-	for x in w:
-		_try_seed(stack, visited, blocked, x)             # top row
-		_try_seed(stack, visited, blocked, (h - 1) * w + x) # bottom row
-	for y in h:
-		_try_seed(stack, visited, blocked, y * w)         # left col
-		_try_seed(stack, visited, blocked, y * w + w - 1) # right col
+	# Seed the expanded-bbox BORDER as "outside". Every cell outside the work bbox is
+	# neutral (not this kingdom's territory or trail by definition), so it's trivially
+	# reachable from the world perimeter — the border ring is an equivalent seed set.
+	# Uses the pre-allocated _stack (PackedInt32Array) with a stack pointer to avoid
+	# per-push GDScript Array overhead.
+	var sp := 0
+	for x in range(bx0e, bx1e + 1):
+		var ti := by0e * w + x
+		if blocked[ti] == 0 and visited[ti] == 0:
+			visited[ti] = 1; _stack[sp] = ti; sp += 1
+		var bi2 := by1e * w + x
+		if blocked[bi2] == 0 and visited[bi2] == 0:
+			visited[bi2] = 1; _stack[sp] = bi2; sp += 1
+	for y in range(by0e + 1, by1e):
+		var li := y * w + bx0e
+		if blocked[li] == 0 and visited[li] == 0:
+			visited[li] = 1; _stack[sp] = li; sp += 1
+		var ri := y * w + bx1e
+		if blocked[ri] == 0 and visited[ri] == 0:
+			visited[ri] = 1; _stack[sp] = ri; sp += 1
 
-	while not stack.is_empty():
-		var gi: int = stack.pop_back()
+	# Flood within the expanded bbox only — cells outside are all trivially "outside".
+	while sp > 0:
+		sp -= 1
+		var gi: int = _stack[sp]
 		var gx: int = gi % w
 		var gy: int = gi / w
-		if gx > 0:
+		if gx > bx0e:
 			var a := gi - 1
 			if blocked[a] == 0 and visited[a] == 0:
-				visited[a] = 1; stack.append(a)
-		if gx < w - 1:
+				visited[a] = 1; _stack[sp] = a; sp += 1
+		if gx < bx1e:
 			var b := gi + 1
 			if blocked[b] == 0 and visited[b] == 0:
-				visited[b] = 1; stack.append(b)
-		if gy > 0:
+				visited[b] = 1; _stack[sp] = b; sp += 1
+		if gy > by0e:
 			var c := gi - w
 			if blocked[c] == 0 and visited[c] == 0:
-				visited[c] = 1; stack.append(c)
-		if gy < h - 1:
+				visited[c] = 1; _stack[sp] = c; sp += 1
+		if gy < by1e:
 			var d := gi + w
 			if blocked[d] == 0 and visited[d] == 0:
-				visited[d] = 1; stack.append(d)
+				visited[d] = 1; _stack[sp] = d; sp += 1
 
-	# Capture: any cell INSIDE the work box the outside flood never reached that we
-	# don't already own. Cells outside the box are all flood-reachable neutral, so they
-	# can never be enclosed — no need to scan them.
+	# Capture: cells inside work bbox not reached by the flood that we don't already own.
 	var captured := 0
 	for cy in range(by0, by1 + 1):
 		var crow := cy * w
 		for cx in range(bx0, bx1 + 1):
 			var i := crow + cx
-			if int(owner[i]) == id:
-				continue
+			if int(owner[i]) == id: continue
 			if visited[i] == 0:
 				_set_owner(cx, cy, id)
 				captured += 1
 
-	# Trail is now baked into territory.
+	# Bake trail into territory.
 	for cell in trail:
 		trail_owner[cell] = 0
 	_trail[id] = []
 	trail_version += 1
 	return captured
-
-func _try_seed(stack: Array, visited: PackedByteArray, blocked: PackedByteArray, idx: int) -> void:
-	if blocked[idx] == 0 and visited[idx] == 0:
-		visited[idx] = 1
-		stack.append(idx)
 
 # ── trail revert (death) ─────────────────────────────────────────────────────
 func _kill_trail(id: int) -> void:
@@ -337,6 +403,7 @@ func _set_owner(x: int, y: int, new_id: int) -> void:
 	if new_id != NEUTRAL:
 		_count[new_id] = int(_count.get(new_id, 0)) + 1
 		_grow_owned(x, y)
+		_grow_kid_bbox(x, y, new_id)
 	version += 1
 	_mark_dirty(x, y)
 

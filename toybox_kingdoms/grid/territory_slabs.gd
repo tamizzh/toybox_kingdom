@@ -118,67 +118,93 @@ func _is_border(i: int, cx: int, cy: int, w: int, h: int, kid: int) -> bool:
 	return int(grid.owner[i - 1]) != kid or int(grid.owner[i + 1]) != kid \
 		or int(grid.owner[i - w]) != kid or int(grid.owner[i + w]) != kid
 
-# Full rebuild from the grid. Cheap loops + two uploads; called on the throttled
-# territory tick (≤10/s) when land changed, mirroring territory_ground.update().
+# Full rebuild from the grid. Called on the throttled territory tick (≤10/s).
+# Uses a raw PackedFloat32Array buffer write instead of per-instance set_instance_*
+# calls — one engine crossing for N bricks instead of 2×N.
+#
+# Buffer layout per instance (TRANSFORM_3D + use_colors, no custom_data): 16 floats.
+# Rotation-about-Y by `a`, scaled to height `bh` on the Y axis:
+#   row0: [cos(a),  0,   sin(a),  px]
+#   row1: [0,       bh,  0,       py]
+#   row2: [-sin(a), 0,   cos(a),  pz]
+#   cols 12-15: colour as 4 float32 RGBA (Godot 4.6 stores colour as full floats)
+const _BUF_STRIDE := 16
+
 func rebuild() -> void:
 	var w: int = grid.w
 	var h: int = grid.h
 	var hw: float = grid.w * 0.5
 	var hh: float = grid.h * 0.5
-	var wall_pos := PackedVector3Array()
-	var wall_col := PackedColorArray()
-	var wall_h := PackedFloat32Array()
+
+	# Per-kingdom colour precomputed as float32 RGBA components (avoid Color alloc per brick).
+	var col_r := PackedFloat32Array(); col_r.resize(256)
+	var col_g := PackedFloat32Array(); col_g.resize(256)
+	var col_b := PackedFloat32Array(); col_b.resize(256)
+	for oid_key in colors:
+		var oi: int = oid_key
+		var c: Color = colors[oi]
+		col_r[oi] = c.r; col_g[oi] = c.g; col_b[oi] = c.b
+
+	# Collect brick data per kingdom using each kingdom's own tight bbox (grid.kid_bbox).
+	# This keeps the scan proportional to owned area per kingdom rather than the global
+	# union — 4 kingdoms at ~3k cells each vs one ~87k-cell union box.
+	var wall_px  := PackedFloat32Array()
+	var wall_pz  := PackedFloat32Array()
+	var wall_bh  := PackedFloat32Array()
 	var wall_rot := PackedFloat32Array()
-	# Walk only the owned-land box (see TerritoryGrid.owned_min/max). `i` stays the flat
-	# index so the per-edge hash (and thus the wall jitter) is identical to a full scan.
-	var x0 := 0; var y0 := 0; var x1 := -1; var y1 := -1
-	if grid.has_owned():
-		x0 = grid.owned_min.x; y0 = grid.owned_min.y
-		x1 = grid.owned_max.x; y1 = grid.owned_max.y
-	for cy in range(y0, y1 + 1):
-		var _row := cy * w
-		for cx in range(x0, x1 + 1):
-			var i := _row + cx
-			var oid: int = grid.owner[i]
-			if oid == 0:
-				continue
-			var wx: float = (cx + 0.5 - hw) * cell
-			var wz: float = (cy + 0.5 - hh) * cell
-			var base: Color = colors.get(oid, Color.WHITE)
-			var wc: Color = base                                # walls: exact kingdom colour, like the roofs
-			# Raised slab plates are disabled (walls-only look): claimed land stays flat and
-			# its colour comes from the ground plane (territory_ground). Only the perimeter
-			# wall blocks are emitted below.
-			# Border wall: along EVERY exposed cell edge (a side facing a cell this kingdom
-			# doesn't own, or the world edge) lay a tight row of WALL_SEG small bricks hugging
-			# the cell rim — a continuous ring of little roof-coloured cubes, like the target.
-			for di in 4:
-				var dx: int = [1, -1, 0, 0][di]
-				var dy: int = [0, 0, 1, -1][di]
-				var nx: int = cx + dx
-				var ny: int = cy + dy
-				var exposed: bool = (nx < 0 or ny < 0 or nx >= w or ny >= h) \
-					or int(grid.owner[ny * w + nx]) != oid
-				if not exposed:
+	var wall_oid := PackedByteArray()
+
+	for oid_key in colors:
+		var oid: int = oid_key
+		var bb: PackedInt32Array = grid.kid_bbox(oid)
+		if bb.is_empty():
+			continue
+		var x0: int = bb[0]; var y0: int = bb[1]; var x1: int = bb[2]; var y1: int = bb[3]
+		for cy in range(y0, y1 + 1):
+			var _row := cy * w
+			for cx in range(x0, x1 + 1):
+				var i := _row + cx
+				if int(grid.owner[i]) != oid:
 					continue
-				# edge centre (out toward the rim) + the axis running ALONG the edge
-				var ex: float = wx + WALL_INSET * cell * float(dx)
-				var ez: float = wz + WALL_INSET * cell * float(dy)
-				var ax: float = float(dy)   # perpendicular to (dx,dy) → along the edge
-				var az: float = float(dx)
-				for s in WALL_SEG:
-					var t := (float(s) - (WALL_SEG - 1) * 0.5) / float(WALL_SEG)   # spread along edge
-					var r := _hash(i * 4 + di + s * 131)
-					wall_pos.append(Vector3(ex + ax * t * cell, BASE_Y, ez + az * t * cell))
-					wall_col.append(wc)                              # walls darker than the tiles
-					wall_h.append(WALL_BASE_H * (0.78 + r * 0.5))    # ~0.12..0.20 → gentle crenellation
-					wall_rot.append((r - 0.5) * 0.14)                # ±0.07 rad yaw jitter
+				var wx: float = (cx + 0.5 - hw) * cell
+				var wz: float = (cy + 0.5 - hh) * cell
+				for di in 4:
+					var dx: int = [1, -1, 0, 0][di]
+					var dy: int = [0, 0, 1, -1][di]
+					var nx: int = cx + dx
+					var ny: int = cy + dy
+					if not ((nx < 0 or ny < 0 or nx >= w or ny >= h) \
+							or int(grid.owner[ny * w + nx]) != oid):
+						continue
+					var ex: float = wx + WALL_INSET * cell * float(dx)
+					var ez: float = wz + WALL_INSET * cell * float(dy)
+					var ax: float = float(dy)
+					var az: float = float(dx)
+					for s in WALL_SEG:
+						var t := (float(s) - (WALL_SEG - 1) * 0.5) / float(WALL_SEG)
+						var r := _hash(i * 4 + di + s * 131)
+						wall_px.append(ex + ax * t * cell)
+						wall_pz.append(ez + az * t * cell)
+						wall_bh.append(WALL_BASE_H * (0.78 + r * 0.5))
+						wall_rot.append((r - 0.5) * 0.14)
+						wall_oid.append(oid)
+
+	# Build the raw buffer in one indexed-write pass (stride known = _BUF_STRIDE),
+	# then hand it to the engine in a single call — no per-instance dispatch overhead.
+	var n := wall_px.size()
 	_slab_mm.instance_count = 0   # walls-only: no raised slab plates
-	_wall_mm.instance_count = wall_pos.size()
-	for k in wall_pos.size():
-		var bh: float = wall_h[k]
-		var basis := Basis(Vector3.UP, wall_rot[k]).scaled(Vector3(1.0, bh, 1.0))
-		var p: Vector3 = wall_pos[k]
-		p.y = BASE_Y + bh * 0.5   # sit on the flat ground (no slab beneath)
-		_wall_mm.set_instance_transform(k, Transform3D(basis, p))
-		_wall_mm.set_instance_color(k, wall_col[k])
+	_wall_mm.instance_count = n
+	if n > 0:
+		var buf := PackedFloat32Array(); buf.resize(n * _BUF_STRIDE)
+		for k in n:
+			var bh: float = wall_bh[k]
+			var cos_y := cos(wall_rot[k])
+			var sin_y := sin(wall_rot[k])
+			var py: float = BASE_Y + bh * 0.5
+			var o := k * _BUF_STRIDE
+			buf[o]    = cos_y;  buf[o+1]  = 0.0;  buf[o+2]  = sin_y;  buf[o+3]  = wall_px[k]
+			buf[o+4]  = 0.0;    buf[o+5]  = bh;   buf[o+6]  = 0.0;    buf[o+7]  = py
+			buf[o+8]  = -sin_y; buf[o+9]  = 0.0;  buf[o+10] = cos_y;  buf[o+11] = wall_pz[k]
+			var oi := int(wall_oid[k])
+			buf[o+12] = col_r[oi]; buf[o+13] = col_g[oi]; buf[o+14] = col_b[oi]; buf[o+15] = 1.0
+		_wall_mm.buffer = buf

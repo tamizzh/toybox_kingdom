@@ -61,6 +61,15 @@ func _ready() -> void:
 
 	# Wait one frame so the main window exists before we resize it.
 	_apply_window.call_deferred()
+	# On web the 3D scene is rendered at 50% resolution then upscaled (FSR) — cuts
+	# fill cost by ~4× with acceptable softness. UI CanvasItems stay at full resolution.
+	if is_web:
+		_apply_3d_scale.call_deferred()
+
+func _apply_3d_scale() -> void:
+	# gl_compatibility (WebGL2) only supports bilinear upscale — FSR requires Forward+.
+	get_viewport().scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+	get_viewport().scaling_3d_scale = 0.5
 
 func _apply_window() -> void:
 	# Force VSync ON at runtime. The project.godot window/vsync/vsync_mode key is

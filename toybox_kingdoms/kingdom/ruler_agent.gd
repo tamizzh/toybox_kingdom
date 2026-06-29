@@ -30,3 +30,8 @@ var castle                    # PRIMARY Castle node (castles[0].node) — spawn/
 var castles: Array = []       # all owned castles: [{cell: Vector2i, node: Castle}, ...]
                               # you only fall when ALL of these are captured.
 var name_tag                  # Label3D floating over the (primary) castle
+
+# ── power-ups (in-match, timed effects) ──────────────────────────────────────
+var powerup_type: String = ""   # "" | "speed" | "ghost" | "bomb"
+var powerup_t: float = 0.0      # remaining seconds; 0 = no active effect
+var base_speed: float = 0.0     # cached normal speed, restored when burst ends
