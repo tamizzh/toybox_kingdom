@@ -29,9 +29,13 @@ const APRON_BUSH_CAP := 1100
 
 var grid
 var cell: float = 0.6
+var _land_mask: PackedByteArray   # optional per-cell mask; empty = all cells are land
 
 var _trees: Array = []          # Array[MultiMeshInstance3D] — one per canopy shape
 var _rock: MultiMeshInstance3D
+
+func set_land_mask(mask: PackedByteArray) -> void:
+	_land_mask = mask
 
 func setup(p_grid, p_cell: float) -> void:
 	grid = p_grid
@@ -165,8 +169,11 @@ func rebuild() -> void:
 	const SHORE_DEPTH  := 12
 	const TREE_SHORE   := 8    # ~0.8% of shore cells get a tree
 	const TREE_INLAND  := 2    # ~0.2% of interior cells get a tree
+	var use_mask := _land_mask.size() == n
 	for i in n:
 		if grid.owner[i] != 0:
+			continue
+		if use_mask and _land_mask[i] == 0:
 			continue
 		var cx: int = i % w
 		var cy: int = i / w

@@ -22,7 +22,7 @@ var _overview := false
 var _overview_center := Vector3.ZERO
 # Height 57 / tilt 7 at FOV 55° shows the whole island with a modest ocean border —
 # tight enough that kingdoms aren't tiny, wide enough that none clip off-screen.
-const OVERVIEW_POS := Vector3(0.0, 57.0, 7.0)
+const OVERVIEW_POS := Vector3(0.0, 171.0, 21.0)
 
 # While an island-transition camera move is running, the match should NOT drive `zoom`
 # from territory size — let the move own it.
@@ -102,7 +102,10 @@ func _process(delta: float) -> void:
 	global_position = global_position.lerp(want, t)
 	_zoom_punch = move_toward(_zoom_punch, 0.0, delta * 0.16)
 	if _shake > 0.001:
-		global_position += Vector3(randf_range(-_shake, _shake), randf_range(-_shake, _shake),
-			randf_range(-_shake, _shake))
+		var ms := float(Time.get_ticks_msec())
+		var sx := sin(ms * 0.11 + 1.3) * _shake
+		var sy := sin(ms * 0.09 + 2.7) * _shake * 0.4
+		var sz := sin(ms * 0.13) * _shake
+		global_position += Vector3(sx, sy, sz)
 		_shake = move_toward(_shake, 0.0, delta * 1.6)
 	look_at(focus, Vector3.UP)

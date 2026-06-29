@@ -26,6 +26,7 @@ const GlyphIcon := preload("res://toybox_kingdoms/ui/glyph_icon.gd")
 const Scatter := preload("res://toybox_kingdoms/env/scatter.gd")
 const GrassTexture := preload("res://toybox_kingdoms/env/grass_texture.gd")
 const TerritoryGround := preload("res://toybox_kingdoms/grid/territory_ground.gd")
+const CountryMasks := preload("res://toybox_kingdoms/data/country_masks.gd")
 const TerritorySlabs := preload("res://toybox_kingdoms/grid/territory_slabs.gd")
 const Flags := preload("res://toybox_kingdoms/kingdom/flags.gd")
 const Windmills := preload("res://toybox_kingdoms/kingdom/windmills.gd")
@@ -48,13 +49,15 @@ const SAD_KING_RECT := Rect2(610, 365, 390, 280)
 const BTN_FRAME_GREEN := preload("res://assets/btn_green.png")
 const BTN_FRAME_BLUE  := preload("res://assets/btn_blue.png")
 
-const GW := 128
-const GH := 96
-const CELL := 0.6
-const HOME_R := 5
+const GW := 384
+const GH := 288
+const CELL := 0.6   # 384×288 grid at 0.6 wu/cell → world 230×172 wu, each island 3× bigger
+const HOME_R := 15  # cells; home blob ≈ 9 wu radius, same proportion of the 3× island
 const N_KINGDOMS := 8           # 1 human + 7 AI
 const HUMAN_INPUT_ID := 0
-const HUMAN_SPEED := 6.7          # human's base carve speed (faster than AI_SPEED 5.04) — snappier walk
+const HUMAN_SPEED := 6.7          # human's base carve speed — tuned to local feel. Cells render the
+								 # same on-screen size and the follow-cam shows the same local view, so
+								 # the speed matches the original good feel (3× was too fast locally).
 const BARRACKS_SPEED := 0.44      # each BARRACKS makes your king carve this much faster
 const SPEED_CAP := 9.8            # speed ceiling so boosts stay controllable
 const AI_SPEED := 5.04            # 20% slower
@@ -87,6 +90,17 @@ const MATCH_DURATION := 300.0   # seconds (5 min — long enough for the castle-
 const DAILY_DURATION := 150.0
 const DAILY_DIFFICULTY := 2             # fixed mid difficulty (≈ endless island 2) for a meaty single run
 
+# ── World Conquest mode ────────────────────────────────────────────────────
+# When true: endless chain is replaced by 20 countries; each island uses a
+# country-shaped land mask instead of the rectangular frozen-zone.
+# When false: original rectangular frozen-zone progression is used.
+const WORLD_CONQUEST := true
+
+var _active_w: int = GW   # playable width in cells; cells outside this = frozen zone
+var _active_h: int = GH   # playable height in cells
+var _land_mask: PackedByteArray   # WORLD_CONQUEST: 1=land 0=ocean per cell
+var _land_bbox := {"x0": 0, "y0": 0, "x1": GW - 1, "y1": GH - 1}  # bbox of land cells
+
 var grid
 var renderer
 var camera
@@ -104,6 +118,10 @@ var _minimap
 var _populace
 var _scatter
 var _ground
+var _ocean
+var _sdf_dist: PackedInt32Array    # BFS from land outward → 0=land, N=N cells from land (for ocean clamping)
+var _inland_sdf: PackedInt32Array  # BFS from coast inward through land → N=how many cells inland (for home placement)
+var _home_cells: Array = []        # pre-computed inland spawn positions (WORLD_CONQUEST)
 var _slabs
 var _flags
 var _windmills
@@ -223,7 +241,23 @@ func _ready() -> void:
 		# UNTIMED: you advance ONLY by conquering the island (last kingdom standing);
 		# only running out of LIVES ends the run. No clock, no timeout.
 		_endless_island = SaveManager.endless_island()
+		var _env_island := OS.get_environment("TBK_ISLAND")
+		if _env_island != "":
+			_endless_island = int(_env_island)
 		_rival_diffs = _endless_rivals_for(_endless_island)
+		if WORLD_CONQUEST:
+			# Load the country shape for this island (clamped to 0-19).
+			var cidx := clampi(_endless_island, 0, CountryMasks.COUNTRIES.size() - 1)
+			var entry: Dictionary = CountryMasks.COUNTRIES[cidx]
+			_land_mask = CountryMasks.decode_mask(entry["mask_hex"])
+			_land_bbox = CountryMasks.mask_bbox(_land_mask)
+			# Active clamping rect = land bbox with 2-cell outset so avatars walk to the shore.
+			_active_w = clampi(_land_bbox["x1"] - _land_bbox["x0"] + 4, 10, GW)
+			_active_h = clampi(_land_bbox["y1"] - _land_bbox["y0"] + 4, 10, GH)
+		else:
+			var _dims := _island_dims_for(_endless_island)
+			_active_w = _dims.x
+			_active_h = _dims.y
 		_n_kingdoms = 1 + _rival_diffs.size()
 		_lives = LIVES_PER_ISLAND
 	else:
@@ -275,6 +309,9 @@ func _ready() -> void:
 	_ground = TerritoryGround.new()
 	add_child(_ground)
 	_ground.setup(grid, CELL, _kid_color)
+	_ground.set_active_half(Vector2(_active_w * CELL * 0.5, _active_h * CELL * 0.5))
+	if WORLD_CONQUEST and _land_mask.size() > 0:
+		_ground.set_land_mask(_land_mask)
 	_ground.update()
 	# Walls-only: territory_slabs draws just the perimeter wall blocks (no raised slab
 	# plates), sitting on the flat ground so claimed land stays flat.
@@ -320,6 +357,8 @@ func _ready() -> void:
 	_scatter = Scatter.new()
 	add_child(_scatter)
 	_scatter.setup(grid, CELL)
+	if WORLD_CONQUEST and _land_mask.size() > 0:
+		_scatter.set_land_mask(_land_mask)
 	_scatter.rebuild()
 
 	# capture-celebration particles (confetti + coins), fired on the player's claims
@@ -362,7 +401,7 @@ func _ready() -> void:
 func _spawn_kingdom(i: int) -> void:
 	var kid: int = i + 1
 	var info: Dictionary = Roster.info(i)
-	_kid_name[kid] = info["name"]
+	_kid_name[kid] = _kid_label.get(kid, "Player")
 	var home := _home_anchor(i, _n_kingdoms)
 	# On the player's very first match, give the human a bigger starting blob: a larger
 	# home is an easier target to loop back to, so the very first claim lands fast (the
@@ -422,7 +461,7 @@ func _spawn_kingdom(i: int) -> void:
 
 	# floating name tag so you can tell who's who on the board
 	var tag := Label3D.new()
-	tag.text = info["name"]
+	tag.text = _kid_label.get(kid, "Player")
 	tag.modulate = _kid_color[kid]
 	tag.outline_modulate = Color(0, 0, 0, 0.85)
 	tag.outline_size = 10
@@ -510,7 +549,11 @@ func _physics_process(delta: float) -> void:
 			if a.respawn_t <= 0.0:
 				_respawn(a)
 			continue
-		_clamp(a.avatar)
+		if _clamp(a.avatar, a.is_ai) and a.is_ai:
+			# Avatar was pushed out of ocean — stale cached_dir keeps sending it back.
+			# Reset the AI plan so it replans inland on the next decide() tick.
+			a.cached_dir = Vector2.ZERO
+			a.ai.reset()
 		var c := _w2c(a.avatar.global_position)
 		# Ride on top of the raised plateau on claimed land (feet + ring otherwise sink in).
 		var ground_y := CLAIMED_LIFT if grid.get_owner(c.x, c.y) != 0 else 0.0
@@ -1096,6 +1139,13 @@ func _human_rank() -> int:
 
 # Rival line-up for an endless island: the fleet GROWS (3 → 7) and gets BOLDER the
 # deeper the run goes, so each island is a step harder than the last.
+func _island_dims_for(island: int) -> Vector2i:
+	match clampi(island, -1, 3):
+		0: return Vector2i(80, 60)
+		1: return Vector2i(96, 72)
+		2: return Vector2i(112, 84)
+		_: return Vector2i(128, 96)
+
 func _endless_rivals_for(island: int) -> Array:
 	var count := clampi(3 + island / 2, 3, 7)
 	var floor_diff := clampi(island / 2, 0, 2)        # difficulty floor rises every 2 islands
@@ -1692,17 +1742,95 @@ func nearest_enemy_dist(agent) -> float:
 			best = d
 	return best
 
-func _clamp(av) -> void:
-	var hx := GW * CELL * 0.5 - CELL
-	var hz := GH * CELL * 0.5 - CELL
+func _clamp(av, is_ai: bool = true) -> bool:
+	var hx := _active_w * CELL * 0.5 - CELL
+	var hz := _active_h * CELL * 0.5 - CELL
 	av.global_position.x = clampf(av.global_position.x, -hx, hx)
 	av.global_position.z = clampf(av.global_position.z, -hz, hz)
+	if WORLD_CONQUEST and _sdf_dist.size() == GW * GH:
+		var cx := clampi(int(floor(av.global_position.x / CELL + GW * 0.5)), 0, GW - 1)
+		var cy := clampi(int(floor(av.global_position.z / CELL + GH * 0.5)), 0, GH - 1)
+		if _land_mask[cy * GW + cx] == 0:
+			var d_l := _sdf_dist[cy * GW + clampi(cx - 1, 0, GW - 1)]
+			var d_r := _sdf_dist[cy * GW + clampi(cx + 1, 0, GW - 1)]
+			var d_u := _sdf_dist[clampi(cy - 1, 0, GH - 1) * GW + cx]
+			var d_d := _sdf_dist[clampi(cy + 1, 0, GH - 1) * GW + cx]
+			var gx := float(d_l - d_r)
+			var gz := float(d_u - d_d)
+			var glen := sqrt(gx * gx + gz * gz)
+			if glen > 0.001:
+				gx /= glen; gz /= glen
+			if is_ai:
+				# AI: full cell push so it reliably exits the ocean.
+				av.global_position.x += gx * CELL
+				av.global_position.z += gz * CELL
+			else:
+				# Player: snap to the exact land/ocean cell edge so they stop at the
+				# waterline without being shoved back inland.
+				# gx > 0 → land is in the +x direction → snap to right edge of ocean cell
+				# gx < 0 → land is in the -x direction → snap to left edge of ocean cell
+				if abs(gx) >= abs(gz):
+					if gx > 0.0:
+						av.global_position.x = (float(cx + 1) - GW * 0.5) * CELL + 0.02
+					else:
+						av.global_position.x = (float(cx) - GW * 0.5) * CELL - 0.02
+				else:
+					if gz > 0.0:
+						av.global_position.z = (float(cy + 1) - GH * 0.5) * CELL + 0.02
+					else:
+						av.global_position.z = (float(cy) - GH * 0.5) * CELL - 0.02
+			# Zero the velocity component pointing into ocean so it doesn't re-enter next frame.
+			if av.velocity.length_squared() > 0.001:
+				var dot: float = float(av.velocity.x) * (-gx) + float(av.velocity.z) * (-gz)
+				if dot > 0.0:
+					av.velocity.x = float(av.velocity.x) - (-gx) * dot
+					av.velocity.z = float(av.velocity.z) - (-gz) * dot
+			return true
+	return false
 
-# Clamp a world point a little inside the playable area (used by the AI planner).
+# Clamp a world point inside the playable area (used by the AI planner).
+# In WORLD_CONQUEST mode iterates the SDF gradient until the point is on a land cell,
+# so AI waypoints are never left stranded in the ocean.
+# Returns the SDF-gradient direction (in XZ Vector2) pointing TOWARD the nearest land
+# cell from world position p. Returns Vector2.ZERO when already on land or no mask active.
+# Used by the AI to bias expand headings away from the coast.
+func land_inward_dir(p: Vector3) -> Vector2:
+	if not (WORLD_CONQUEST and _sdf_dist.size() == GW * GH):
+		return Vector2.ZERO
+	var cx := clampi(int(floor(p.x / CELL + GW * 0.5)), 0, GW - 1)
+	var cy := clampi(int(floor(p.z / CELL + GH * 0.5)), 0, GH - 1)
+	if _land_mask[cy * GW + cx] == 1:
+		return Vector2.ZERO
+	var d_l := _sdf_dist[cy * GW + clampi(cx - 1, 0, GW - 1)]
+	var d_r := _sdf_dist[cy * GW + clampi(cx + 1, 0, GW - 1)]
+	var d_u := _sdf_dist[clampi(cy - 1, 0, GH - 1) * GW + cx]
+	var d_d := _sdf_dist[clampi(cy + 1, 0, GH - 1) * GW + cx]
+	return Vector2(float(d_l - d_r), float(d_u - d_d)).normalized()
+
 func world_clamp(v: Vector3) -> Vector3:
-	var hx := GW * CELL * 0.5 - CELL * 1.5
-	var hz := GH * CELL * 0.5 - CELL * 1.5
-	return Vector3(clampf(v.x, -hx, hx), v.y, clampf(v.z, -hz, hz))
+	var hx := _active_w * CELL * 0.5 - CELL * 1.5
+	var hz := _active_h * CELL * 0.5 - CELL * 1.5
+	var result := Vector3(clampf(v.x, -hx, hx), v.y, clampf(v.z, -hz, hz))
+	if WORLD_CONQUEST and _sdf_dist.size() == GW * GH:
+		for _iter in 40:
+			var cx := clampi(int(floor(result.x / CELL + GW * 0.5)), 0, GW - 1)
+			var cy := clampi(int(floor(result.z / CELL + GH * 0.5)), 0, GH - 1)
+			if _land_mask[cy * GW + cx] == 1:
+				break
+			var d_l := _sdf_dist[cy * GW + clampi(cx - 1, 0, GW - 1)]
+			var d_r := _sdf_dist[cy * GW + clampi(cx + 1, 0, GW - 1)]
+			var d_u := _sdf_dist[clampi(cy - 1, 0, GH - 1) * GW + cx]
+			var d_d := _sdf_dist[clampi(cy + 1, 0, GH - 1) * GW + cx]
+			var gx := float(d_l - d_r)
+			var gz := float(d_u - d_d)
+			var glen := sqrt(gx * gx + gz * gz)
+			if glen > 0.001:
+				gx /= glen; gz /= glen
+			else:
+				break
+			result.x += gx * CELL
+			result.z += gz * CELL
+	return result
 
 # ── coordinate mapping (must match GridRenderer._c2w) ─────────────────────────
 # Quick scale-pop on the coins chip so the HUD reacts when you earn land.
@@ -1722,13 +1850,245 @@ func _w2c(p: Vector3) -> Vector2i:
 	return Vector2i(clampi(cx, 0, GW - 1), clampi(cy, 0, GH - 1))
 
 func _home_anchor(i: int, n: int) -> Vector2i:
-	var cols := 4
+	if WORLD_CONQUEST and _sdf_dist.size() == GW * GH:
+		if _home_cells.size() != n:
+			_home_cells = _pick_home_cells(n)
+		if i < _home_cells.size():
+			return _home_cells[i]
+	# Original rectangular placement (used when WORLD_CONQUEST = false).
+	var cols := 2 if n <= 4 else 4
 	var rows := int(ceil(n / float(cols)))
 	var col := i % cols
 	var row := i / cols
-	var x := int(lerpf(16.0, GW - 16.0, col / float(maxi(cols - 1, 1))))
-	var y := int(lerpf(16.0, GH - 16.0, row / float(maxi(rows - 1, 1))))
+	var margin_x := (GW - _active_w) / 2 + 12
+	var margin_y := (GH - _active_h) / 2 + 12
+	var x := int(lerpf(float(margin_x), float(GW - margin_x), col / float(maxi(cols - 1, 1))))
+	var y := int(lerpf(float(margin_y), float(GH - margin_y), row / float(maxi(rows - 1, 1))))
 	return Vector2i(x, y)
+
+# Returns all connected land components sorted largest-first.
+# Each entry is an Array of cell indices belonging to that component.
+func _land_components() -> Array:
+	var visited := PackedByteArray(); visited.resize(GW * GH); visited.fill(0)
+	var comps: Array = []
+	for start in GW * GH:
+		if _land_mask[start] == 0 or visited[start] == 1:
+			continue
+		var queue: Array = [start]
+		var comp: Array = []
+		var head := 0
+		while head < queue.size():
+			var idx: int = queue[head]; head += 1
+			if visited[idx] == 1: continue
+			visited[idx] = 1; comp.append(idx)
+			var x: int = idx % GW; var y: int = idx / GW
+			for delta in [[-1,0],[1,0],[0,-1],[0,1]]:
+				var nx: int = x + delta[0]; var ny: int = y + delta[1]
+				if nx < 0 or nx >= GW or ny < 0 or ny >= GH: continue
+				var ni: int = ny * GW + nx
+				if _land_mask[ni] == 1 and visited[ni] == 0:
+					queue.append(ni)
+		comps.append(comp)
+	comps.sort_custom(func(a, b): return a.size() > b.size())   # largest first
+	return comps
+
+# Greedy inland placement. Always returns exactly n cells on valid land.
+# Priority: deeply-inland cells on large islands. Final fallback: any land cell,
+# so kingdoms never spawn via the rectangular fallback which ignores the land mask.
+func _pick_home_cells(n: int) -> Array:
+	var all_comps := _land_components()
+	if all_comps.is_empty():
+		return []
+
+	# Castles only ever sit on the MAINLAND — the single largest land component.
+	# Detached islands (Andaman & Nicobar, Hawaii, Alaska…) still RENDER from the
+	# land mask as neutral scenery, but never host a castle/town: homes drive
+	# town clustering + roads, and avatars can't cross ocean to reach an island,
+	# so confining homes to the mainland keeps every build off the islands.
+	var mainland: Array = all_comps[0]
+	var mainland_set := PackedByteArray(); mainland_set.resize(GW * GH); mainland_set.fill(0)
+	for idx: int in mainland:
+		mainland_set[idx] = 1
+	var comps: Array = [mainland]
+
+	# ── Build candidates from the real mask ───────────────────────────────────
+	# 7 cells at 0.6 wu/cell = 4.2 wu buffer. At 0.2 wu/cell, same 4.2 wu = 21 cells.
+	# This guarantees the castle and 6+ cells around it all sit on green land.
+	const MIN_INLAND := 21
+	var comp_candidates: Array = []
+	var total_eligible_land := 0
+	for comp in comps:
+		var cands: Array = []
+		for idx: int in comp:
+			if _inland_sdf[idx] >= MIN_INLAND:
+				cands.append([_inland_sdf[idx], idx])
+		cands.sort_custom(func(a, b): return a[0] > b[0])
+		comp_candidates.append(cands)
+		total_eligible_land += comp.size()
+
+	# min_sep: minimum Euclidean distance (cells) between any two castles.
+	# Must be > 2×HOME_R so home blobs never overlap on spawn.
+	var min_sep := maxi(int(sqrt(float(total_eligible_land) / float(n)) * 0.6), 2 * HOME_R + 4)
+	var min_sep_sq := min_sep * min_sep
+
+	# Helper: test a candidate cell against all already-chosen cells.
+	var dist_ok := func(c: Vector2i, chosen: Array) -> bool:
+		for h: Vector2i in chosen:
+			var dx := c.x - h.x; var dy := c.y - h.y
+			if dx * dx + dy * dy < min_sep_sq: return false
+		return true
+
+	# Single largest component first (mainland countries).
+	var chosen := _greedy_pick(comp_candidates[0], n, min_sep)
+	if chosen.size() >= n:
+		return chosen
+
+	# Multi-island: distribute slots proportionally across eligible components.
+	var slots: Array = []
+	var remaining := n
+	for ci in comps.size():
+		if remaining <= 0: slots.append(0); continue
+		var share := maxi(1, int(float(comps[ci].size()) / float(total_eligible_land) * n))
+		share = mini(share, remaining)
+		slots.append(share); remaining -= share
+	if remaining > 0: slots[0] += remaining
+
+	var all_chosen: Array = []
+	for ci in slots.size():
+		if slots[ci] <= 0: continue
+		var picked := _greedy_pick(comp_candidates[ci], slots[ci], min_sep, all_chosen)
+		if picked.size() < slots[ci]:
+			picked = _greedy_pick(comp_candidates[ci], slots[ci], maxi(min_sep / 2, 2 * HOME_R + 2), all_chosen)
+		if picked.size() < slots[ci]:
+			picked = _greedy_pick(comp_candidates[ci], slots[ci], 2 * HOME_R + 2, all_chosen)
+		all_chosen.append_array(picked)
+
+	if all_chosen.size() >= n:
+		return all_chosen
+
+	# ── Dilation pass: make the map "larger" ──────────────────────────────────
+	# Narrow islands (Java, Sulawesi) have inland_sdf < 7 on the real mask.
+	# Grow land by DILATE_R cells → fat islands wide enough for MIN_INLAND=7 depth.
+	# Find deep positions on the fat mask, snap each back to the nearest real land cell.
+	const DILATE_R := 4
+	var fat_mask := _dilate_land_mask(_land_mask, DILATE_R)
+	var fat_inland: PackedInt32Array = _build_inland_sdf(fat_mask, GW, GH)
+
+	# 140 at 128×96 → 1260 at 384×288 (same proportional area filter).
+	const MIN_COMP_SIZE := 1260
+	var fat_comps := _land_components_of(fat_mask)
+	var fat_cands: Array = []
+	for comp in fat_comps:
+		if comp.size() < MIN_COMP_SIZE: continue
+		for idx: int in comp:
+			if fat_inland[idx] >= MIN_INLAND:
+				fat_cands.append([fat_inland[idx], idx])
+	fat_cands.sort_custom(func(a, b): return a[0] > b[0])
+
+	for entry in fat_cands:
+		if all_chosen.size() >= n: break
+		var fat_cell := Vector2i(entry[1] % GW, entry[1] / GW)
+		var real_cell := _snap_to_real_land(fat_cell)
+		if real_cell.x < 0 or not dist_ok.call(real_cell, all_chosen): continue
+		if mainland_set[real_cell.y * GW + real_cell.x] == 0: continue   # mainland only — no island castles
+		all_chosen.append(real_cell)
+
+	# ── Safety net: any real land cell, sorted by inland depth ────────────────
+	# Progressively relax min_sep until we have n distinct cells.
+	# The relaxed sep values still respect the HOME territory radius (HOME_R ≈ 4)
+	# so starting blobs don't immediately overlap.
+	if all_chosen.size() < n:
+		var any_land: Array = []
+		for idx in GW * GH:
+			if mainland_set[idx] == 1:   # mainland only — islands render but never host a castle
+				any_land.append([_inland_sdf[idx], idx])
+		any_land.sort_custom(func(a, b): return a[0] > b[0])
+		for snet_sep in [min_sep, maxi(min_sep / 2, 2 * HOME_R + 2), 2 * HOME_R + 2, 2 * HOME_R]:
+			for entry in any_land:
+				if all_chosen.size() >= n: break
+				var cell := Vector2i(entry[1] % GW, entry[1] / GW)
+				var ok := true
+				for h: Vector2i in all_chosen:
+					var dx := cell.x - h.x; var dy := cell.y - h.y
+					if dx * dx + dy * dy < snet_sep * snet_sep: ok = false; break
+				if ok: all_chosen.append(cell)
+			if all_chosen.size() >= n: break
+
+	print("[HOME] placed %d/%d kingdoms (min_sep=%d) — cells: %s" % [all_chosen.size(), n, min_sep, str(all_chosen)])
+	return all_chosen
+
+# Grow every land cell outward by radius cells (morphological dilation).
+static func _dilate_land_mask(mask: PackedByteArray, radius: int) -> PackedByteArray:
+	var result := PackedByteArray(); result.resize(GW * GH); result.fill(0)
+	for i in GW * GH:
+		if mask[i] == 0: continue
+		var x: int = i % GW; var y: int = i / GW
+		for dy in range(-radius, radius + 1):
+			for dx in range(-radius, radius + 1):
+				if dx * dx + dy * dy > radius * radius: continue
+				var nx: int = x + dx; var ny: int = y + dy
+				if nx < 0 or nx >= GW or ny < 0 or ny >= GH: continue
+				result[ny * GW + nx] = 1
+	return result
+
+# Connected-component BFS on an arbitrary mask (reuses _land_components logic).
+func _land_components_of(mask: PackedByteArray) -> Array:
+	var visited := PackedByteArray(); visited.resize(GW * GH); visited.fill(0)
+	var comps: Array = []
+	for start in GW * GH:
+		if mask[start] == 0 or visited[start] == 1: continue
+		var queue: Array = [start]; var comp: Array = []; var head := 0
+		while head < queue.size():
+			var idx: int = queue[head]; head += 1
+			if visited[idx] == 1: continue
+			visited[idx] = 1; comp.append(idx)
+			var x: int = idx % GW; var y: int = idx / GW
+			for delta in [[-1,0],[1,0],[0,-1],[0,1]]:
+				var nx: int = x + delta[0]; var ny: int = y + delta[1]
+				if nx < 0 or nx >= GW or ny < 0 or ny >= GH: continue
+				var ni: int = ny * GW + nx
+				if mask[ni] == 1 and visited[ni] == 0: queue.append(ni)
+		comps.append(comp)
+	comps.sort_custom(func(a, b): return a.size() > b.size())
+	return comps
+
+# Walk the real SDF gradient from a fat-mask cell back onto the original land mask.
+func _snap_to_real_land(fat_cell: Vector2i) -> Vector2i:
+	var cx: int = clampi(fat_cell.x, 0, GW - 1)
+	var cy: int = clampi(fat_cell.y, 0, GH - 1)
+	for _iter in 20:
+		if _land_mask[cy * GW + cx] == 1:
+			return Vector2i(cx, cy)
+		var d_l := _sdf_dist[cy * GW + clampi(cx - 1, 0, GW - 1)]
+		var d_r := _sdf_dist[cy * GW + clampi(cx + 1, 0, GW - 1)]
+		var d_u := _sdf_dist[clampi(cy - 1, 0, GH - 1) * GW + cx]
+		var d_d := _sdf_dist[clampi(cy + 1, 0, GH - 1) * GW + cx]
+		var gx := float(d_l - d_r); var gz := float(d_u - d_d)
+		if abs(gx) >= abs(gz):
+			cx += 1 if gx > 0.0 else -1
+		else:
+			cy += 1 if gz > 0.0 else -1
+		cx = clampi(cx, 0, GW - 1); cy = clampi(cy, 0, GH - 1)
+	return Vector2i(-1, -1)   # failed to find land
+
+# existing: already-placed cells from OTHER components (cross-island guard).
+func _greedy_pick(candidates: Array, n: int, sep: int, existing: Array = []) -> Array:
+	var chosen: Array = []
+	var sep_sq := sep * sep
+	for entry in candidates:
+		if chosen.size() >= n: break
+		var idx: int = entry[1]
+		var cx := idx % GW; var cy := idx / GW
+		var ok := true
+		for h: Vector2i in chosen:
+			var dx := cx - h.x; var dy := cy - h.y
+			if dx * dx + dy * dy < sep_sq: ok = false; break
+		if ok:
+			for h: Vector2i in existing:
+				var dx := cx - h.x; var dy := cy - h.y
+				if dx * dx + dy * dy < sep_sq: ok = false; break
+		if ok: chosen.append(Vector2i(cx, cy))
+	return chosen
 
 # The 8 kingdom colours, sampled from the atlas's coloured ground tiles so the
 # painted territory matches the art exactly.
@@ -1738,9 +2098,13 @@ const KINGDOM_COLORS := [
 	Color("4d9ef5"), Color("d22323"), Color("33a23a"), Color("ecae12"),
 	Color("8a3fc0"), Color("23a6ad"), Color("e87b14"), Color("e2479a"),
 ]
-const KINGDOM_LABELS := [
-	"Blue Kingdom", "Red Empire", "Green Dynasty", "Yellow Nation",
-	"Purple Realm", "Cyan Kingdom", "Orange Order", "Pink Kingdom",
+const FAKE_PLAYER_NAMES := [
+	"BlazeFox", "IronClaw", "SilverWing", "DarkRider",
+	"ProKing99", "CoolCat42", "BlueHawk7", "StormKing",
+	"NightOwl", "SpeedRun", "EagleEye", "GoldRush",
+	"PixelKnight", "ShadowFox", "RocketKid", "ThunderAce",
+	"CrazyRider", "BossMode", "EpicRider", "WildCard",
+	"NinjaPro", "TrueKing", "HyperWave", "RedPhoenix",
 ]
 
 func _kingdom_color(i: int, n: int) -> Color:
@@ -1754,15 +2118,19 @@ func _kingdom_color(i: int, n: int) -> Color:
 func _assign_kingdom_colors() -> void:
 	var human_col: Color = Cosmetics.king_color(SaveManager.selected_pack())
 	_kid_color[1] = human_col
-	_kid_label[1] = "Your Kingdom"
+	_kid_label[1] = "You"
+	# Colors: sorted by distance from the human's color so rivals read as distinct.
 	var pairs: Array = []
 	for i in KINGDOM_COLORS.size():
-		pairs.append({"col": KINGDOM_COLORS[i], "label": KINGDOM_LABELS[i]})
+		pairs.append({"col": KINGDOM_COLORS[i]})
 	pairs.sort_custom(func(a, b): return _col_dist(a.col, human_col) > _col_dist(b.col, human_col))
+	# Names: shuffled independently from the pool so every match has different "players".
+	var name_pool: Array = FAKE_PLAYER_NAMES.duplicate()
+	name_pool.shuffle()
 	for i in range(1, _n_kingdoms):          # rivals: i = 1.._n-1 → kid = i + 1
 		var p: Dictionary = pairs[(i - 1) % pairs.size()]
 		_kid_color[i + 1] = p.col
-		_kid_label[i + 1] = p.label
+		_kid_label[i + 1] = name_pool[(i - 1) % name_pool.size()]
 
 func _col_dist(a: Color, b: Color) -> float:
 	return absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)
@@ -1803,9 +2171,84 @@ func _build_ground() -> void:
 	# One big animated ocean plane sits just below the board (the island is opaque and
 	# drawn on top, so water only shows past the coast). The ground shader's coast rim
 	# reads as the sandy beach where land meets the surf.
-	var ocean := Ocean.new()
-	add_child(ocean)
-	ocean.setup(Vector2(GW * CELL * 0.5, GH * CELL * 0.5))
+	_ocean = Ocean.new()
+	add_child(_ocean)
+	_ocean.setup(Vector2(GW * CELL * 0.5, GH * CELL * 0.5))
+	if WORLD_CONQUEST and _land_mask.size() > 0:
+		var sdf := _build_shore_sdf(_land_mask, GW, GH)
+		_sdf_dist = sdf["dist"]
+		_inland_sdf = _build_inland_sdf(_land_mask, GW, GH)
+		_ocean.set_shore_sdf(sdf["img"], 20.0 * CELL)  # 20 cells (12 wu) of foam falloff
+
+# BFS distance-from-shore field: each cell gets the distance (in cells) to the
+# nearest land cell. Land cells → 0, adjacent ocean → 1, etc. Capped at 20.
+# Returns a GW×GH Image (FORMAT_R8) with R = dist / 20 (0=coast, 1=far).
+# Returns {"img": Image, "dist": PackedInt32Array}.
+# img  — R8 with R = dist/MAX_D (0=coast, 1=far) for the ocean foam shader.
+# dist — raw BFS cell distances (0=land, N=N cells from shore) for movement clamping.
+static func _build_shore_sdf(mask: PackedByteArray, w: int, h: int) -> Dictionary:
+	var MAX_D := 20   # 20 cells × 0.6 wu/cell = 12 wu shore/foam range
+	var dist := PackedInt32Array()
+	dist.resize(w * h)
+	dist.fill(MAX_D + 1)
+	var queue: Array = []
+	for i in w * h:
+		if mask[i] == 1:
+			dist[i] = 0
+			queue.append(i)
+	var head := 0
+	while head < queue.size():
+		var idx: int = queue[head]; head += 1
+		var d: int = dist[idx]
+		if d >= MAX_D:
+			continue
+		var x: int = idx % w
+		var y: int = idx / w
+		for delta in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
+			var nx: int = x + delta[0]
+			var ny: int = y + delta[1]
+			if nx < 0 or nx >= w or ny < 0 or ny >= h:
+				continue
+			var ni: int = ny * w + nx
+			if dist[ni] > d + 1:
+				dist[ni] = d + 1
+				queue.append(ni)
+	var img := Image.create(w, h, false, Image.FORMAT_R8)
+	for i in w * h:
+		var v := clampf(float(dist[i]) / float(MAX_D), 0.0, 1.0)
+		img.set_pixel(i % w, i / w, Color(v, 0.0, 0.0))
+	return {"img": img, "dist": dist}
+
+# Inland depth for every land cell: BFS seeded from coastal land (cells adjacent to
+# ocean or grid edge) propagating inward.  0=ocean (skip), 1=coastal land, N=N steps inland.
+# This is the OPPOSITE direction to _build_shore_sdf and is correct for home placement.
+static func _build_inland_sdf(mask: PackedByteArray, w: int, h: int) -> PackedInt32Array:
+	var dist := PackedInt32Array(); dist.resize(w * h); dist.fill(0)
+	var queue: Array = []
+	for i in w * h:
+		if mask[i] == 0: continue      # ocean — leave at 0, not visited
+		var x: int = i % w; var y: int = i / w
+		var coastal := false
+		for delta in [[-1,0],[1,0],[0,-1],[0,1]]:
+			var nx: int = x + delta[0]; var ny: int = y + delta[1]
+			if nx < 0 or nx >= w or ny < 0 or ny >= h:
+				coastal = true; break
+			if mask[ny * w + nx] == 0:
+				coastal = true; break
+		if coastal:
+			dist[i] = 1; queue.append(i)
+	var head := 0
+	while head < queue.size():
+		var idx: int = queue[head]; head += 1
+		var d: int = dist[idx]
+		var x: int = idx % w; var y: int = idx / w
+		for delta in [[-1,0],[1,0],[0,-1],[0,1]]:
+			var nx: int = x + delta[0]; var ny: int = y + delta[1]
+			if nx < 0 or nx >= w or ny < 0 or ny >= h: continue
+			var ni: int = ny * w + nx
+			if mask[ni] == 0 or dist[ni] != 0: continue   # skip ocean or already visited
+			dist[ni] = d + 1; queue.append(ni)
+	return dist
 
 func _box_part(pos: Vector3, size: Vector3, color: Color) -> void:
 	var mi := MeshInstance3D.new()
@@ -2046,6 +2489,9 @@ func _build_hud(ui: CanvasLayer) -> void:
 	# Minimap paints from grid data (no 3D render) — no environment needed.
 	_minimap = Minimap.new()
 	_minimap.setup(GW, GH)
+	_minimap.set_active_half(_active_w, _active_h)
+	if WORLD_CONQUEST and _land_mask.size() > 0:
+		_minimap.set_land_mask(_land_mask)
 	_minimap.set_frame(MINIMAP_FRAME)
 	ui.add_child(_minimap)
 	_minimap.set_anchor(SIDE_LEFT, 1.0)
@@ -2565,8 +3011,7 @@ func _style_button(b: Button, color: Color, radius: int, margin: int = 8) -> voi
 	b.add_theme_constant_override("outline_size", 4)
 
 func _display_kingdom_name(kid: int) -> String:
-	# Colour-matched names assigned in _assign_kingdom_colors ("Your Kingdom" for the human).
-	return _kid_label.get(kid, KINGDOM_LABELS[(kid - 1) % KINGDOM_LABELS.size()])
+	return _kid_label.get(kid, FAKE_PLAYER_NAMES[(kid - 1) % FAKE_PLAYER_NAMES.size()])
 
 func _population_estimate(owned: int) -> int:
 	return maxi(12, int(float(owned) * 0.55) + _farms * 8 + _barracks * 14)
@@ -2632,6 +3077,9 @@ func _build_hud_old(ui: CanvasLayer) -> void:
 	# minimap (bottom-right) — the strategic whole-board view
 	_minimap = Minimap.new()
 	_minimap.setup(GW, GH)
+	_minimap.set_active_half(_active_w, _active_h)
+	if WORLD_CONQUEST and _land_mask.size() > 0:
+		_minimap.set_land_mask(_land_mask)
 	_minimap.position = Vector2(Palette.DESIGN_W - 258, Palette.DESIGN_H - 200)
 	ui.add_child(_minimap)
 

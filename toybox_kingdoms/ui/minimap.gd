@@ -24,6 +24,9 @@ var _buf: PackedByteArray         # reused RGBA8 scratch — allocation-free rep
 var _gw := 0
 var _gh := 0
 var _dirty := true                # repaint only when ownership changed, not on a timer
+var _active_w: int = -1           # active zone width (-1 = full grid)
+var _active_h: int = -1           # active zone height
+var _land_mask: PackedByteArray   # WORLD_CONQUEST per-cell mask (empty = not used)
 
 # world / cell / cam_env are accepted for call-site compatibility but unused now that
 # the minimap paints from data instead of rendering the 3D world.
@@ -40,6 +43,15 @@ func setup(gw: int, gh: int, _world = null, _cell: float = 0.6, _cam_env = null)
 	_tex = ImageTexture.create_from_image(_img)
 	_buf = PackedByteArray()
 	_buf.resize(gw * gh * 4)
+
+func set_active_half(aw: int, ah: int) -> void:
+	_active_w = aw
+	_active_h = ah
+	_dirty = true
+
+func set_land_mask(mask: PackedByteArray) -> void:
+	_land_mask = mask
+	_dirty = true
 
 # The match calls this when the board may have changed (capture/retint). We capture
 # the grid + palette and flag a repaint for the next _process tick.
@@ -83,20 +95,36 @@ func _process(_delta: float) -> void:
 
 # Paint one pixel per cell: flat dark grey for wilderness, the kingdom colour
 # for owned land. Writes the reused buffer and uploads once (no per-pixel set_pixel).
+const FROST := Color(0.78, 0.90, 0.97, 1.0)   # ice blue — matches territory_ground frozen zone
+
 func _repaint() -> void:
-	var n := _gw * _gh
-	for i in n:
-		var oid: int = _grid.owner[i]
-		var col: Color
-		if oid == 0:
-			col = WILD
-		else:
-			col = (_colors.get(oid, Color.WHITE) as Color).lightened(0.06)
-		var o := i * 4
-		_buf[o] = int(col.r * 255.0)
-		_buf[o + 1] = int(col.g * 255.0)
-		_buf[o + 2] = int(col.b * 255.0)
-		_buf[o + 3] = 255
+	var use_mask := _land_mask.size() == _gw * _gh
+	# Rectangular active zone bounds (used when no per-cell mask).
+	var ax0 := 0; var ay0 := 0; var ax1 := _gw; var ay1 := _gh
+	if not use_mask and _active_w > 0 and _active_h > 0:
+		ax0 = (_gw - _active_w) / 2
+		ay0 = (_gh - _active_h) / 2
+		ax1 = ax0 + _active_w
+		ay1 = ay0 + _active_h
+	for iy in _gh:
+		for ix in _gw:
+			var i := iy * _gw + ix
+			var col: Color
+			var is_frozen: bool
+			if use_mask:
+				is_frozen = _land_mask[i] == 0
+			else:
+				is_frozen = ix < ax0 or ix >= ax1 or iy < ay0 or iy >= ay1
+			if is_frozen:
+				col = FROST
+			else:
+				var oid: int = _grid.owner[i]
+				col = WILD if oid == 0 else (_colors.get(oid, Color.WHITE) as Color).lightened(0.06)
+			var o := i * 4
+			_buf[o]     = int(col.r * 255.0)
+			_buf[o + 1] = int(col.g * 255.0)
+			_buf[o + 2] = int(col.b * 255.0)
+			_buf[o + 3] = 255
 	_img.set_data(_gw, _gh, false, Image.FORMAT_RGBA8, _buf)
 	_tex.update(_img)
 

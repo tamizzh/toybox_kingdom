@@ -24,8 +24,12 @@ extends Node3D
 # Material progression:
 #   dirt (T1-2, <30%)  →  cobble (T3, 30-60%)  →  stone (T4, >60%)
 
-const GW := 128
-const GH := 96
+# Grid dims + cell size are taken from the live grid in setup() so roads track
+# whatever resolution kingdom_match uses (currently 384×288 @ 0.6 wu/cell). These
+# used to be hardcoded 128×96 — when the grid was resized, roads computed cell→world
+# with the wrong dimensions and scattered tiles across the map/ocean.
+var GW := 384
+var GH := 288
 const CELL := 0.6
 
 # Local Y offset (the roads node itself sits at CLAIMED_LIFT in kingdom_match)
@@ -76,6 +80,8 @@ class Conn:
 func setup(p_grid, p_homes: Dictionary) -> void:
 	grid  = p_grid
 	_homes = p_homes
+	GW = grid.w
+	GH = grid.h
 
 # ── Public API ────────────────────────────────────────────────────────────
 

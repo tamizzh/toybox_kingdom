@@ -88,19 +88,29 @@ func _plan(agent, m) -> void:
 # Lay out the next rectangular EXPAND sortie off the home blob's edge.
 func _plan_expand(agent, m) -> void:
 	var H: Vector3 = m._c2w(agent.home.x, agent.home.y, 0.0)
+
+	# Rotate heading, then bias it toward the land interior so the AI doesn't
+	# immediately march into the ocean. If m.land_inward_dir returns a non-zero vector
+	# (we're near the coast), blend the random heading with the inward direction.
 	heading += rng.randf_range(0.5, 1.1) * (1.0 if rng.randf() < 0.5 else -1.0)
-	var grow: float = sqrt(float(m.grid.territory_count(agent.kid))) * 0.25  # bigger realm reaches further
+	var inward: Vector2 = m.land_inward_dir(H)
+	if inward.length() > 0.01:
+		var inward_angle := atan2(inward.y, inward.x)
+		# Blend: pull heading 60 % toward the inward direction, keep 40 % random variety.
+		var diff := fmod(inward_angle - heading + 3.0 * PI, TAU) - PI
+		heading += diff * 0.60
+
+	var grow: float = sqrt(float(m.grid.territory_count(agent.kid))) * 0.25
 	var depth: float = rng.randf_range(_depth_lo, _depth_hi) + grow
 	var d := Vector2(cos(heading), sin(heading))
 	var p := Vector2(-d.y, d.x)
 	var dW := Vector3(d.x, 0.0, d.y)
 	var pW := Vector3(p.x, 0.0, p.y)
-	# Clamp the carve points inside the world so an edge-facing sortie can't pin the
-	# avatar against the boundary (it just encloses a smaller bite and replans).
+	# world_clamp now iterates the SDF gradient until each waypoint lands on land.
 	var c1: Vector3 = m.world_clamp(H + dW * depth)
 	var c2: Vector3 = m.world_clamp(c1 + pW * _width)
 	var c3: Vector3 = m.world_clamp(H + pW * _width)
-	_wps = [c1, c2, c3, H]   # out, across, back-parallel, re-enter home -> encloses a rectangle
+	_wps = [c1, c2, c3, H]
 	_wi = 0
 
 # Trace a rectangle CENTERED on the home->target axis that engulfs the target

@@ -21,6 +21,10 @@ uniform vec2 board_half = vec2(38.4, 28.8);     // island half-extents (world XZ
 uniform float foam_band = 3.0;                  // width of the surf ring (world units)
 uniform float wave_amp = 0.35;                  // ripple normal strength
 uniform float speed = 1.0;
+// Shore SDF: R channel = dist-to-nearest-land-cell / sdf_max_dist (0=on coast, 1=far).
+// sdf_max_dist = 0 means disabled → fall back to rectangular board_half.
+uniform sampler2D shore_sdf : filter_linear, repeat_disable, hint_default_black;
+uniform float sdf_max_dist = 0.0;
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 float vnoise(vec2 p){
@@ -55,10 +59,16 @@ void fragment(){
 	vec3 wn = normalize(vec3(-nx * wave_amp, 1.0, -nz * wave_amp));
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 
-	// Shoreline foam: distance OUTSIDE the island rectangle, wobbled by noise so the
-	// surf line breaks unevenly instead of tracing a crisp rectangle.
-	vec2 d = abs(w) - board_half;
-	float outside = length(max(d, vec2(0.0)));
+	// Shoreline foam: distance from the coast, either from the country-shape SDF
+	// or from the rectangular board_half fallback (when sdf_max_dist == 0).
+	float outside;
+	if (sdf_max_dist > 0.001) {
+		vec2 grid_uv = w / (board_half * 2.0) + 0.5;
+		outside = texture(shore_sdf, clamp(grid_uv, vec2(0.001), vec2(0.999))).r * sdf_max_dist;
+	} else {
+		vec2 d = abs(w) - board_half;
+		outside = length(max(d, vec2(0.0)));
+	}
 	float wobble = (fbm(w * 0.4 + t * 3.0) - 0.5) * 2.2;
 	float edge = outside + wobble;
 	float shore = 1.0 - smoothstep(0.0, foam_band, edge);
@@ -97,10 +107,12 @@ render_mode cull_back, unshaded;
 uniform vec3 deep = vec3(0.02, 0.17, 0.40);
 uniform vec3 shallow = vec3(0.09, 0.45, 0.62);
 uniform vec3 foam_col = vec3(0.92, 0.97, 1.0);
-uniform vec3 glint_col = vec3(1.0, 1.0, 0.95);   // warm sun sparkle
+uniform vec3 glint_col = vec3(1.0, 1.0, 0.95);
 uniform vec2 board_half = vec2(38.4, 28.8);
 uniform float foam_band = 3.0;
 uniform float speed = 1.0;
+uniform sampler2D shore_sdf : filter_linear, repeat_disable, hint_default_black;
+uniform float sdf_max_dist = 0.0;
 
 varying vec3 v_world;
 void vertex(){ v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz; }
@@ -109,9 +121,15 @@ void fragment(){
 	vec2 w = v_world.xz;
 	float t = TIME * 0.04 * speed;
 
-	// Distance OUTSIDE the island rectangle — drives the coast softening below.
-	vec2 d = abs(w) - board_half;
-	float outside = length(max(d, vec2(0.0)));
+	// Distance from coast: country-shape SDF when active, rectangle fallback otherwise.
+	float outside;
+	if (sdf_max_dist > 0.001) {
+		vec2 grid_uv = w / (board_half * 2.0) + 0.5;
+		outside = texture(shore_sdf, clamp(grid_uv, vec2(0.001), vec2(0.999))).r * sdf_max_dist;
+	} else {
+		vec2 d = abs(w) - board_half;
+		outside = length(max(d, vec2(0.0)));
+	}
 
 	// Layered swell → richer deep↔teal banding than a single wave.
 	float swell = sin(w.x * 0.06 + t) * 0.3
@@ -164,3 +182,14 @@ func setup(p_board_half: Vector2, p_extent := 360.0, p_y := -0.16) -> void:
 
 	position = Vector3(0, p_y, 0)
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+# Pass a BFS distance-from-shore field so foam hugs the country's real coastline.
+# img: 128×96 Image (FORMAT_R8), R = dist_cells / max_cells (0=on coast, 1=far).
+# max_dist_world: the world-unit distance that R=1.0 maps to (= max_cells × CELL).
+func set_shore_sdf(img: Image, max_dist_world: float) -> void:
+	var tex := ImageTexture.create_from_image(img)
+	var mat := material_override as ShaderMaterial
+	if mat == null:
+		return
+	mat.set_shader_parameter("shore_sdf", tex)
+	mat.set_shader_parameter("sdf_max_dist", max_dist_world)

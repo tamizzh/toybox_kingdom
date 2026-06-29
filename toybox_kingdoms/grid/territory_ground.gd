@@ -21,6 +21,8 @@ uniform sampler2D own : filter_nearest;       // R = kingdom idx/255, A = claime
 uniform sampler2D own_l : filter_linear;      // same texture, smooth — drives plateau height
 uniform vec3 kcolors[8];
 uniform vec2 grid_size = vec2(128.0, 96.0);
+uniform vec2 active_half = vec2(38.4, 28.8);  // world-unit half-extents of the active (non-frozen) zone
+uniform sampler2D land_mask : filter_nearest;  // R=1 land, R=0 ocean; default all-white (no mask)
 // PAPER look: every surface is flat matte cardstock. No tile texture, no grass
 // detail — just clean saturated colour with a soft bevel + a lighter ribbon where
 // two regions meet, exactly like simple_target.png.
@@ -51,6 +53,14 @@ void vertex(){
 void fragment(){
 	vec2 uv = UV;
 	vec2 px = 1.0 / grid_size;
+
+	// ── Country shape: discard ocean cells so the island has the right silhouette.
+	// land_mask is all-white by default (no-op); set per-country in WORLD_CONQUEST mode.
+	float is_land = texture(land_mask, uv).r;
+	if (is_land < 0.5) {
+		discard;
+	}
+
 	vec4 here = texture(own, uv);
 	float claimed = here.a;
 	int idx = int(floor(here.r * 255.0 + 0.5));
@@ -67,47 +77,53 @@ void fragment(){
 	float rim = clamp(border, 0.0, 1.0);
 
 	// per-cell bevel normal — the soft paper-board edge that reads as subtle tiles.
-		// Claimed plates get the full bevel; unclaimed grass a gentler one (same tile read, softer).
 	vec2 fc = abs(cuv - 0.5);
 	vec2 tilt = vec2(smoothstep(0.35, 0.5, fc.x), smoothstep(0.35, 0.5, fc.y));
 	vec2 sgn = sign(cuv - 0.5);
 	vec3 nrm = normalize(vec3(tilt.x * sgn.x * mix(0.09, 0.18, claimed), 1.0, tilt.y * sgn.y * mix(0.09, 0.18, claimed)));
 	NORMAL = normalize((VIEW_MATRIX * vec4(nrm, 0.0)).xyz);
 
-	// sandy BEACH around the whole island before it drops to the sea — a wider warm
-	// band so the coast reads as a real shore, not a thin pale line.
-	float edge = min(min(uv.x, 1.0 - uv.x) * grid_size.x, min(uv.y, 1.0 - uv.y) * grid_size.y);
-	float coast = smoothstep(0.0, 5.0, edge);
+	// ── Coastline: sandy rim wherever a land cell borders an ocean cell.
+	// Sample the 4 orthogonal neighbours; a missing land neighbour = close to shore.
+	float n_land = texture(land_mask, uv + vec2(0.0,  px.y)).r
+	             + texture(land_mask, uv - vec2(0.0,  px.y)).r
+	             + texture(land_mask, uv + vec2(px.x,  0.0)).r
+	             + texture(land_mask, uv - vec2(px.x,  0.0)).r;
+	// n_land ∈ [0,4]; cells with fewer land neighbours are closer to the coast.
+	// Also keep the grid-edge beach for the rectangular frozen-zone mode.
+	float edge_rect = min(min(uv.x, 1.0 - uv.x) * grid_size.x,
+	                      min(uv.y, 1.0 - uv.y) * grid_size.y);
+	float coast_rect = smoothstep(0.0, 5.0, edge_rect);
+	float coast_mask = smoothstep(2.5, 4.0, n_land);   // 0 at shore, 1 far inland
+	float coast = min(coast_rect, coast_mask);          // whichever says "beach" wins
 
 	vec3 base;
 	if (is_claimed) {
-		// Flat saturated paper plate. A lighter ribbon of the SAME hue marks the
-		// boundary with any neighbour of a different owner.
 		base = kcolors[idx];
-		// Border ribbon removed: the perimeter wall blocks already separate regions,
-		// so the claimed surface stays a uniform colour right up to the wall.
 	} else {
-		// Unclaimed wilderness: smooth warm/cool tonal field + rare per-cell micro-patches.
-		float sn  = vnoise(v_world.xz * 0.22 + 7.0);   // large-scale tonal drift (≈5-unit period)
-		float sn2 = vnoise(v_world.xz * 0.55 + 19.3);  // medium-scale warm/cool gradient (≈2-unit period)
+		float sn  = vnoise(v_world.xz * 0.22 + 7.0);
+		float sn2 = vnoise(v_world.xz * 0.55 + 19.3);
 		float ch  = hash(floor(uv * grid_size) * 1.7 + 3.0);
-
-		// Primary richness layer: smooth warm↔cool field, ≈±3% on R and ±10% on B.
-		// Barely visible individually; together they make the lawn read as handcrafted.
 		vec3 warm = paper_neutral * vec3(1.03, 1.00, 0.90);
 		vec3 cool = paper_neutral * vec3(0.97, 1.00, 1.10);
 		base = mix(cool, warm, sn2);
-
-		// Per-cell micro-patches: ~6% of cells get a subtle accent on top.
-		if      (ch > 0.985) base *= 0.82;                                          // soft dark patch
-		else if (ch > 0.970) base *= 1.07;                                          // soft light patch
-		else if (ch > 0.955) base = mix(base, vec3(0.16, 0.60, 0.22), 0.12);       // clover tint
-		else if (ch > 0.940) base = mix(base, vec3(0.38, 0.58, 0.07), 0.09);       // dry grass tint
-		base *= (0.97 + sn * 0.05);   // large-scale brightness drift ±2.5%
-		// soft pale rim against any claimed neighbour (the target's light divider)
+		if      (ch > 0.985) base *= 0.82;
+		else if (ch > 0.970) base *= 1.07;
+		else if (ch > 0.955) base = mix(base, vec3(0.16, 0.60, 0.22), 0.12);
+		else if (ch > 0.940) base = mix(base, vec3(0.38, 0.58, 0.07), 0.09);
+		base *= (0.97 + sn * 0.05);
 		base = mix(base, mix(paper_neutral, vec3(1.0), 0.4), rim * 0.5);
 	}
-	base = mix(sand_col, base, coast);                // pale coast/table rim
+	base = mix(sand_col, base, coast);
+
+	// ── Rectangular frozen zone (active_half — used when WORLD_CONQUEST = false).
+	// When WORLD_CONQUEST is on, active_half equals the full grid so rect_frost = 0.
+	vec2 from_active = abs(v_world.xz) - active_half;
+	float inside_cells = max(-max(from_active.x, from_active.y), 0.0) / 0.6;
+	float frost_blend = smoothstep(3.0, 0.0, inside_cells);
+	vec3 frost_col = vec3(0.78, 0.90, 0.97);
+	base = mix(base, frost_col, frost_blend * 0.85);
+
 	// Matte cardstock everywhere: no sheen, no specular highlight.
 	ALBEDO = base;
 	ROUGHNESS = 0.95;
@@ -122,6 +138,7 @@ var _tex: ImageTexture
 var _buf: PackedByteArray   # reused RGBA8 scratch — avoids per-pixel set_pixel/Color churn
 var _w: int
 var _h: int
+var _mat: ShaderMaterial
 
 func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	grid = p_grid
@@ -163,6 +180,12 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 		var c: Color = colors.get(i + 1, Color.GRAY)
 		pal[i] = Vector3(c.r, c.g, c.b)
 	mat.set_shader_parameter("kcolors", pal)
+	mat.set_shader_parameter("active_half", pm.size * 0.5)
+	# Default land_mask: all-white 1×1 texture (every cell is land — no country shape applied).
+	var white_img := Image.create(1, 1, false, Image.FORMAT_R8)
+	white_img.fill(Color(1, 1, 1))
+	mat.set_shader_parameter("land_mask", ImageTexture.create_from_image(white_img))
+	_mat = mat
 	mesh.material_override = mat
 	mesh.position = Vector3(0, TOP_Y, 0)
 	add_child(mesh)
@@ -236,3 +259,17 @@ func update(x0: int = 0, y0: int = 0, x1: int = -1, y1: int = -1) -> void:
 				_buf[o + 3] = 255        # A = claimed
 	_img.set_data(_w, _h, false, Image.FORMAT_RGBA8, _buf)
 	_tex.update(_img)
+
+func set_active_half(new_half: Vector2) -> void:
+	if _mat:
+		_mat.set_shader_parameter("active_half", new_half)
+
+func set_land_mask(mask: PackedByteArray) -> void:
+	if not _mat:
+		return
+	var img := Image.create(_w, _h, false, Image.FORMAT_R8)
+	for i in mask.size():
+		var x := i % _w
+		var y := i / _w
+		img.set_pixel(x, y, Color(float(mask[i]), 0.0, 0.0))
+	_mat.set_shader_parameter("land_mask", ImageTexture.create_from_image(img))
