@@ -368,12 +368,12 @@ def build_torus(major_r=0.26, minor_r=0.09, major_seg=24, minor_seg=12):
 # ── main generation loop ──────────────────────────────────────────────────────
 
 SPECS = [
-    ("pu_speed",  (0.05, 0.50, 0.10), build_rocket_arrow, {},                     5.5),
-    ("pu_ghost",  (1.0,  0.78, 0.05), build_shield,  {},                          5.5),
-    ("pu_bomb",   (0.95, 0.08, 0.05), build_spiky_ball,{},                        5.5),
-    ("pu_clear",  (0.92, 0.96, 1.0), build_gem,      {},                          4.5),
-    ("pu_freeze", (0.0, 0.78, 1.0),  build_snowflake,{},                          6.0),
-    ("pu_magnet", (0.75, 0.1, 1.0),  build_torus,    {},                          5.5),
+    ("pu_speed",  (0.01, 0.40, 0.04), build_rocket_arrow, {},                     1.0),
+    ("pu_ghost",  (1.0,  0.80, 0.0),  build_shield,  {},                          1.0),
+    ("pu_bomb",   (1.0,  0.05, 0.05), build_spiky_ball,{},                        1.0),
+    ("pu_clear",  (0.85, 0.95, 1.0),  build_gem,     {},                          1.0),
+    ("pu_freeze", (0.0,  0.80, 1.0),  build_snowflake,{},                         1.0),
+    ("pu_magnet", (0.80, 0.10, 1.0),  build_torus,   {},                          1.0),
 ]
 
 for name, rgb, builder, kwargs, strength in SPECS:

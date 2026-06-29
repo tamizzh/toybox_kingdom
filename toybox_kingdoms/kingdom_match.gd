@@ -49,8 +49,10 @@ const SAD_KING_RECT := Rect2(610, 365, 390, 280)
 const BTN_FRAME_GREEN := preload("res://assets/btn_green.png")
 const BTN_FRAME_BLUE  := preload("res://assets/btn_blue.png")
 
-const GW := 384
-const GH := 288
+const GW_FULL := 384
+const GH_FULL := 288
+var GW: int = GW_FULL  # actual grid width — overridden to GW_FULL/3=128 for campaign
+var GH: int = GH_FULL  # actual grid height — overridden to GH_FULL/3=96 for campaign
 const CELL := 0.6   # 384×288 grid at 0.6 wu/cell → world 230×172 wu, each island 3× bigger
 const HOME_R := 15  # cells; home blob ≈ 9 wu radius, same proportion of the 3× island
 const N_KINGDOMS := 8           # 1 human + 7 AI
@@ -96,9 +98,8 @@ const DAILY_DIFFICULTY := 2             # fixed mid difficulty (≈ endless isla
 # When false: original rectangular frozen-zone progression is used.
 const WORLD_CONQUEST := true
 
-var _active_w: int = GW   # playable width in cells; cells outside this = frozen zone
-var _active_h: int = GH   # playable height in cells
-var _board_denom: int = GW * GH  # denominator for territory %; campaign uses active area, endless uses full grid
+var _active_w: int = GW_FULL   # playable width in cells; cells outside this = frozen zone
+var _active_h: int = GH_FULL   # playable height in cells
 var _land_mask: PackedByteArray   # WORLD_CONQUEST: 1=land 0=ocean per cell
 var _land_bbox := {"x0": 0, "y0": 0, "x1": GW - 1, "y1": GH - 1}  # bbox of land cells
 
@@ -230,6 +231,8 @@ const PU_SPEED_BOOST := 3.5       # extra speed added on top of current avatar s
 
 var _powerup_cells  := {}   # Vector2i -> String (type)
 var _powerup_nodes  := {}   # Vector2i -> Node3D (the pickup mesh+light)
+var _pu_disc_mats   := {}   # type -> StandardMaterial3D (one per type, created once)
+var _pu_disc_mesh: CylinderMesh = null   # shared across all discs
 var _pu_spawn_t     := 10.0 # countdown to first wave (short delay so match starts clean)
 var _freeze_t: float = 0.0  # board-level freeze remaining (seconds)
 var _freeze_by: int  = 0    # kid who cast freeze (not affected by the slow)
@@ -298,9 +301,10 @@ func _ready() -> void:
 		_n_kingdoms = 1 + _rival_diffs.size()
 		if fast == "":
 			_match_t = Campaign.duration(_stage)
-		_active_w = GW / 3   # campaign uses a 1/3-size board (128×96)
-		_active_h = GH / 3
-		_board_denom = _active_w * _active_h
+		GW = GW_FULL / 3   # campaign uses a truly 1/3-size grid (128×96)
+		GH = GH_FULL / 3
+		_active_w = GW
+		_active_h = GH
 	# The very first match the player ever starts gets the guided coach + a pure-carve
 	# HUD (no build economy yet). Counted once here so a "Play Again" reload is match 2+.
 	# TBK_FIRSTMATCH=1 forces the first-match tutorial path for QA without resetting the save.
@@ -1273,7 +1277,7 @@ func _close_pause_panel() -> void:
 
 func _check_match_end() -> void:
 	var human = _rulers[0]
-	var human_pct: float = float(grid.territory_count(human.kid)) / float(_board_denom)
+	var human_pct: float = float(grid.territory_count(human.kid)) / float(GW * GH)
 	var alive := 0
 	for a in _rulers:
 		if not a.eliminated:
@@ -1333,7 +1337,7 @@ func _end_match(win: bool, reason: String) -> void:
 	_ended = true
 	if _rulers[0].avatar:
 		_rulers[0].avatar.auto_input = false   # freeze the human (AI halts via the early return)
-	var pct: float = float(grid.territory_count(_rulers[0].kid)) / float(_board_denom)
+	var pct: float = float(grid.territory_count(_rulers[0].kid)) / float(GW * GH)
 	_peak_pct = maxf(_peak_pct, pct)
 	var rank := _human_rank()
 	var coins: int = int(pct * 300.0) + maxi(0, _n_kingdoms - rank) * 15 + (60 if win else 0)
@@ -1677,7 +1681,7 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	for kid in _kids:
 		standings.append({"kid": kid, "n": grid.territory_count(kid)})
 	standings.sort_custom(func(x, y): return x["n"] > y["n"])
-	var total := float(_board_denom)
+	var total := float(GW * GH)
 	for r in standings.size():
 		var e: Dictionary = standings[r]
 		_result_label(col, "%d.   %s   %.1f%%" % [r + 1, _kid_name[e["kid"]], 100.0 * e["n"] / total], 24,
@@ -2296,7 +2300,7 @@ func _pick_home_cells(n: int) -> Array:
 	return all_chosen
 
 # Grow every land cell outward by radius cells (morphological dilation).
-static func _dilate_land_mask(mask: PackedByteArray, radius: int) -> PackedByteArray:
+func _dilate_land_mask(mask: PackedByteArray, radius: int) -> PackedByteArray:
 	var result := PackedByteArray(); result.resize(GW * GH); result.fill(0)
 	for i in GW * GH:
 		if mask[i] == 0: continue
@@ -3421,7 +3425,7 @@ func _hud_tick(delta: float) -> void:
 			if grid.trail_length(_rulers[0].kid) > 0
 			else "Leave your land — draw a loop!")
 
-	var total := float(_board_denom)
+	var total := float(GW * GH)
 	var pct := 100.0 * owned / total
 	_peak_pct = maxf(_peak_pct, float(owned) / total)   # endless score input
 	var pop := _population_estimate(owned)
@@ -3565,11 +3569,55 @@ func _spawn_powerup_wave() -> void:
 		_powerup_nodes[cell] = node
 		placed += 1
 
+func _pu_color(type: String) -> Color:
+	match type:
+		PU_SPEED:  return Color(0.01, 0.40, 0.04)
+		PU_GHOST:  return Color(1.0,  0.85, 0.0)
+		PU_BOMB:   return Color(1.0,  0.08, 0.05)
+		PU_CLEAR:  return Color(0.85, 0.95, 1.0)
+		PU_FREEZE: return Color(0.0,  0.75, 1.0)
+		PU_MAGNET: return Color(0.85, 0.15, 1.0)
+	return Color.WHITE
+
+func _pu_disc_mat(type: String) -> StandardMaterial3D:
+	if _pu_disc_mats.has(type):
+		return _pu_disc_mats[type]
+	var col := _pu_color(type)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode             = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color             = col
+	mat.emission_enabled         = true
+	mat.emission                 = col
+	mat.emission_energy_multiplier = 1.6
+	mat.transparency             = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode               = BaseMaterial3D.BLEND_MODE_ADD   # additive — no depth sort
+	_pu_disc_mats[type] = mat
+	return mat
+
 func _make_pu_node(type: String, cx: int, cy: int) -> Node3D:
 	var root := Node3D.new()
 	root.position = _c2w(cx, cy, CLAIMED_LIFT + 0.45)
+	var col := _pu_color(type)
 
-	# Load the Blender-generated GLB model for this power-up type.
+	# ── ground glow disc (shared mesh + cached material per type) ────────────
+	if _pu_disc_mesh == null:
+		_pu_disc_mesh = CylinderMesh.new()
+		_pu_disc_mesh.top_radius      = 0.50
+		_pu_disc_mesh.bottom_radius   = 0.50
+		_pu_disc_mesh.height          = 0.02
+		_pu_disc_mesh.radial_segments = 16
+	var disc := MeshInstance3D.new()
+	disc.mesh = _pu_disc_mesh
+	disc.set_surface_override_material(0, _pu_disc_mat(type))
+	disc.position.y = -(CLAIMED_LIFT + 0.44)
+	root.add_child(disc)
+
+	var pulse := disc.create_tween()
+	pulse.set_loops()
+	pulse.tween_property(disc, "scale", Vector3(1.25, 1.0, 1.25), 0.55).set_trans(Tween.TRANS_SINE)
+	pulse.tween_property(disc, "scale", Vector3(0.85, 1.0, 0.85), 0.55).set_trans(Tween.TRANS_SINE)
+
+	# ── 3D model ─────────────────────────────────────────────────────────────
 	var glb_path := "res://assets/powerups/pu_%s.glb" % type
 	var scene = load(glb_path) if ResourceLoader.exists(glb_path) else null
 	var model: Node3D
@@ -3581,32 +3629,25 @@ func _make_pu_node(type: String, cx: int, cy: int) -> Node3D:
 		sph.radius = 0.36; sph.height = 0.72
 		fallback.mesh = sph
 		model = fallback
-	model.scale = Vector3.ONE * 2.5   # make models clearly visible from across the board
+	model.scale = Vector3.ONE * 3.0
 	root.add_child(model)
 
-	# Colour-matched point light gives each pickup a glow halo in the scene.
+	# ── beacon light ─────────────────────────────────────────────────────────
 	var light := OmniLight3D.new()
-	light.omni_range   = 5.5
-	light.light_energy = 3.8
-	match type:
-		PU_SPEED:  light.light_color = Color(0.05, 0.55, 0.1)
-		PU_GHOST:  light.light_color = Color(1.0,  0.80, 0.05)
-		PU_BOMB:   light.light_color = Color(1.0,  0.08, 0.05)
-		PU_CLEAR:  light.light_color = Color(0.9, 0.95, 1.0)
-		PU_FREEZE: light.light_color = Color(0.0, 0.8,  1.0)
-		PU_MAGNET: light.light_color = Color(0.8, 0.2,  1.0)
+	light.light_color  = col
+	light.omni_range   = 4.0
+	light.light_energy = 1.8
 	root.add_child(light)
 
-	# Bob up and down continuously.
+	# ── bob + spin ───────────────────────────────────────────────────────────
 	var bob := root.create_tween()
 	bob.set_loops()
-	bob.tween_property(root, "position:y", root.position.y + 0.14, 0.6).set_trans(Tween.TRANS_SINE)
-	bob.tween_property(root, "position:y", root.position.y,        0.6).set_trans(Tween.TRANS_SINE)
+	bob.tween_property(root, "position:y", root.position.y + 0.18, 0.65).set_trans(Tween.TRANS_SINE)
+	bob.tween_property(root, "position:y", root.position.y,         0.65).set_trans(Tween.TRANS_SINE)
 
-	# Slow Y-spin so the shape reads from all angles.
 	var spin := model.create_tween()
 	spin.set_loops()
-	spin.tween_property(model, "rotation:y", TAU, 3.2).set_trans(Tween.TRANS_LINEAR)
+	spin.tween_property(model, "rotation:y", TAU, 2.8).set_trans(Tween.TRANS_LINEAR)
 
 	return root
 
