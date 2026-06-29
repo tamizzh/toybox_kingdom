@@ -98,6 +98,7 @@ const WORLD_CONQUEST := true
 
 var _active_w: int = GW   # playable width in cells; cells outside this = frozen zone
 var _active_h: int = GH   # playable height in cells
+var _board_denom: int = GW * GH  # denominator for territory %; campaign uses active area, endless uses full grid
 var _land_mask: PackedByteArray   # WORLD_CONQUEST: 1=land 0=ocean per cell
 var _land_bbox := {"x0": 0, "y0": 0, "x1": GW - 1, "y1": GH - 1}  # bbox of land cells
 
@@ -297,6 +298,9 @@ func _ready() -> void:
 		_n_kingdoms = 1 + _rival_diffs.size()
 		if fast == "":
 			_match_t = Campaign.duration(_stage)
+		_active_w = GW / 3   # campaign uses a 1/3-size board (128×96)
+		_active_h = GH / 3
+		_board_denom = _active_w * _active_h
 	# The very first match the player ever starts gets the guided coach + a pure-carve
 	# HUD (no build economy yet). Counted once here so a "Play Again" reload is match 2+.
 	# TBK_FIRSTMATCH=1 forces the first-match tutorial path for QA without resetting the save.
@@ -1269,7 +1273,7 @@ func _close_pause_panel() -> void:
 
 func _check_match_end() -> void:
 	var human = _rulers[0]
-	var human_pct: float = float(grid.territory_count(human.kid)) / float(GW * GH)
+	var human_pct: float = float(grid.territory_count(human.kid)) / float(_board_denom)
 	var alive := 0
 	for a in _rulers:
 		if not a.eliminated:
@@ -1329,7 +1333,7 @@ func _end_match(win: bool, reason: String) -> void:
 	_ended = true
 	if _rulers[0].avatar:
 		_rulers[0].avatar.auto_input = false   # freeze the human (AI halts via the early return)
-	var pct: float = float(grid.territory_count(_rulers[0].kid)) / float(GW * GH)
+	var pct: float = float(grid.territory_count(_rulers[0].kid)) / float(_board_denom)
 	_peak_pct = maxf(_peak_pct, pct)
 	var rank := _human_rank()
 	var coins: int = int(pct * 300.0) + maxi(0, _n_kingdoms - rank) * 15 + (60 if win else 0)
@@ -1673,7 +1677,7 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	for kid in _kids:
 		standings.append({"kid": kid, "n": grid.territory_count(kid)})
 	standings.sort_custom(func(x, y): return x["n"] > y["n"])
-	var total := float(GW * GH)
+	var total := float(_board_denom)
 	for r in standings.size():
 		var e: Dictionary = standings[r]
 		_result_label(col, "%d.   %s   %.1f%%" % [r + 1, _kid_name[e["kid"]], 100.0 * e["n"] / total], 24,
@@ -3417,7 +3421,7 @@ func _hud_tick(delta: float) -> void:
 			if grid.trail_length(_rulers[0].kid) > 0
 			else "Leave your land — draw a loop!")
 
-	var total := float(GW * GH)
+	var total := float(_board_denom)
 	var pct := 100.0 * owned / total
 	_peak_pct = maxf(_peak_pct, float(owned) / total)   # endless score input
 	var pop := _population_estimate(owned)
