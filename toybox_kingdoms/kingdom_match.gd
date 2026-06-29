@@ -229,6 +229,18 @@ const PU_SPAWN_INTERVAL := 25.0   # seconds between spawn waves
 const PU_PER_WAVE    := 3         # how many pickups appear per wave
 const PU_SPEED_BOOST := 3.5       # extra speed added on top of current avatar speed
 
+# Power-up models preloaded at parse time. Using load() inside _make_pu_node() blocks
+# the main thread on the first GLB parse (a few ms) — on a 25s spawn cadence that's
+# the "stutters at times" hitch. Preloading moves the cost to startup.
+const PU_SCENES := {
+	PU_SPEED:  preload("res://assets/powerups/pu_speed.glb"),
+	PU_GHOST:  preload("res://assets/powerups/pu_ghost.glb"),
+	PU_BOMB:   preload("res://assets/powerups/pu_bomb.glb"),
+	PU_CLEAR:  preload("res://assets/powerups/pu_clear.glb"),
+	PU_FREEZE: preload("res://assets/powerups/pu_freeze.glb"),
+	PU_MAGNET: preload("res://assets/powerups/pu_magnet.glb"),
+}
+
 var _powerup_cells  := {}   # Vector2i -> String (type)
 var _powerup_nodes  := {}   # Vector2i -> Node3D (the pickup mesh+light)
 var _pu_disc_mats   := {}   # type -> StandardMaterial3D (one per type, created once)
@@ -675,7 +687,7 @@ func _physics_process(delta: float) -> void:
 		var _ts0 := Time.get_ticks_usec(); if _slabs: _slabs.rebuild()
 		var _te0 := Time.get_ticks_usec()
 		_last_terr_us = (_te0 - _tg0)
-		print("[TERR] ground=%dµs  slabs=%dµs" % [_ts0-_tg0, _te0-_ts0])
+		if _dbg: print("[TERR] ground=%dµs  slabs=%dµs" % [_ts0-_tg0, _te0-_ts0])
 		_minimap_pending = true
 		grid.reset_dirty()
 		_terr_rebuild_t = 0.1
@@ -712,7 +724,7 @@ func _physics_process(delta: float) -> void:
 		var out := "[TICK/%d] " % _PT_WINDOW
 		for k in keys:
 			out += "%s=%dµs  " % [k, _pt[k] / _PT_WINDOW]
-		print(out)
+		if _dbg: print(out)
 		# Update on-screen overlay
 		if _dbg_label:
 			var total_avg := 0
@@ -767,18 +779,18 @@ func _kingdom_tick(delta: float) -> void:
 		if _decor_phase == 0:
 			if v != _last_pop_version:
 				var _tp0 := Time.get_ticks_usec(); _populace.rebuild(_kid_tier)
-				print("[KT] populace=%dµs" % (Time.get_ticks_usec()-_tp0))
+				if _dbg: print("[KT] populace=%dµs" % (Time.get_ticks_usec()-_tp0))
 				_last_pop_version = v
 			_decor_phase = 1
 		else:
 			if v != _last_decor_version:
 				var _td0 := Time.get_ticks_usec(); _decor.rebuild(_kid_tier)
-				print("[KT] decor=%dµs" % (Time.get_ticks_usec()-_td0))
+				if _dbg: print("[KT] decor=%dµs" % (Time.get_ticks_usec()-_td0))
 				_last_decor_version = v
 			_decor_phase = 0
 		_decor_cooldown = 1.2 if DeviceMode.low_gfx else 0.0
 	var _tw0 := Time.get_ticks_usec(); _windmills.rebuild(_kid_tier)
-	print("[KT] windmills=%dµs" % (Time.get_ticks_usec()-_tw0))
+	if _dbg: print("[KT] windmills=%dµs" % (Time.get_ticks_usec()-_tw0))
 	_road_tick += 1
 	var _road_interval := 16 if DeviceMode.low_gfx else 12
 	if _road_tick >= _road_interval and grid.version != _last_road_version:
@@ -788,7 +800,7 @@ func _kingdom_tick(delta: float) -> void:
 		for a in _rulers:
 			if not a.eliminated:
 				_roads.rebuild(a.kid, _kid_tier.get(a.kid, 1), grid.territory_count(a.kid))
-		print("[KT] roads=%dµs" % (Time.get_ticks_usec()-_tr0))
+		if _dbg: print("[KT] roads=%dµs" % (Time.get_ticks_usec()-_tr0))
 	_minimap.update_territory(grid, _kid_color)
 	for a in _rulers:
 		if a.eliminated:
@@ -1856,7 +1868,7 @@ func _advance_agent(a, target_cell: Vector2i) -> void:
 		var _ec1 := Time.get_ticks_usec()
 		if int(res.get("captured",0)) > 0:
 			_last_cap_us = _ec1 - _ec0
-			print("[CAP] enter_cell=%dµs cap=%d" % [_last_cap_us, int(res.get("captured",0))])
+			if _dbg: print("[CAP] enter_cell=%dµs cap=%d" % [_last_cap_us, int(res.get("captured",0))])
 		_check_powerup_pickup(a, step)
 		var killed: int = int(res.get("killed", 0))
 		if killed != 0 and _kid_to_agent.has(killed):
@@ -3618,8 +3630,7 @@ func _make_pu_node(type: String, cx: int, cy: int) -> Node3D:
 	pulse.tween_property(disc, "scale", Vector3(0.85, 1.0, 0.85), 0.55).set_trans(Tween.TRANS_SINE)
 
 	# ── 3D model ─────────────────────────────────────────────────────────────
-	var glb_path := "res://assets/powerups/pu_%s.glb" % type
-	var scene = load(glb_path) if ResourceLoader.exists(glb_path) else null
+	var scene: PackedScene = PU_SCENES.get(type)
 	var model: Node3D
 	if scene:
 		model = scene.instantiate()
@@ -3633,11 +3644,15 @@ func _make_pu_node(type: String, cx: int, cy: int) -> Node3D:
 	root.add_child(model)
 
 	# ── beacon light ─────────────────────────────────────────────────────────
-	var light := OmniLight3D.new()
-	light.light_color  = col
-	light.omni_range   = 4.0
-	light.light_energy = 1.8
-	root.add_child(light)
+	# Dynamic OmniLights are the priciest scene element on the mobile renderer.
+	# Up to PU_PER_WAVE are active at once — skip on low_gfx. The emissive glow
+	# disc above already makes each pickup readable from above without a real light.
+	if not DeviceMode.low_gfx:
+		var light := OmniLight3D.new()
+		light.light_color  = col
+		light.omni_range   = 4.0
+		light.light_energy = 1.8
+		root.add_child(light)
 
 	# ── bob + spin ───────────────────────────────────────────────────────────
 	var bob := root.create_tween()

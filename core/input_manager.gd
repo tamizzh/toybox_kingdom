@@ -41,7 +41,9 @@ func _add_key(action: String, keycode: Key) -> void:
 func _process(_delta: float) -> void:
 	for id in MAX_PLAYERS:
 		var v: Vector2 = _touch_move[id] + _kbd_move(id)
-		if v.length() > 1.0:
+		# length_squared() avoids a sqrt when the vector is already within the unit
+		# circle (the common case); normalize (which sqrts) only when clamping is needed.
+		if v.length_squared() > 1.0:
 			v = v.normalized()
 		_move_now[id] = v
 		var a := _raw_action(id)

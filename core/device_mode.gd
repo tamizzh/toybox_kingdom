@@ -78,6 +78,13 @@ func _apply_window() -> void:
 	# in lock-step with the monitor refresh, so a frame is never torn mid-scanout.
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 
+	# Cap the frame rate to 60 on phones. The 14 Pro Max (and other ProMotion
+	# devices) run a 120 Hz panel, so with VSync alone the renderer targets 120 fps —
+	# double the GPU work, and any single missed frame reads as a visible hitch.
+	# Pinning to 60 halves GPU load and steadies frame pacing. Desktop stays uncapped.
+	if is_mobile:
+		Engine.max_fps = 60
+
 	# Desktop: project.godot window/size/mode=0 opens a 1560x720 windowed box.
 	# Mobile fullscreen is forced here because the export templates
 	# handle the window differently on Android/iOS. On web the canvas size is
