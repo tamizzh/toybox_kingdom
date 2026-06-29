@@ -160,10 +160,7 @@ func enter_cell(id: int, x: int, y: int) -> Dictionary:
 	# 1. Trail interactions take priority — this cell may hold a pending trail.
 	var t := int(trail_owner[idx])
 	if t == id:
-		# Crossed our own live trail -> we cut ourselves off and die.
-		res["died"] = true
-		_kill_trail(id)
-		return res
+		pass  # Self-crossing is harmless; just continue normally.
 	elif t != NEUTRAL:
 		# Cut a rival's trail before they could close it -> they die, we live.
 		_kill_trail(t)
