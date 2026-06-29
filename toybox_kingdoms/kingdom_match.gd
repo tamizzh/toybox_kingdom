@@ -391,11 +391,7 @@ func _ready() -> void:
 	# Endless: on islands after the first, fade in from the clear-wipe cover so the jump
 	# reads as continuous; announce the island either way.
 	if _mode in ["endless", "timed"]:
-		if OS.get_environment("TBK_SIM_SLIDE") == "1":
-			# DEBUG: replay the island-to-island slide on a loop against the live island so the
-			# transition can be eyeballed without actually conquering an island each time.
-			_sim_slide_loop()
-		elif _endless_island > 0 and _clear_frame != null:
+		if _endless_island > 0 and _clear_frame != null:
 			# Arrived from an island-CLEAR (the cleared island left us a snapshot): slide the
 			# new island in from the right, then zoom in.
 			_endless_intro()
@@ -1361,24 +1357,6 @@ func _endless_intro() -> void:
 
 	# The new island has landed (still zoomed-out) — name it, hold, then zoom in.
 	await _island_arrive_beat()
-
-# DEBUG (TBK_SIM_SLIDE=1): play the island-slide transition on a loop. Each pass grabs the
-# current screen as a stand-in "cleared island" snapshot, then runs the real _endless_intro
-# against the live island — so the slide/pan/name/zoom motion can be checked without winning.
-func _sim_slide_loop() -> void:
-	await get_tree().create_timer(1.5).timeout
-	while is_inside_tree():
-		await RenderingServer.frame_post_draw
-		if not is_inside_tree():
-			return
-		var img := get_viewport().get_texture().get_image()
-		if img != null and not img.is_empty():
-			_clear_frame = img
-		await _endless_intro()
-		if not is_inside_tree():
-			return
-		# Hold on the landed island for a beat, then replay.
-		await get_tree().create_timer(2.0).timeout
 
 # World-units across the screen at the overview vantage — used to pan the new island in
 # from exactly one screen-width away (so the slide matches the cover's pixel slide).
