@@ -33,7 +33,7 @@ PADDING = 0.03   # fraction of grid to leave as border around the country shape
 # dissolves disputed-border slivers — so we deliberately SKIP it for India, whose
 # official point-of-view outline must stay exact.
 SIMPLIFY = True
-SKIP_SIMPLIFY = {"India"}
+SKIP_SIMPLIFY = set()  # all countries get toy-paper rounding; India still uses POV:ind data
 SIMPLIFY_FRAC = 0.008   # Douglas-Peucker tolerance as a fraction of bbox diagonal
 CHAIKIN_PASSES = 2      # corner-cutting rounds (each pass ~2x points, smoother)
 
