@@ -25,6 +25,18 @@ GRID_W = 384
 GRID_H = 288
 PADDING = 0.03   # fraction of grid to leave as border around the country shape
 
+# ── Toy-paper stylization ────────────────────────────────────────────────────
+# Real Natural Earth outlines are survey-accurate, which reads as an atlas, not a
+# toy. We chunk them up: Douglas-Peucker drops fine coastline detail, then Chaikin
+# corner-cutting rounds the angular result into smooth paper-cut curves. The net
+# look is a recognizable-but-abstract "Risk territory" blob. As a bonus this
+# dissolves disputed-border slivers — so we deliberately SKIP it for India, whose
+# official point-of-view outline must stay exact.
+SIMPLIFY = True
+SKIP_SIMPLIFY = {"India"}
+SIMPLIFY_FRAC = 0.008   # Douglas-Peucker tolerance as a fraction of bbox diagonal
+CHAIKIN_PASSES = 2      # corner-cutting rounds (each pass ~2x points, smoother)
+
 # Natural Earth 1:110m countries — small (~400 KB), good enough for 128×96 cells.
 GEOJSON_URL = (
     "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/"
@@ -104,6 +116,75 @@ def _ring_area(ring):
         x1, y1 = ring[(i + 1) % n][0], ring[(i + 1) % n][1]
         a += x0 * y1 - x1 * y0
     return abs(a) * 0.5
+
+
+def _perp_dist(p, a, b):
+    """Perpendicular distance from point p to the segment a→b (deg)."""
+    ax, ay = a[0], a[1]
+    bx, by = b[0], b[1]
+    px, py = p[0], p[1]
+    dx, dy = bx - ax, by - ay
+    if dx == 0.0 and dy == 0.0:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    cx, cy = ax + t * dx, ay + t * dy
+    return math.hypot(px - cx, py - cy)
+
+
+def _douglas_peucker(points, tol):
+    """Ramer-Douglas-Peucker polyline simplification. `points` is a list of
+    [lon, lat]; returns a reduced list keeping the overall silhouette."""
+    if len(points) < 3:
+        return points
+    dmax, idx = 0.0, 0
+    a, b = points[0], points[-1]
+    for i in range(1, len(points) - 1):
+        d = _perp_dist(points[i], a, b)
+        if d > dmax:
+            dmax, idx = d, i
+    if dmax > tol:
+        left = _douglas_peucker(points[:idx + 1], tol)
+        right = _douglas_peucker(points[idx:], tol)
+        return left[:-1] + right
+    return [a, b]
+
+
+def _chaikin(points, passes):
+    """Chaikin corner-cutting on a CLOSED ring → smooth rounded curve.
+    Input/output rings are closed (first point repeated at the end)."""
+    pts = points[:-1] if points and points[0] == points[-1] else list(points)
+    if len(pts) < 3:
+        return points
+    for _ in range(passes):
+        out = []
+        n = len(pts)
+        for i in range(n):
+            p0 = pts[i]
+            p1 = pts[(i + 1) % n]
+            out.append([0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1]])
+            out.append([0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1]])
+        pts = out
+    pts.append(pts[0])   # re-close the ring
+    return pts
+
+
+def _stylize_rings(rings):
+    """Chunk-and-round every ring into a toy-paper silhouette: Douglas-Peucker to
+    shed fine detail, then Chaikin to round the corners. Tolerance scales with the
+    shape's bounding-box diagonal so big and small countries chunk proportionally.
+    Rings that would collapse below a triangle are left untouched."""
+    lon_min, lat_min, lon_max, lat_max = _bbox(rings)
+    diag = math.hypot(lon_max - lon_min, lat_max - lat_min)
+    tol = SIMPLIFY_FRAC * diag
+    out = []
+    for ring in rings:
+        simplified = _douglas_peucker(ring, tol)
+        if len(simplified) < 4:
+            out.append(ring)          # too small to chunk — keep as-is
+            continue
+        out.append(_chaikin(simplified, CHAIKIN_PASSES))
+    return out
 
 
 def _flatten_rings(geometry, max_dist_deg=45.0, keep_all=False):
@@ -365,12 +446,16 @@ def main():
         else:
             rings = _flatten_rings(feat["geometry"],
                                    keep_all=(ne_name in KEEP_ALL_RINGS))
+            stylized = SIMPLIFY and ne_name not in SKIP_SIMPLIFY
+            if stylized:
+                rings = _stylize_rings(rings)
             cells = rasterize_country(rings)
             mask_bytes = cells_to_bytes(cells)
             land = sum(mask_bytes)
             src_tag = f"POV:{pov_code}" if pov_code else "110m"
+            style_tag = "toy" if stylized else "exact"
             print(f"  {display:<15} {land:>5} land cells  "
-                  f"({len(rings)} rings, {src_tag})")
+                  f"({len(rings)} rings, {src_tag}, {style_tag})")
         country_data.append((ne_name, display, color_hex, rivals, mask_bytes))
 
     # ── Sort islands by land area ascending so progression grows in size ──────
