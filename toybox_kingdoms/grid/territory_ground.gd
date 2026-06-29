@@ -8,7 +8,8 @@ extends Node3D
 #   • owned cells    -> that kingdom's saturated clay, with tonal mottling
 #   • cell seams     -> darkened (baked AO line) so regions read as sculpted
 #   • the coastline  -> a lighter sandy rim before it drops to the water
-# 1 draw call. The only per-tick cost is repainting the 128x96 ownership image.
+# 1 draw call. The only per-tick cost is repainting the dirty rect of the grid-sized
+# (GW×GH) ownership image — see update()'s bounded loop.
 
 const TOP_Y := 0.04          # clay surface height (props sit here); base slab is flush under it
 const BUMP := 0.014          # near-flat board relief (target reads handcrafted-flat, not bumpy clay); plateau still gives the silhouette
@@ -154,10 +155,10 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	var mesh := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
 	pm.size = Vector2(_w * p_cell, _h * p_cell)
-	# One quad per cell gives per-cell clay bumps; on mobile we halve the subdivision
-	# (~12k -> ~3k verts) — the ownership tint is sampled per-fragment from the texture
-	# so only the geometric relief softens, which is invisible at the play camera.
-	var sub_div: int = 2 if DeviceMode.is_mobile else 1
+	# One quad per cell gives per-cell clay bumps; on low_gfx (mobile + web) we halve the
+	# subdivision (~12k -> ~3k verts) — the ownership tint is sampled per-fragment from the
+	# texture so only the geometric relief softens, which is invisible at the play camera.
+	var sub_div: int = 2 if DeviceMode.low_gfx else 1
 	pm.subdivide_width = _w / sub_div
 	pm.subdivide_depth = _h / sub_div
 	mesh.mesh = pm
@@ -267,9 +268,13 @@ func set_active_half(new_half: Vector2) -> void:
 func set_land_mask(mask: PackedByteArray) -> void:
 	if not _mat:
 		return
-	var img := Image.create(_w, _h, false, Image.FORMAT_R8)
-	for i in mask.size():
-		var x := i % _w
-		var y := i / _w
-		img.set_pixel(x, y, Color(float(mask[i]), 0.0, 0.0))
+	# Build the R8 texture from a single buffer upload instead of 12k set_pixel()
+	# calls (each allocs a Color + bounds-checks) — same result, ~10-50x cheaper.
+	var n := _w * _h
+	var buf := PackedByteArray()
+	buf.resize(n)
+	var count: int = mini(mask.size(), n)
+	for i in count:
+		buf[i] = 255 if mask[i] != 0 else 0
+	var img := Image.create_from_data(_w, _h, false, Image.FORMAT_R8, buf)
 	_mat.set_shader_parameter("land_mask", ImageTexture.create_from_image(img))

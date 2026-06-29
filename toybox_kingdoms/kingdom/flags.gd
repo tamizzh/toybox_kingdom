@@ -72,28 +72,36 @@ func _batch(mesh: Mesh, wave: bool) -> MultiMeshInstance3D:
 func rebuild() -> void:
 	var w: int = grid.w
 	var h: int = grid.h
-	var n: int = w * h
-	# Packed arrays keep this full-board scan allocation-light (no Variant boxing).
+	# Packed arrays keep this scan allocation-light (no Variant boxing). Bounded to the
+	# owned-land box (see TerritoryGrid.owned_min/max); `i` stays the flat index so the
+	# hash-thinning lands on the same cells as a full-board scan.
 	var pole_pos := PackedVector3Array()
 	var ban_pos := PackedVector3Array()
 	var ban_col := PackedColorArray()
-	for i in n:
-		var kid: int = grid.owner[i]
-		if kid == 0:
-			continue
-		var cx := i % w
-		var cy := i / w
-		if not _is_border(i, cx, cy, w, h, kid):
-			continue
-		# hash-stable thinning → ~1 flag per 6 border cells (spaced, never crowded)
-		if ((i * 40503) & 0x7fffffff) % 6 != 0:
-			continue
+	var x0 := 0; var y0 := 0; var x1 := -1; var y1 := -1
+	if grid.has_owned():
+		x0 = grid.owned_min.x; y0 = grid.owned_min.y
+		x1 = grid.owned_max.x; y1 = grid.owned_max.y
+	for cy in range(y0, y1 + 1):
 		if pole_pos.size() >= FLAG_CAP:
 			break
-		var base := _c2w(cx, cy)
-		pole_pos.append(base)
-		ban_pos.append(base)
-		ban_col.append(colors.get(kid, Color.WHITE))
+		var _row := cy * w
+		for cx in range(x0, x1 + 1):
+			var i := _row + cx
+			var kid: int = grid.owner[i]
+			if kid == 0:
+				continue
+			if not _is_border(i, cx, cy, w, h, kid):
+				continue
+			# hash-stable thinning → ~1 flag per 6 border cells (spaced, never crowded)
+			if ((i * 40503) & 0x7fffffff) % 6 != 0:
+				continue
+			if pole_pos.size() >= FLAG_CAP:
+				break
+			var base := _c2w(cx, cy)
+			pole_pos.append(base)
+			ban_pos.append(base)
+			ban_col.append(colors.get(kid, Color.WHITE))
 	_fill(_pole, pole_pos, PackedColorArray(), Vector3(0, PROP_Y + 0.45, 0), POLE_COL, true)
 	# banner perched near the pole top, offset to one side so its inner edge meets the pole
 	_fill(_banner, ban_pos, ban_col, Vector3(0.16, PROP_Y + 0.72, 0), Color.WHITE, false)

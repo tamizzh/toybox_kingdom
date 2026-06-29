@@ -54,7 +54,7 @@ func decide(agent, m) -> Vector2:
 	# conquest we tolerate much closer rivals (the target ruler is right there) so
 	# the attack can actually close instead of aborting the moment they're nearby.
 	var flee_at: float = _danger * (0.35 if _attacking else 1.0)
-	if m.grid.trail_length(agent.kid) > 0 and m.nearest_enemy_dist(agent) < flee_at:
+	if m.grid.trail_length(agent.kid) > 0 and m.nearest_enemy_dist_sq(agent) < flee_at * flee_at:
 		return _steer(pos, m._c2w(agent.home.x, agent.home.y, 0.0))
 
 	if _wi >= _wps.size():

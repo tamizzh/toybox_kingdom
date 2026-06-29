@@ -12,6 +12,7 @@ var colors := {}
 var _homes := {}
 var _blades: Array = []          # blade-hub Node3Ds to spin
 var _built := {}                 # kid -> true once its windmills exist
+var _mat_cache := {}             # colour html -> shared StandardMaterial3D
 
 # fixed offsets (in cells) from the castle so the windmills frame the keep
 const OFFSETS := [Vector2i(8, 5), Vector2i(-7, 6), Vector2i(6, -7)]
@@ -35,7 +36,9 @@ func rebuild(tiers: Dictionary = {}) -> void:
 		_built[kid] = true
 		var home: Vector2i = _homes[kid]
 		var col: Color = colors.get(kid, Color.WHITE)
-		for n in mini(PER_KINGDOM, OFFSETS.size()):
+		# Each windmill is ~6 separate meshes (≈6 draw calls); on web/mobile single-thread
+		# that draw-call cost matters, so build one per kingdom instead of two.
+		for n in mini(_per_kingdom(), OFFSETS.size()):
 			var off: Vector2i = OFFSETS[n]
 			var cx := clampi(home.x + off.x, 0, grid.w - 1)
 			var cy := clampi(home.y + off.y, 0, grid.h - 1)
@@ -89,10 +92,20 @@ func _make_windmill(pos: Vector3, col: Color) -> void:
 	_blades.append(hub)
 
 func _mat(c: Color) -> StandardMaterial3D:
+	# Share one material per colour (tower cream, blade cream, kingdom cap) across all
+	# windmills instead of newing ~6 per windmill.
+	var key := c.to_html()
+	var cached = _mat_cache.get(key)
+	if cached != null:
+		return cached
 	var m := StandardMaterial3D.new()
 	m.albedo_color = c
 	m.roughness = 0.8
+	_mat_cache[key] = m
 	return m
+
+func _per_kingdom() -> int:
+	return 1 if DeviceMode.low_gfx else PER_KINGDOM
 
 func _c2w(cx: int, cy: int) -> Vector3:
 	return Vector3((cx + 0.5 - grid.w * 0.5) * cell, 0.0, (cy + 0.5 - grid.h * 0.5) * cell)
@@ -103,7 +116,7 @@ func get_road_nodes(kid: int) -> PackedVector3Array:
 		return PackedVector3Array()
 	var home: Vector2i = _homes.get(kid, Vector2i(grid.w / 2, grid.h / 2))
 	var out := PackedVector3Array()
-	for n in mini(PER_KINGDOM, OFFSETS.size()):
+	for n in mini(_per_kingdom(), OFFSETS.size()):
 		var off: Vector2i = OFFSETS[n]
 		var cx := clampi(home.x + off.x, 0, grid.w - 1)
 		var cy := clampi(home.y + off.y, 0, grid.h - 1)

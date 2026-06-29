@@ -154,7 +154,7 @@ func rebuild() -> void:
 		return
 	# Desktop can afford a denser, more "alive" world than phones; phones thin the
 	# forest hard (fewer instances = less vertex + overdraw cost).
-	var dense: float = 0.6 if DeviceMode.is_mobile else 1.8
+	var dense: float = 0.6 if DeviceMode.low_gfx else 1.8
 	var tree_cap := int(TREE_CAP * dense)
 	var rock_cap := int(ROCK_CAP * dense)
 	var w: int = grid.w

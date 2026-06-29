@@ -174,7 +174,10 @@ func setup(p_board_half: Vector2, p_extent := 360.0, p_y := -0.16) -> void:
 	var sh := Shader.new()
 	# TBK_OCEAN_MOBILE=1 forces the cheap mobile sea on desktop so its shader can be
 	# eyeballed at full resolution (no 0.75 mobile upscale softening the read).
-	var use_mobile := DeviceMode.is_mobile or OS.get_environment("TBK_OCEAN_MOBILE") == "1"
+	# low_gfx (mobile OR web) takes the cheap unshaded trig sea — desktop browsers are
+	# false for is_mobile but still can't afford the full fbm() fill. TBK_OCEAN_MOBILE=1
+	# forces it on desktop native for eyeballing.
+	var use_mobile := DeviceMode.low_gfx or OS.get_environment("TBK_OCEAN_MOBILE") == "1"
 	sh.code = MOBILE_SHADER_CODE if use_mobile else SHADER_CODE
 	mat.shader = sh
 	mat.set_shader_parameter("board_half", p_board_half)

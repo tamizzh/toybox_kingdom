@@ -46,6 +46,39 @@ func descend(secs: float = 1.1) -> void:
 	tw.tween_property(self, "zoom", 1.0, secs).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
 	tw.tween_callback(func() -> void: _intro = false)
 
+# ── Island-to-island slide transition ────────────────────────────────────────
+# Zoom OUT to the same overhead framing as the map button, as the current island
+# is cleared. Owns the zoom (_intro) so the HUD/match don't fight it; the overview
+# lerp (see _process) eases the rig up to the map vantage over `secs`.
+func transition_overview(center: Vector3 = Vector3.ZERO, secs: float = 1.0) -> void:
+	_orbit = false
+	_intro = true
+	start_overview(center)
+	var tw := create_tween()
+	tw.tween_property(self, "fov", 55.0, secs).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
+
+# SNAP straight to the overhead overview (no lerp) — used on the freshly-loaded next
+# island so it's framed in the map vantage the instant we snapshot it for the slide.
+func snap_overview(center: Vector3 = Vector3.ZERO) -> void:
+	_orbit = false
+	_intro = true
+	_overview = true
+	_overview_center = center
+	fov = 55.0
+	global_position = center + OVERVIEW_POS
+	look_at(center, Vector3.UP)
+
+# Zoom IN from the overview vantage into normal hero framing once the new island has
+# slid into place. Drops overview so _process resumes the follow lerp (rig eases down
+# to the hero offset); the fov tween pushes back to the play framing.
+func transition_descend(secs: float = 1.0) -> void:
+	end_overview()
+	offset = Vector3(0.0, 12.6, 15.2)
+	zoom = 1.0
+	var tw := create_tween()
+	tw.tween_property(self, "fov", 46.0, secs).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	tw.tween_callback(func() -> void: _intro = false)
+
 func _ready() -> void:
 	fov = 46.0
 	make_current()

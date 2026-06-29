@@ -37,9 +37,20 @@ void fragment() {
 }
 """
 
+# One compiled copy of ROOF_SHADER shared by every castle — compiling Shader.new() on
+# each tier-up (and colour change) caused a hitch on mobile. Lazily built on first use.
+static var _shared_roof_shader: Shader
+
+static func _roof_shader() -> Shader:
+	if _shared_roof_shader == null:
+		_shared_roof_shader = Shader.new()
+		_shared_roof_shader.code = ROOF_SHADER
+	return _shared_roof_shader
+
 var color: Color = Color.WHITE
 var tier:  int   = 0
 var _model: Node3D
+var _roof_mat: ShaderMaterial   # this castle's roof material — colour updated in place
 
 
 func set_color(c: Color) -> void:
@@ -63,6 +74,7 @@ func _build() -> void:
 	if _model != null:
 		_model.queue_free()
 		_model = null
+	_roof_mat = null   # new model → resolve its roof material fresh
 	var idx := clampi(tier - 1, 0, CASTLES.size() - 1)
 	_model = CASTLES[idx].instantiate()
 	add_child(_model)
@@ -89,14 +101,16 @@ func _apply_stone() -> void:
 func _apply_roof() -> void:
 	if _model == null:
 		return
-	var roof := _model.find_child("roof", true, false)
-	if roof is MeshInstance3D:
-		var sh := Shader.new()
-		sh.code = ROOF_SHADER
-		var m := ShaderMaterial.new()
-		m.shader = sh
-		m.set_shader_parameter("roof_color", color)
-		(roof as MeshInstance3D).material_override = m
+	# Reuse this castle's roof material (set up once per model) and just update the colour
+	# — a plain set_color() no longer walks the tree or recompiles a shader.
+	if _roof_mat == null:
+		var roof := _model.find_child("roof", true, false)
+		if not (roof is MeshInstance3D):
+			return
+		_roof_mat = ShaderMaterial.new()
+		_roof_mat.shader = _roof_shader()
+		(roof as MeshInstance3D).material_override = _roof_mat
+	_roof_mat.set_shader_parameter("roof_color", color)
 
 
 func _pop() -> void:

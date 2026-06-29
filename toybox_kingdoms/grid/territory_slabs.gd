@@ -123,50 +123,56 @@ func _is_border(i: int, cx: int, cy: int, w: int, h: int, kid: int) -> bool:
 func rebuild() -> void:
 	var w: int = grid.w
 	var h: int = grid.h
-	var n: int = w * h
 	var hw: float = grid.w * 0.5
 	var hh: float = grid.h * 0.5
 	var wall_pos := PackedVector3Array()
 	var wall_col := PackedColorArray()
 	var wall_h := PackedFloat32Array()
 	var wall_rot := PackedFloat32Array()
-	for i in n:
-		var oid: int = grid.owner[i]
-		if oid == 0:
-			continue
-		var cx: int = i % w
-		var cy: int = i / w
-		var wx: float = (cx + 0.5 - hw) * cell
-		var wz: float = (cy + 0.5 - hh) * cell
-		var base: Color = colors.get(oid, Color.WHITE)
-		var wc: Color = base                                # walls: exact kingdom colour, like the roofs
-		# Raised slab plates are disabled (walls-only look): claimed land stays flat and
-		# its colour comes from the ground plane (territory_ground). Only the perimeter
-		# wall blocks are emitted below.
-		# Border wall: along EVERY exposed cell edge (a side facing a cell this kingdom
-		# doesn't own, or the world edge) lay a tight row of WALL_SEG small bricks hugging
-		# the cell rim — a continuous ring of little roof-coloured cubes, like the target.
-		for di in 4:
-			var dx: int = [1, -1, 0, 0][di]
-			var dy: int = [0, 0, 1, -1][di]
-			var nx: int = cx + dx
-			var ny: int = cy + dy
-			var exposed: bool = (nx < 0 or ny < 0 or nx >= w or ny >= h) \
-				or int(grid.owner[ny * w + nx]) != oid
-			if not exposed:
+	# Walk only the owned-land box (see TerritoryGrid.owned_min/max). `i` stays the flat
+	# index so the per-edge hash (and thus the wall jitter) is identical to a full scan.
+	var x0 := 0; var y0 := 0; var x1 := -1; var y1 := -1
+	if grid.has_owned():
+		x0 = grid.owned_min.x; y0 = grid.owned_min.y
+		x1 = grid.owned_max.x; y1 = grid.owned_max.y
+	for cy in range(y0, y1 + 1):
+		var _row := cy * w
+		for cx in range(x0, x1 + 1):
+			var i := _row + cx
+			var oid: int = grid.owner[i]
+			if oid == 0:
 				continue
-			# edge centre (out toward the rim) + the axis running ALONG the edge
-			var ex: float = wx + WALL_INSET * cell * float(dx)
-			var ez: float = wz + WALL_INSET * cell * float(dy)
-			var ax: float = float(dy)   # perpendicular to (dx,dy) → along the edge
-			var az: float = float(dx)
-			for s in WALL_SEG:
-				var t := (float(s) - (WALL_SEG - 1) * 0.5) / float(WALL_SEG)   # spread along edge
-				var r := _hash(i * 4 + di + s * 131)
-				wall_pos.append(Vector3(ex + ax * t * cell, BASE_Y, ez + az * t * cell))
-				wall_col.append(wc)                              # walls darker than the tiles
-				wall_h.append(WALL_BASE_H * (0.78 + r * 0.5))    # ~0.12..0.20 → gentle crenellation
-				wall_rot.append((r - 0.5) * 0.14)                # ±0.07 rad yaw jitter
+			var wx: float = (cx + 0.5 - hw) * cell
+			var wz: float = (cy + 0.5 - hh) * cell
+			var base: Color = colors.get(oid, Color.WHITE)
+			var wc: Color = base                                # walls: exact kingdom colour, like the roofs
+			# Raised slab plates are disabled (walls-only look): claimed land stays flat and
+			# its colour comes from the ground plane (territory_ground). Only the perimeter
+			# wall blocks are emitted below.
+			# Border wall: along EVERY exposed cell edge (a side facing a cell this kingdom
+			# doesn't own, or the world edge) lay a tight row of WALL_SEG small bricks hugging
+			# the cell rim — a continuous ring of little roof-coloured cubes, like the target.
+			for di in 4:
+				var dx: int = [1, -1, 0, 0][di]
+				var dy: int = [0, 0, 1, -1][di]
+				var nx: int = cx + dx
+				var ny: int = cy + dy
+				var exposed: bool = (nx < 0 or ny < 0 or nx >= w or ny >= h) \
+					or int(grid.owner[ny * w + nx]) != oid
+				if not exposed:
+					continue
+				# edge centre (out toward the rim) + the axis running ALONG the edge
+				var ex: float = wx + WALL_INSET * cell * float(dx)
+				var ez: float = wz + WALL_INSET * cell * float(dy)
+				var ax: float = float(dy)   # perpendicular to (dx,dy) → along the edge
+				var az: float = float(dx)
+				for s in WALL_SEG:
+					var t := (float(s) - (WALL_SEG - 1) * 0.5) / float(WALL_SEG)   # spread along edge
+					var r := _hash(i * 4 + di + s * 131)
+					wall_pos.append(Vector3(ex + ax * t * cell, BASE_Y, ez + az * t * cell))
+					wall_col.append(wc)                              # walls darker than the tiles
+					wall_h.append(WALL_BASE_H * (0.78 + r * 0.5))    # ~0.12..0.20 → gentle crenellation
+					wall_rot.append((r - 0.5) * 0.14)                # ±0.07 rad yaw jitter
 	_slab_mm.instance_count = 0   # walls-only: no raised slab plates
 	_wall_mm.instance_count = wall_pos.size()
 	for k in wall_pos.size():

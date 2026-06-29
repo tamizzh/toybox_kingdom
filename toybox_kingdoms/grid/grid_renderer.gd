@@ -10,6 +10,10 @@ var grid                          # TerritoryGrid
 var cell: float = 0.6
 var colors := {}                  # kingdom id -> Color
 
+# Trail instances share one constant footprint — cache the scale Basis so update_trails()
+# (every physics frame) doesn't rebuild it per instance.
+var _trail_basis := Basis()
+
 const NEUTRAL_H := 0.06          # wilderness tiles — a low patchwork of green shades
 const LAND_H := 0.15             # claimed land rises as a plateau above the wilderness
 const BORDER_H := 0.44           # border cells rise into a wall above the plateau
@@ -49,6 +53,7 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	grid = p_grid
 	cell = p_cell
 	colors = p_colors
+	_trail_basis = Basis().scaled(Vector3(cell * 0.62, TRAIL_H, cell * 0.62))
 	# wilderness tile layer (built once)
 	_neutral = _make_batch(Vector3(cell, 1.0, cell), false)
 	add_child(_neutral)
@@ -275,20 +280,20 @@ func flash_cells(min_c: Vector2i, max_c: Vector2i, color: Color) -> void:
 
 # Rebuild the live-trail batch (every frame — trails are tens of cells at most).
 func update_trails(ids: Array) -> void:
-	var pairs: Array = []   # [cell_index, kingdom_id]
-	for id in ids:
-		for c in grid.trail_cells(id):
-			pairs.append([c, id])
+	# Runs every physics frame — no per-frame array allocs and no per-instance Basis
+	# rebuild (the footprint is constant, cached as _trail_basis in setup()).
 	var mm := _trail.multimesh
-	mm.instance_count = pairs.size()
-	for k in pairs.size():
-		var c: int = pairs[k][0]
-		var id: int = pairs[k][1]
-		var cx: int = c % grid.w
-		var cy: int = c / grid.w
-		# beveled unit cube scaled to the slim trail footprint + short height
-		mm.set_instance_transform(k, Transform3D(
-			Basis().scaled(Vector3(cell * 0.62, TRAIL_H, cell * 0.62)),
-			_c2w(cx, cy, TRAIL_H * 0.5)))
-		var col: Color = colors.get(id, Color.WHITE)
-		mm.set_instance_color(k, col)   # raw kingdom colour; shader converts sRGB->linear to match roofs
+	var total := 0
+	for id in ids:
+		total += grid.trail_cells(id).size()
+	mm.instance_count = total
+	var k := 0
+	for id in ids:
+		var col: Color = colors.get(id, Color.WHITE)   # raw kingdom colour; shader sRGB->linear
+		for c in grid.trail_cells(id):
+			var cx: int = c % grid.w
+			var cy: int = c / grid.w
+			# beveled unit cube scaled to the slim trail footprint + short height
+			mm.set_instance_transform(k, Transform3D(_trail_basis, _c2w(cx, cy, TRAIL_H * 0.5)))
+			mm.set_instance_color(k, col)
+			k += 1

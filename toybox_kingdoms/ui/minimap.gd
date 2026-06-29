@@ -3,7 +3,7 @@ extends Control
 # ── Whole-board minimap: a painted ownership texture (no second scene render) ──
 # Instead of a SubViewport re-rendering the whole 3D world top-down (a full extra
 # scene pass every update), we paint ONE pixel per cell straight from the grid's
-# ownership data into a tiny 128x96 texture and let the GPU upscale it with bilinear
+# ownership data into a one-pixel-per-cell texture and let the GPU upscale it with bilinear
 # smoothing. Wilderness reads as a soft green patchwork; each kingdom is its own
 # colour; the ruler dots are drawn on top every frame. Repaint only when the board
 # actually changed (throttled by the match), so the per-frame cost is just the dots.
@@ -27,6 +27,10 @@ var _dirty := true                # repaint only when ownership changed, not on 
 var _active_w: int = -1           # active zone width (-1 = full grid)
 var _active_h: int = -1           # active zone height
 var _land_mask: PackedByteArray   # WORLD_CONQUEST per-cell mask (empty = not used)
+var _base_built := false          # static frost/wild backdrop already painted into _buf
+var _cr := PackedByteArray()      # per-oid lightened colour bytes, index = kingdom id
+var _cg := PackedByteArray()
+var _cb := PackedByteArray()
 
 # world / cell / cam_env are accepted for call-site compatibility but unused now that
 # the minimap paints from data instead of rendering the 3D world.
@@ -43,14 +47,17 @@ func setup(gw: int, gh: int, _world = null, _cell: float = 0.6, _cam_env = null)
 	_tex = ImageTexture.create_from_image(_img)
 	_buf = PackedByteArray()
 	_buf.resize(gw * gh * 4)
+	_base_built = false
 
 func set_active_half(aw: int, ah: int) -> void:
 	_active_w = aw
 	_active_h = ah
+	_base_built = false
 	_dirty = true
 
 func set_land_mask(mask: PackedByteArray) -> void:
 	_land_mask = mask
+	_base_built = false
 	_dirty = true
 
 # The match calls this when the board may have changed (capture/retint). We capture
@@ -66,6 +73,7 @@ func request_render() -> void:
 
 func set_markers(m: Array) -> void:
 	_markers = m
+	queue_redraw()   # markers refresh at HUD rate (~5Hz), not every frame
 
 # A painted frame drawn around the map instead of the procedural card/border. The
 # frame art's transparent window was measured (see prep) so the map texture lands
@@ -91,15 +99,23 @@ func _process(_delta: float) -> void:
 	if _dirty and _grid != null:
 		_dirty = false
 		_repaint()
-	queue_redraw()   # the ruler dots redraw every frame on top of the static texture
+		queue_redraw()   # texture changed — redraw markers + frame over the new map
 
 # Paint one pixel per cell: flat dark grey for wilderness, the kingdom colour
 # for owned land. Writes the reused buffer and uploads once (no per-pixel set_pixel).
 const FROST := Color(0.78, 0.90, 0.97, 1.0)   # ice blue — matches territory_ground frozen zone
 
-func _repaint() -> void:
+# Is cell (ix,iy)/index i frozen (ocean / outside the active zone)?
+func _is_frozen(i: int, ix: int, iy: int, use_mask: bool, ax0: int, ay0: int, ax1: int, ay1: int) -> bool:
+	if use_mask:
+		return _land_mask[i] == 0
+	return ix < ax0 or ix >= ax1 or iy < ay0 or iy >= ay1
+
+# Paint the STATIC backdrop (frost ocean + wilderness) for the whole board, once. Owned
+# cells are stamped over this each repaint; cells that are never owned keep these values,
+# so the per-repaint loop only has to touch the owned bounding box.
+func _build_base() -> void:
 	var use_mask := _land_mask.size() == _gw * _gh
-	# Rectangular active zone bounds (used when no per-cell mask).
 	var ax0 := 0; var ay0 := 0; var ax1 := _gw; var ay1 := _gh
 	if not use_mask and _active_w > 0 and _active_h > 0:
 		ax0 = (_gw - _active_w) / 2
@@ -109,21 +125,54 @@ func _repaint() -> void:
 	for iy in _gh:
 		for ix in _gw:
 			var i := iy * _gw + ix
-			var col: Color
-			var is_frozen: bool
-			if use_mask:
-				is_frozen = _land_mask[i] == 0
-			else:
-				is_frozen = ix < ax0 or ix >= ax1 or iy < ay0 or iy >= ay1
-			if is_frozen:
-				col = FROST
-			else:
-				var oid: int = _grid.owner[i]
-				col = WILD if oid == 0 else (_colors.get(oid, Color.WHITE) as Color).lightened(0.06)
+			var col := FROST if _is_frozen(i, ix, iy, use_mask, ax0, ay0, ax1, ay1) else WILD
 			var o := i * 4
 			_buf[o]     = int(col.r * 255.0)
 			_buf[o + 1] = int(col.g * 255.0)
 			_buf[o + 2] = int(col.b * 255.0)
+			_buf[o + 3] = 255
+	_base_built = true
+
+func _repaint() -> void:
+	if not _base_built:
+		_build_base()
+	# Per-oid lightened colour bytes so the hot loop does array reads, not a Color alloc
+	# + Dictionary.get per cell (mirrors populace.rebuild's precompute pattern).
+	_cr.resize(256); _cg.resize(256); _cb.resize(256)
+	for oid_key in _colors.keys():
+		var oi: int = oid_key
+		var lc: Color = (_colors[oi] as Color).lightened(0.06)
+		_cr[oi] = int(lc.r * 255.0); _cg[oi] = int(lc.g * 255.0); _cb[oi] = int(lc.b * 255.0)
+	# Re-stamp only the owned bounding box — every cell outside it is unowned, so the
+	# static backdrop already sitting in _buf is correct. The box never shrinks, so a
+	# cell that loses ownership is still inside it and gets repainted back to the backdrop.
+	var use_mask := _land_mask.size() == _gw * _gh
+	var ax0 := 0; var ay0 := 0; var ax1 := _gw; var ay1 := _gh
+	if not use_mask and _active_w > 0 and _active_h > 0:
+		ax0 = (_gw - _active_w) / 2
+		ay0 = (_gh - _active_h) / 2
+		ax1 = ax0 + _active_w
+		ay1 = ay0 + _active_h
+	var wild_r := int(WILD.r * 255.0); var wild_g := int(WILD.g * 255.0); var wild_b := int(WILD.b * 255.0)
+	var frost_r := int(FROST.r * 255.0); var frost_g := int(FROST.g * 255.0); var frost_b := int(FROST.b * 255.0)
+	var x0 := 0; var y0 := 0; var x1 := -1; var y1 := -1
+	if _grid.has_owned():
+		x0 = _grid.owned_min.x; y0 = _grid.owned_min.y
+		x1 = _grid.owned_max.x; y1 = _grid.owned_max.y
+	for iy in range(y0, y1 + 1):
+		var row := iy * _gw
+		for ix in range(x0, x1 + 1):
+			var i := row + ix
+			var o := i * 4
+			var oid: int = _grid.owner[i]
+			if oid == 0:
+				# Unowned again — restore the backdrop value for this cell.
+				if _is_frozen(i, ix, iy, use_mask, ax0, ay0, ax1, ay1):
+					_buf[o] = frost_r; _buf[o + 1] = frost_g; _buf[o + 2] = frost_b
+				else:
+					_buf[o] = wild_r; _buf[o + 1] = wild_g; _buf[o + 2] = wild_b
+			else:
+				_buf[o] = _cr[oid]; _buf[o + 1] = _cg[oid]; _buf[o + 2] = _cb[oid]
 			_buf[o + 3] = 255
 	_img.set_data(_gw, _gh, false, Image.FORMAT_RGBA8, _buf)
 	_tex.update(_img)

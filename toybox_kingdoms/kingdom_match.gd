@@ -129,6 +129,8 @@ var _decor
 var _roads
 var _road_tick := 0          # counts _kingdom_tick calls; roads rebuild every N ticks
 var _last_road_version := -1
+var _last_trail_version := -1
+var _decor_cooldown := 0.0   # low_gfx: spaces out the heavy populace/decor full-board scans
 var _kingdom_t := 0.0
 var _terr_rebuild_t := 0.0
 var _minimap_t := 0.0           # rate-limits the minimap's full 2nd-scene render
@@ -153,6 +155,10 @@ var _tutorial_tip_shown := {}       # keys of one-time in-match tips already sho
 var _trail_tip_timer := 0.0         # counts up once player first leaves home; triggers trail warning
 var _mode := "campaign"         # "campaign" | "endless"
 var _endless_island := 0        # which island of the endless run this is (0-based)
+# Snapshot of the cleared island's overview frame, handed ACROSS the scene reload to
+# the next island (static survives reload) so the two islands can slide past each
+# other — old exits left, new enters from right (see _endless_clear_transition/_endless_intro).
+static var _clear_frame: Image = null
 var _peak_pct := 0.0            # highest land fraction the human held on THIS island
 var _rivals_conquered := 0      # rival kingdoms the human eliminated on THIS island
 var _endless_score := 0         # final run total (set when the run ends); also the daily score
@@ -385,11 +391,14 @@ func _ready() -> void:
 	# Endless: on islands after the first, fade in from the clear-wipe cover so the jump
 	# reads as continuous; announce the island either way.
 	if _mode in ["endless", "timed"]:
-		if _endless_island > 0:
+		if _endless_island > 0 and _clear_frame != null:
+			# Arrived from an island-CLEAR (the cleared island left us a snapshot): slide the
+			# new island in from the right, then zoom in.
 			_endless_intro()
-			_toast("ISLAND %d   ·   Score %s" % [_endless_island + 1, _comma(SaveManager.endless_run_score())], Palette.WARN)
 		else:
-			_toast("ISLAND 1", Palette.WARN)
+			# Play button / cold boot (first island or a resumed run): no previous island to
+			# slide off, so just zoom in — start zoomed-out, name the island, then zoom in.
+			_endless_zoom_intro()
 	elif _mode == "campaign":
 		# Tell the player which stage of the 10-stage campaign they're on.
 		_toast("STAGE %d/%d   ·   %s" % [_stage + 1, Campaign.count(), Campaign.title(_stage)], Palette.WARN)
@@ -499,13 +508,28 @@ func _castle_radius(tier: int) -> int:
 # by CanvasLayers, so it stays at full crispness. Desktop renders at native scale;
 # set TBK_LOWRES=<0..1> to preview the mobile path on desktop.
 const MOBILE_RENDER_SCALE := 0.75
-# NOTE: we deliberately do NOT downscale 3D on web desktop. On gl_compatibility
-# (WebGL2), enabling viewport 3D resolution scaling forces an offscreen render
-# target + upscale blit, whose extra full-screen pass costs more than the pixels
-# it saves — it measured as a net FPS regression. Native full-res is faster there.
-# (TBK_LOWRES below still forces a scale for explicit testing if ever needed.)
+# NOTE: scaling_3d_scale (viewport 3D resolution scaling) does NOT help on web —
+# gl_compatibility still composites the scaled 3D into a full-canvas-res offscreen target
+# and blits, so the saving is eaten (measured: ~no change at 0.6). Web instead caps the
+# whole frame via content-scale (see below). TBK_LOWRES still forces a 3D scale on native.
+
+# Web renders the canvas at full window size × devicePixelRatio (gl_compatibility), so a
+# large or hi-DPI display pushes millions of pixels through the 3D shaders and pins fps —
+# it scales ~linearly with window pixels. Cap the WHOLE frame to this internal height and
+# upscale once to the window (see _apply_render_scale).
+const WEB_RENDER_HEIGHT := 720
 
 func _apply_render_scale() -> void:
+	if DeviceMode.is_web:
+		# Render EVERYTHING into a fixed viewport (WEB_RENDER_HEIGHT tall) and scale it to
+		# the window in one pass (width follows the window aspect, so framing is unchanged).
+		# This caps the framebuffer regardless of monitor size / devicePixelRatio — the
+		# actual fix for "fps scales with window pixels". The HUD softens on big screens.
+		var win := get_window()
+		win.content_scale_mode = Window.CONTENT_SCALE_MODE_VIEWPORT
+		win.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_KEEP_HEIGHT
+		win.content_scale_size = Vector2i(int(WEB_RENDER_HEIGHT * 16.0 / 9.0), WEB_RENDER_HEIGHT)
+		return
 	var scale := 1.0
 	if DeviceMode.is_mobile:
 		scale = MOBILE_RENDER_SCALE
@@ -563,7 +587,11 @@ func _physics_process(delta: float) -> void:
 			_advance_agent(a, c)
 
 	# 3. render + ui
-	renderer.update_trails(_kids)
+	# Trail cubes are static per cell, so only rebuild the trail MultiMesh when a trail
+	# actually changed (extend / capture / death) instead of every frame.
+	if grid.trail_version != _last_trail_version:
+		_last_trail_version = grid.trail_version
+		renderer.update_trails(_kids)
 	# Throttle full territory rebuilds to <=10/s — mobile safeguard (claims still
 	# show instantly via the flash; the slab catches up within 0.1s).
 	_terr_rebuild_t -= delta
@@ -614,18 +642,24 @@ func _kingdom_tick(delta: float) -> void:
 	# Populace + flags are full-board scans. Skip them when no land changed since the
 	# last build, and alternate them across ticks so only one runs per 0.4s spike.
 	var v: int = grid.version
-	# Rotate the three full-board scans (town / flags / countryside) across ticks so
-	# only one spikes per 0.4s; each skips if no land changed since it last ran.
-	if _decor_phase == 0:
-		if v != _last_pop_version:
-			_populace.rebuild(_kid_tier)
-			_last_pop_version = v
-		_decor_phase = 1
-	else:
-		if v != _last_decor_version:
-			_decor.rebuild(_kid_tier)
-			_last_decor_version = v
-		_decor_phase = 0
+	# Rotate the two full-board scans (town / countryside) across ticks so only one spikes
+	# per tick; each skips if no land changed since it last ran. On web/mobile (single
+	# thread) each scan is a ~tens-of-ms hit, so SPACE THEM OUT: a 100ms stutter every
+	# 0.6s reads as jank, but town/citizens popping in ~2s after capture is imperceptible.
+	# Desktop keeps them responsive (cooldown 0).
+	_decor_cooldown -= delta
+	if _decor_cooldown <= 0.0:
+		if _decor_phase == 0:
+			if v != _last_pop_version:
+				_populace.rebuild(_kid_tier)
+				_last_pop_version = v
+			_decor_phase = 1
+		else:
+			if v != _last_decor_version:
+				_decor.rebuild(_kid_tier)
+				_last_decor_version = v
+			_decor_phase = 0
+		_decor_cooldown = 1.2 if DeviceMode.low_gfx else 0.0
 	_windmills.rebuild(_kid_tier)
 	# Roads: rebuild every ~10 kingdom ticks (~4 s desktop, ~6 s mobile) when territory
 	# changed. Each kingdom's rebuild() does its own delta-skip so it's cheap when nothing moved.
@@ -1253,74 +1287,151 @@ func _end_match(win: bool, reason: String) -> void:
 			return
 	_show_results(win, reason, rank, pct, coins)
 
-# Island cleared in an endless run: a quick celebratory orbit, then a "sailing to the
-# next island" card wipes the screen and we reload — _ready reads the advanced island
-# index, builds the next island, and fades IN from the same cover (see _endless_intro).
+# Island cleared in an endless run: a fireworks send-off, then the camera ZOOMS OUT to
+# the map-overview vantage (same as the map button). We snapshot that frame and stash it
+# across the scene reload — the next island opens zoomed-out and the two islands slide
+# past each other (old exits left, new enters from right; see _endless_intro).
 func _endless_clear_transition() -> void:
-	# Camera rises up and away from the cleared island (with a fireworks send-off),
-	# then the navy card wipes in over the receding board and we reload.
 	if is_instance_valid(camera):
-		camera.pull_out(1.3)
+		camera.transition_overview(Vector3.ZERO, 1.0)
 	if _rulers[0].castles.size() > 0:
 		var cap_cell: Vector2i = _rulers[0].castles[0]["cell"]
 		_victory_fireworks(_c2w(cap_cell.x, cap_cell.y, 0.0), _kid_color[_rulers[0].kid])
 
-	# Build the transition card over a high layer (above all HUD), starting transparent.
-	var layer := CanvasLayer.new()
-	layer.layer = 80
-	add_child(layer)
-	var root := Control.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.mouse_filter = Control.MOUSE_FILTER_STOP
-	root.modulate.a = 0.0
-	layer.add_child(root)
-	var cover := ColorRect.new()
-	cover.color = Color(0.05, 0.07, 0.13, 1.0)
-	cover.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(cover)
-	var box := VBoxContainer.new()
-	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	box.add_theme_constant_override("separation", 14)
-	root.add_child(box)
-	_result_label(box, "ISLAND %d CLEARED!" % (_endless_island + 1), 56, Palette.SAFE)
-	_result_label(box, "⛵  Sailing to Island %d" % (_endless_island + 2), 30, Color.WHITE)
-	_result_label(box, "Score  %s" % _comma(SaveManager.endless_run_score()), 30, Palette.WARN)
-
-	# Let the pull-out read for a beat, then wipe the card in over the receding board.
-	await get_tree().create_timer(0.7).timeout
+	# Let the zoom-out settle, then grab the overview frame for the slide and reload.
+	await get_tree().create_timer(1.2).timeout
 	if not is_inside_tree():
 		return
-	root.create_tween().tween_property(root, "modulate:a", 1.0, 0.5)
-	await get_tree().create_timer(0.6).timeout
+	# Drawn-frame readback — capture the receding island as it sits in the map vantage.
+	await RenderingServer.frame_post_draw
 	if not is_inside_tree():
 		return
+	_clear_frame = get_viewport().get_texture().get_image()
 	get_tree().reload_current_scene()
 
-# Fade the next island IN from the same deep cover the clear wipe ended on, so the jump
-# between islands reads as one continuous move instead of a hard cut.
+# Open the next island ZOOMED-OUT and slide it in: the cleared island's snapshot covers
+# the screen, the new island sits one screen to the right, and the pair slides left so
+# the old island exits and the new lands centre. Then the camera zooms in to play.
 func _endless_intro() -> void:
-	# Camera descends from high above onto the new island as the cover lifts.
-	if is_instance_valid(camera):
-		camera.descend(1.3)
+	if not is_instance_valid(camera):
+		return
+	# Frame the new island in the map vantage so the live view matches the snapshot the
+	# slide lands on (the swap from snapshot → live render is then seamless).
+	camera.snap_overview(Vector3.ZERO)
+	var vp := get_viewport()
+	var vsize := vp.get_visible_rect().size
+	# Wait for the new island to actually render before snapshotting it.
+	await RenderingServer.frame_post_draw
+	if not is_inside_tree():
+		return
+	var new_img := vp.get_texture().get_image()
+	# No valid readback (headless / a dropped frame) → skip the slide, just zoom in.
+	if new_img == null or new_img.is_empty():
+		_clear_frame = null
+		camera.transition_descend(1.0)
+		return
+	var new_tex := ImageTexture.create_from_image(new_img)
+	var old_tex: Texture2D = null
+	if _clear_frame != null and not _clear_frame.is_empty():
+		old_tex = ImageTexture.create_from_image(_clear_frame)
+	_clear_frame = null
+
 	var layer := CanvasLayer.new()
 	layer.layer = 80
 	add_child(layer)
-	var cover := ColorRect.new()
-	cover.color = Color(0.05, 0.07, 0.13, 1.0)
-	cover.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	cover.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(cover)
-	var tw := cover.create_tween()
-	tw.tween_interval(0.2)
-	tw.tween_property(cover, "color:a", 0.0, 0.7)
+	var slider := Control.new()
+	slider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(slider)
+	# New island panel waits one screen to the right; old island covers the screen.
+	var new_rect := TextureRect.new()
+	new_rect.texture = new_tex
+	new_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	new_rect.stretch_mode = TextureRect.STRETCH_SCALE
+	new_rect.size = vsize
+	new_rect.position = Vector2(vsize.x, 0.0)
+	slider.add_child(new_rect)
+	if old_tex != null:
+		var old_rect := TextureRect.new()
+		old_rect.texture = old_tex
+		old_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		old_rect.stretch_mode = TextureRect.STRETCH_SCALE
+		old_rect.size = vsize
+		old_rect.position = Vector2.ZERO
+		slider.add_child(old_rect)
+
+	# Slide the pair left by one screen: old exits left, new lands centre.
+	var tw := slider.create_tween()
+	tw.tween_interval(0.15)
+	tw.tween_property(slider, "position:x", -vsize.x, 0.85).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
+	await tw.finished
+	layer.queue_free()
+	if not is_inside_tree():
+		return
+
+	# The new island has landed (still zoomed-out) — name it, hold, then zoom in.
+	await _island_arrive_beat()
+
+# Open ZOOMED-OUT with the island named, hold a beat, then zoom in — used when there's no
+# previous island to slide off (Play button / cold boot): the zoom-in intro minus the swipe.
+func _endless_zoom_intro() -> void:
+	if not is_instance_valid(camera):
+		_toast(_island_display_name(), Palette.WARN)
+		return
+	camera.snap_overview(Vector3.ZERO)
+	await _island_arrive_beat()
+
+# Shared arrival beat: big centred island name + small score banner, hold ~1s while
+# zoomed-out, THEN zoom the camera in to play. Both intro paths end here.
+func _island_arrive_beat() -> void:
+	_show_island_title(_island_display_name())
+	var score := SaveManager.endless_run_score()
+	if score > 0:
+		_toast("%s   ·   Score %s" % [_island_display_name(), _comma(score)], Palette.WARN)
+	await get_tree().create_timer(1.0).timeout
+	if not is_inside_tree():
+		return
+	if is_instance_valid(camera):
+		camera.transition_descend(1.0)
+
+# Name of the island/country the player is currently on (country shape in world-conquest
+# mode, otherwise the endless island number).
+func _island_display_name() -> String:
+	if WORLD_CONQUEST:
+		var cidx := clampi(_endless_island, 0, CountryMasks.COUNTRIES.size() - 1)
+		return str(CountryMasks.COUNTRIES[cidx]["name"])
+	return "Island %d" % (_endless_island + 1)
+
+# Big centred island/country name that pops in when the new island lands, holds, then
+# fades out as the camera zooms in.
+func _show_island_title(title: String) -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 81
+	add_child(layer)
+	var lbl := Label.new()
+	lbl.text = title
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	lbl.add_theme_font_size_override("font_size", 72)
+	lbl.add_theme_color_override("font_color", Color.WHITE)
+	lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.07, 0.13))
+	lbl.add_theme_constant_override("outline_size", 12)
+	lbl.modulate.a = 0.0
+	layer.add_child(lbl)
+	var tw := lbl.create_tween()
+	tw.tween_property(lbl, "modulate:a", 1.0, 0.25).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.85)
+	tw.tween_property(lbl, "modulate:a", 0.0, 0.5).set_ease(Tween.EASE_IN)
 	tw.tween_callback(layer.queue_free)
 
 # A few staggered firework bursts over the capital during the victory orbit.
 func _victory_fireworks(focus: Vector3, color: Color) -> void:
 	if _fx == null:
 		return
-	for i in 5:
+	# Fewer bursts on mobile/web — this is the only ungated VFX and each burst spawns ~40
+	# particles. The win still reads as celebratory at 3 bursts.
+	var bursts := 3 if DeviceMode.low_gfx else 5
+	for i in bursts:
 		if not is_instance_valid(_fx):
 			return
 		var jitter := Vector3(randf_range(-4.0, 4.0), randf_range(0.0, 3.0), randf_range(-4.0, 4.0))
@@ -1732,14 +1843,23 @@ func _respawn(a) -> void:
 
 # nearest living rival's world distance (used by the AI danger sense)
 func nearest_enemy_dist(agent) -> float:
+	return sqrt(nearest_enemy_dist_sq(agent))
+
+# Squared (x/z) distance to the nearest living rival — avoids the per-call sqrt for
+# threshold checks. Compare against (threshold * threshold).
+func nearest_enemy_dist_sq(agent) -> float:
 	var best := INF
 	var pos: Vector3 = agent.avatar.global_position
 	for o in _rulers:
 		if o == agent or not o.alive:
 			continue
-		var d: float = pos.distance_to(o.avatar.global_position)
-		if d < best:
-			best = d
+		var op: Vector3 = o.avatar.global_position
+		var dx := op.x - pos.x
+		var dy := op.y - pos.y
+		var dz := op.z - pos.z
+		var d2: float = dx * dx + dy * dy + dz * dz
+		if d2 < best:
+			best = d2
 	return best
 
 func _clamp(av, is_ai: bool = true) -> bool:
@@ -2160,12 +2280,18 @@ func _build_environment() -> void:
 		var env := (world.get_node("WorldEnvironment") as WorldEnvironment).environment
 		env.glow_enabled = false
 		env.ssao_enabled = false
-		# Trim the shadow cascade on web + mobile. At the near-top-down camera the
-		# extra cascade splits / long distance barely read, so a single tighter
-		# split saves a meaningful chunk of the depth pass + shadow sampling.
 		var key := world.get_node("KeyLight") as DirectionalLight3D
-		key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-		key.directional_shadow_max_distance = 28.0
+		if DeviceMode.is_web:
+			# WebGL2 renders at full native resolution (no 3D downscale — the offscreen
+			# blit regresses there), so the shadow depth pass + per-fragment PCF sampling
+			# is a top cost and pins the browser at single-digit fps. Drop shadows on web;
+			# the flat near-top-down toy art reads fine with ambient + rim light alone.
+			key.shadow_enabled = false
+		else:
+			# Mobile: trim the cascade. At the near-top-down camera the extra splits /
+			# long distance barely read, so one tighter split saves the depth pass cost.
+			key.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+			key.directional_shadow_max_distance = 28.0
 
 func _build_ground() -> void:
 	# The play board is an ISLAND: everything outside the grid rectangle is open sea.

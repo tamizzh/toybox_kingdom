@@ -182,13 +182,12 @@ const TOWER_MIN_TIER := 3
 
 func rebuild(tiers: Dictionary = {}) -> void:
 	var w: int = grid.w
-	var n: int = w * grid.h
 	# First rebuild seeds the starting town instantly (now=0 → no pop); after that,
 	# freshly-claimed buildings carry the real wall-clock so they pop up on capture.
 	var now: float = 0.0 if _first else float(Time.get_ticks_msec()) * 0.001
 	# Phones thin the densest town layers (houses/citizens/towers) to keep vertex +
 	# overdraw cost down — the village still reads, just less crowded.
-	var cap_mul: float = 0.55 if DeviceMode.is_mobile else 1.0
+	var cap_mul: float = 0.55 if DeviceMode.low_gfx else 1.0
 	var house_cap := int(HOUSE_CAP * cap_mul)
 	var cit_cap := int(CIT_CAP * cap_mul)
 	var tower_cap := int(TOWER_CAP * cap_mul)
@@ -203,58 +202,80 @@ func rebuild(tiers: Dictionary = {}) -> void:
 	var tower_pos := PackedVector3Array()
 	var tower_col := PackedColorArray()
 	var tower_spawn := PackedFloat32Array()
-	for i in n:
-		var oid: int = grid.owner[i]
-		if oid == 0:
-			continue
-		var cx: int = i % w
-		var cy: int = i / w
-		# Cluster density by distance from this kingdom's castle.
-		var home: Vector2i = _homes.get(oid, Vector2i(cx, cy))
-		var d: int = absi(cx - home.x) + absi(cy - home.y)
-		var base: Vector3 = _c2w(cx, cy)
-		var col: Color = colors.get(oid, Color.WHITE)
-		var tier: int = tiers.get(oid, 1)
-		var dens: float = TIER_DENSITY.get(tier, 1.0)
-		# Sparse towers (separate hash) in the core/mid ring → studded skyline. Only a
-		# Town (T3+) sprouts keep towers; lower tiers stay low-rise.
-		var tbucket: int = ((i * 2246822519) & 0x7fffffff) % 1000
-		var tower_thr: int = 0
-		if tier >= TOWER_MIN_TIER:
-			tower_thr = 14 if d <= CORE_R else (6 if d <= MID_R else 0)
-		if tower_thr > 0 and tbucket < tower_thr and tower_pos.size() < tower_cap:
-			tower_pos.append(base)
-			tower_col.append(col)
-			tower_spawn.append(_spawn_for(i, now))
-			continue
-		var bucket: int = ((i * 1103515245 + 12345) & 0x7fffffff) % 1000
-		var house_thr: int
-		var cit_thr: int
-		if d <= CORE_R:
-			house_thr = 55; cit_thr = 120        # dense village core
-		elif d <= MID_R:
-			house_thr = 25; cit_thr = 65
-		else:
-			house_thr = 7; cit_thr = 22          # sparse outskirts
-		# Town crowds up as the kingdom levels (Outpost sparse → Capital busy).
-		house_thr = int(house_thr * dens)
-		cit_thr = int(cit_thr * dens)
-		if bucket >= cit_thr:
-			continue
-		if bucket < house_thr:
-			if house_pos.size() < house_cap:
-				house_pos.append(base)
-				house_col.append(col)
-				house_spawn.append(_spawn_for(i, now))
-		elif cit_pos.size() < cit_cap:
-			# Stagger: offset X/Z within the cell using stable per-cell hashes so
-			# citizens don't land on a uniform grid. Max ±35% of a cell in each axis.
-			var jx: float = (((i * 374761393 + 6271) & 0x7fffffff) % 1000) / 1000.0 - 0.5
-			var jz: float = (((i * 1664525 + 1013904223) & 0x7fffffff) % 1000) / 1000.0 - 0.5
-			var jpos := base + Vector3(jx * cell * 0.7, 0.0, jz * cell * 0.7)
-			cit_pos.append(jpos)
-			cit_col.append(col)
-			cit_spawn.append(_spawn_for(i, now))
+	# Precompute per-kingdom values indexed by owner id so the owned-box loop does cheap
+	# array reads instead of 4-5 Dictionary.get() calls per owned cell (a big web win).
+	var hx := PackedInt32Array(); hx.resize(256)
+	var hy := PackedInt32Array(); hy.resize(256)
+	var kcol: Array = []; kcol.resize(256)
+	var ktier := PackedInt32Array(); ktier.resize(256)
+	var kdens := PackedFloat32Array(); kdens.resize(256)
+	for oid_key in colors.keys():
+		var oi: int = oid_key
+		var hm: Vector2i = _homes.get(oi, Vector2i.ZERO)
+		hx[oi] = hm.x; hy[oi] = hm.y
+		kcol[oi] = colors[oi]
+		var tr: int = tiers.get(oi, 1)
+		ktier[oi] = tr
+		kdens[oi] = TIER_DENSITY.get(tr, 1.0)
+	# Scan only the box that bounds all owned land — early/mid game this is a small
+	# fraction of the 110k-cell board. `i` stays the flat index so the per-cell hashes
+	# (and therefore the placement) are byte-identical to a full-board scan.
+	var x0 := 0; var y0 := 0; var x1 := -1; var y1 := -1
+	if grid.has_owned():
+		x0 = grid.owned_min.x; y0 = grid.owned_min.y
+		x1 = grid.owned_max.x; y1 = grid.owned_max.y
+	for cy in range(y0, y1 + 1):
+		var _row := cy * w
+		for cx in range(x0, x1 + 1):
+			var i := _row + cx
+			var oid: int = grid.owner[i]
+			if oid == 0:
+				continue
+			# Cluster density by distance from this kingdom's castle.
+			var d: int = absi(cx - hx[oid]) + absi(cy - hy[oid])
+			var base: Vector3 = _c2w(cx, cy)
+			var col: Color = kcol[oid] if kcol[oid] != null else Color.WHITE
+			var tier: int = ktier[oid]
+			var dens: float = kdens[oid]
+			# Sparse towers (separate hash) in the core/mid ring → studded skyline. Only a
+			# Town (T3+) sprouts keep towers; lower tiers stay low-rise.
+			var tbucket: int = ((i * 2246822519) & 0x7fffffff) % 1000
+			var tower_thr: int = 0
+			if tier >= TOWER_MIN_TIER:
+				tower_thr = 14 if d <= CORE_R else (6 if d <= MID_R else 0)
+			if tower_thr > 0 and tbucket < tower_thr and tower_pos.size() < tower_cap:
+				tower_pos.append(base)
+				tower_col.append(col)
+				tower_spawn.append(_spawn_for(i, now))
+				continue
+			var bucket: int = ((i * 1103515245 + 12345) & 0x7fffffff) % 1000
+			var house_thr: int
+			var cit_thr: int
+			if d <= CORE_R:
+				house_thr = 55; cit_thr = 120        # dense village core
+			elif d <= MID_R:
+				house_thr = 25; cit_thr = 65
+			else:
+				house_thr = 7; cit_thr = 22          # sparse outskirts
+			# Town crowds up as the kingdom levels (Outpost sparse → Capital busy).
+			house_thr = int(house_thr * dens)
+			cit_thr = int(cit_thr * dens)
+			if bucket >= cit_thr:
+				continue
+			if bucket < house_thr:
+				if house_pos.size() < house_cap:
+					house_pos.append(base)
+					house_col.append(col)
+					house_spawn.append(_spawn_for(i, now))
+			elif cit_pos.size() < cit_cap:
+				# Stagger: offset X/Z within the cell using stable per-cell hashes so
+				# citizens don't land on a uniform grid. Max ±35% of a cell in each axis.
+				var jx: float = (((i * 374761393 + 6271) & 0x7fffffff) % 1000) / 1000.0 - 0.5
+				var jz: float = (((i * 1664525 + 1013904223) & 0x7fffffff) % 1000) / 1000.0 - 0.5
+				var jpos := base + Vector3(jx * cell * 0.7, 0.0, jz * cell * 0.7)
+				cit_pos.append(jpos)
+				cit_col.append(col)
+				cit_spawn.append(_spawn_for(i, now))
 
 	# BH=0.380→body_top=0.760; roof embed 12mm: 0.760+0.240-0.012=0.988; fence/lawn FHALF=0.125
 	_fill(_lawn,  house_pos, house_col, house_spawn, Vector3(0, PROP_Y + 0.125, 0), Color("52A832"),   true)
@@ -283,7 +304,6 @@ func _c2w(cx: int, cy: int) -> Vector3:
 # Mirrors the exact same hash logic as rebuild() so positions are stable and consistent.
 func get_road_nodes(kid: int, tier: int) -> Dictionary:
 	var w: int = grid.w
-	var n: int = w * grid.h
 	var dens: float = TIER_DENSITY.get(tier, 1.0)
 	var home: Vector2i = _homes.get(kid, Vector2i(w / 2, grid.h / 2))
 	var houses := PackedVector3Array()
@@ -291,18 +311,27 @@ func get_road_nodes(kid: int, tier: int) -> Dictionary:
 	# Roads only need a representative sample, not the full MultiMesh count
 	var hlimit := 16 if not DeviceMode.is_mobile else 10
 	var tlimit := 6
-	for i in n:
-		if grid.owner[i] != kid: continue
-		var cx: int = i % w; var cy: int = i / w
-		var d: int = absi(cx - home.x) + absi(cy - home.y)
-		var tbucket: int = ((i * 2246822519) & 0x7fffffff) % 1000
-		var tower_thr: int = 0
-		if tier >= TOWER_MIN_TIER:
-			tower_thr = 14 if d <= CORE_R else (6 if d <= MID_R else 0)
-		if tower_thr > 0 and tbucket < tower_thr and towers.size() < tlimit:
-			towers.append(_c2w(cx, cy)); continue
-		var bucket: int = ((i * 1103515245 + 12345) & 0x7fffffff) % 1000
-		var hthr: int = int((66 if d <= CORE_R else (32 if d <= MID_R else 9)) * dens)
-		if bucket < hthr and houses.size() < hlimit:
-			houses.append(_c2w(cx, cy))
+	# Bounded to the owned box; `i` stays the flat index so the hashes match rebuild().
+	var x0 := 0; var y0 := 0; var x1 := -1; var y1 := -1
+	if grid.has_owned():
+		x0 = grid.owned_min.x; y0 = grid.owned_min.y
+		x1 = grid.owned_max.x; y1 = grid.owned_max.y
+	for cy in range(y0, y1 + 1):
+		if houses.size() >= hlimit and towers.size() >= tlimit:
+			break
+		var _row := cy * w
+		for cx in range(x0, x1 + 1):
+			var i := _row + cx
+			if grid.owner[i] != kid: continue
+			var d: int = absi(cx - home.x) + absi(cy - home.y)
+			var tbucket: int = ((i * 2246822519) & 0x7fffffff) % 1000
+			var tower_thr: int = 0
+			if tier >= TOWER_MIN_TIER:
+				tower_thr = 14 if d <= CORE_R else (6 if d <= MID_R else 0)
+			if tower_thr > 0 and tbucket < tower_thr and towers.size() < tlimit:
+				towers.append(_c2w(cx, cy)); continue
+			var bucket: int = ((i * 1103515245 + 12345) & 0x7fffffff) % 1000
+			var hthr: int = int((66 if d <= CORE_R else (32 if d <= MID_R else 9)) * dens)
+			if bucket < hthr and houses.size() < hlimit:
+				houses.append(_c2w(cx, cy))
 	return {"houses": houses, "towers": towers}
