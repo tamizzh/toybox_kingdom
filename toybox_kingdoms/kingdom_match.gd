@@ -391,7 +391,11 @@ func _ready() -> void:
 	# Endless: on islands after the first, fade in from the clear-wipe cover so the jump
 	# reads as continuous; announce the island either way.
 	if _mode in ["endless", "timed"]:
-		if _endless_island > 0 and _clear_frame != null:
+		if OS.get_environment("TBK_SIM_SLIDE") == "1":
+			# DEBUG: replay the island-to-island slide on a loop against the live island so the
+			# transition can be eyeballed without actually conquering an island each time.
+			_sim_slide_loop()
+		elif _endless_island > 0 and _clear_frame != null:
 			# Arrived from an island-CLEAR (the cleared island left us a snapshot): slide the
 			# new island in from the right, then zoom in.
 			_endless_intro()
@@ -1315,54 +1319,41 @@ func _endless_clear_transition() -> void:
 func _endless_intro() -> void:
 	if not is_instance_valid(camera):
 		return
-	# Frame the new island in the map vantage so the live view matches the snapshot the
-	# slide lands on (the swap from snapshot → live render is then seamless).
-	camera.snap_overview(Vector3.ZERO)
 	var vp := get_viewport()
 	var vsize := vp.get_visible_rect().size
-	# Wait for the new island to actually render before snapshotting it.
-	await RenderingServer.frame_post_draw
-	if not is_inside_tree():
-		return
-	var new_img := vp.get_texture().get_image()
-	# No valid readback (headless / a dropped frame) → skip the slide, just zoom in.
-	if new_img == null or new_img.is_empty():
+	# No snapshot of the cleared island (shouldn't happen on this path) → just zoom in.
+	if _clear_frame == null or _clear_frame.is_empty():
 		_clear_frame = null
-		camera.transition_descend(1.0)
+		await _endless_zoom_intro()
 		return
-	var new_tex := ImageTexture.create_from_image(new_img)
-	var old_tex: Texture2D = null
-	if _clear_frame != null and not _clear_frame.is_empty():
-		old_tex = ImageTexture.create_from_image(_clear_frame)
+	var old_tex := ImageTexture.create_from_image(_clear_frame)
 	_clear_frame = null
 
+	# Cover the screen with the cleared-island snapshot BEFORE the first frame draws, so the
+	# new island is never glimpsed early. The new island renders live UNDER the cover, framed
+	# in the map vantage but panned one screen-width to the right (off the edge).
 	var layer := CanvasLayer.new()
 	layer.layer = 80
 	add_child(layer)
-	var slider := Control.new()
-	slider.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(slider)
-	# New island panel waits one screen to the right; old island covers the screen.
-	var new_rect := TextureRect.new()
-	new_rect.texture = new_tex
-	new_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	new_rect.stretch_mode = TextureRect.STRETCH_SCALE
-	new_rect.size = vsize
-	new_rect.position = Vector2(vsize.x, 0.0)
-	slider.add_child(new_rect)
-	if old_tex != null:
-		var old_rect := TextureRect.new()
-		old_rect.texture = old_tex
-		old_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		old_rect.stretch_mode = TextureRect.STRETCH_SCALE
-		old_rect.size = vsize
-		old_rect.position = Vector2.ZERO
-		slider.add_child(old_rect)
+	var cover := TextureRect.new()
+	cover.texture = old_tex
+	cover.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	cover.stretch_mode = TextureRect.STRETCH_SCALE
+	cover.size = vsize
+	cover.position = Vector2.ZERO
+	cover.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(cover)
 
-	# Slide the pair left by one screen: old exits left, new lands centre.
-	var tw := slider.create_tween()
+	camera.snap_overview(Vector3.ZERO)
+	var world_w := _overview_world_width(vsize)
+
+	# Slide the cover (cleared island) off to the left while the live new island pans in
+	# from the right — they move together as one strip, so no flash and a true parallax.
+	var secs := 0.85
+	camera.slide_overview_in(world_w, secs)
+	var tw := cover.create_tween()
 	tw.tween_interval(0.15)
-	tw.tween_property(slider, "position:x", -vsize.x, 0.85).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
+	tw.tween_property(cover, "position:x", -vsize.x, secs).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
 	await tw.finished
 	layer.queue_free()
 	if not is_inside_tree():
@@ -1370,6 +1361,32 @@ func _endless_intro() -> void:
 
 	# The new island has landed (still zoomed-out) — name it, hold, then zoom in.
 	await _island_arrive_beat()
+
+# DEBUG (TBK_SIM_SLIDE=1): play the island-slide transition on a loop. Each pass grabs the
+# current screen as a stand-in "cleared island" snapshot, then runs the real _endless_intro
+# against the live island — so the slide/pan/name/zoom motion can be checked without winning.
+func _sim_slide_loop() -> void:
+	await get_tree().create_timer(1.5).timeout
+	while is_inside_tree():
+		await RenderingServer.frame_post_draw
+		if not is_inside_tree():
+			return
+		var img := get_viewport().get_texture().get_image()
+		if img != null and not img.is_empty():
+			_clear_frame = img
+		await _endless_intro()
+		if not is_inside_tree():
+			return
+		# Hold on the landed island for a beat, then replay.
+		await get_tree().create_timer(2.0).timeout
+
+# World-units across the screen at the overview vantage — used to pan the new island in
+# from exactly one screen-width away (so the slide matches the cover's pixel slide).
+func _overview_world_width(vsize: Vector2) -> float:
+	var cam_y: float = camera.global_position.y
+	var half_h: float = cam_y * tan(deg_to_rad(camera.fov * 0.5))
+	var aspect: float = vsize.x / maxf(vsize.y, 1.0)
+	return half_h * 2.0 * aspect
 
 # Open ZOOMED-OUT with the island named, hold a beat, then zoom in — used when there's no
 # previous island to slide off (Play button / cold boot): the zoom-in intro minus the swipe.

@@ -50,7 +50,9 @@
       "Bash(curl -s -o /dev/null -w \"server: HTTP %{http_code}\\\\n\" --max-time 5 http://127.0.0.1:8099/index.html)",
       "Bash(cmd //c start \"\" \"http://127.0.0.1:8099/index.html?v=3\")",
       "Bash(\"/c/Users/rpandian/Downloads/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64.exe\" --path . res://toybox_kingdoms/tools/qshot.tscn)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ],
     "additionalDirectories": [
       "c:\\Users\\rpandian\\.claude\\projects\\c--Users-rpandian-Documents-toybox-kingdom\\memory"

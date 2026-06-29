@@ -20,6 +20,8 @@ var _intro := false      # true while a clear/arrive camera move owns the zoom (
 
 var _overview := false
 var _overview_center := Vector3.ZERO
+var _overview_pan := Vector3.ZERO    # horizontal framing offset for the slide-in (world units)
+var _overview_locked := false        # true = position exactly (no lerp), so the slide pan is precise
 # Height 57 / tilt 7 at FOV 55° shows the whole island with a modest ocean border —
 # tight enough that kingdoms aren't tiny, wide enough that none clip off-screen.
 const OVERVIEW_POS := Vector3(0.0, 171.0, 21.0)
@@ -58,15 +60,27 @@ func transition_overview(center: Vector3 = Vector3.ZERO, secs: float = 1.0) -> v
 	tw.tween_property(self, "fov", 55.0, secs).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
 
 # SNAP straight to the overhead overview (no lerp) — used on the freshly-loaded next
-# island so it's framed in the map vantage the instant we snapshot it for the slide.
+# island so it's framed in the map vantage instantly (the live render under the slide).
 func snap_overview(center: Vector3 = Vector3.ZERO) -> void:
 	_orbit = false
 	_intro = true
 	_overview = true
+	_overview_locked = true
 	_overview_center = center
+	_overview_pan = Vector3.ZERO
 	fov = 55.0
 	global_position = center + OVERVIEW_POS
 	look_at(center, Vector3.UP)
+
+# Slide the live overview in from the right: start the framing one screen-width (`world_w`)
+# to the side so the island sits off the right edge, then pan to centre over `secs`. Runs
+# locked so it stays glued to the cover snapshot sliding off the other way.
+func slide_overview_in(world_w: float, secs: float, lead: float = 0.15) -> void:
+	_overview_locked = true
+	_overview_pan = Vector3(-world_w, 0.0, 0.0)
+	var tw := create_tween()
+	tw.tween_interval(lead)
+	tw.tween_property(self, "_overview_pan:x", 0.0, secs).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
 
 # Zoom IN from the overview vantage into normal hero framing once the new island has
 # slid into place. Drops overview so _process resumes the follow lerp (rig eases down
@@ -95,10 +109,14 @@ func punch_zoom(amount: float) -> void:
 func start_overview(center: Vector3) -> void:
 	_orbit = false
 	_overview = true
+	_overview_locked = false
+	_overview_pan = Vector3.ZERO
 	_overview_center = center
 
 func end_overview() -> void:
 	_overview = false
+	_overview_locked = false
+	_overview_pan = Vector3.ZERO
 
 # Detach from the player and slowly circle a point (their capital) for the win
 # cinematic. Pushes the FOV in for a tighter, more dramatic frame.
@@ -111,10 +129,15 @@ func start_victory_orbit(focus: Vector3) -> void:
 
 func _process(delta: float) -> void:
 	if _overview:
-		var want := _overview_center + OVERVIEW_POS
-		var t := clampf(follow_speed * delta, 0.0, 1.0)
-		global_position = global_position.lerp(want, t)
-		look_at(_overview_center, Vector3.UP)
+		var c := _overview_center + _overview_pan
+		var want := c + OVERVIEW_POS
+		if _overview_locked:
+			# Transition slide: position exactly so the pan stays glued to the cover's slide.
+			global_position = want
+		else:
+			var t := clampf(follow_speed * delta, 0.0, 1.0)
+			global_position = global_position.lerp(want, t)
+		look_at(c, Vector3.UP)
 		return
 	if _orbit:
 		_orbit_ang += delta * 0.32
