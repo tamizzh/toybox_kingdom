@@ -46,9 +46,15 @@ func _ready() -> void:
 	# ── GameAnalytics SDK init ────────────────────────────────────────────────
 	if Engine.has_singleton("GameAnalytics"):
 		_ga = Engine.get_singleton("GameAnalytics")
-		_ga.setEnabledInfoLog(OS.is_debug_build())
-		_ga.configureUserId(_player_id)
-		_ga.initialize(GA_GAME_KEY, GA_SECRET_KEY)
+		if _ga.has_method("setEnabledInfoLog"):
+			_ga.setEnabledInfoLog(OS.is_debug_build())
+		if _ga.has_method("configureUserId"):
+			_ga.configureUserId(_player_id)
+		if _ga.has_method("init"):
+			_ga.init(GA_GAME_KEY, GA_SECRET_KEY)
+		else:
+			push_warning("[analytics] GameAnalytics singleton found but 'init' missing — check addon version")
+			_ga = null
 
 	event("session_start", {
 		"session_num": _session_num,
