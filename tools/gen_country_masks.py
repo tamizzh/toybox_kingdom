@@ -62,7 +62,7 @@ POV_SOURCE = {
 }
 # Countries whose overseas/detached landmasses we KEEP (skip the mainland-only
 # distance filter). The USA keeps Alaska + Hawaii here per the user's choice.
-KEEP_ALL_RINGS = {"United States of America"}
+KEEP_ALL_RINGS = set()  # USA: contiguous 48 only (Alaska/Hawaii stretch the bbox too much)
 
 # The 20 countries in conquest order (easy → hard by shape complexity + size).
 # Each entry: (natural_earth_name, display_name, hue_hex, rival_count)

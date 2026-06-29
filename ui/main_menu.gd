@@ -159,6 +159,11 @@ func _build_bottom_dock() -> void:
 	icon_row.add_child(_atlas_icon_btn("shop", func() -> void:
 		AudioManager.play("tap")
 		_open_overlay(load("res://ui/shop_screen.gd").new())))
+	# WORLD MAP — which of the 20 countries you've conquered so far. The button art is
+	# the map-pin icon from the HUD kit (no dedicated button frame exists for it).
+	icon_row.add_child(_atlas_icon_btn("kingdom", func() -> void:
+		AudioManager.play("tap")
+		_open_overlay(load("res://ui/world_map_screen.gd").new())))
 	icon_row.add_child(_atlas_icon_btn("rewards", func() -> void:
 		AudioManager.play("tap")
 		_open_overlay(load("res://ui/daily_screen.gd").new())))
@@ -291,10 +296,10 @@ func _refresh_currency() -> void:
 		_coin_label.text = "LV %d  •  %d" % [SaveManager.level(), SaveManager.coins()]
 
 
-func _atlas_icon_btn(name: String, cb: Callable) -> TextureButton:
+func _atlas_icon_btn(name: String, cb: Callable, tex_path: String = "") -> TextureButton:
 	var b := TextureButton.new()
 	b.focus_mode = Control.FOCUS_NONE
-	var tex := AssetKit.tex("res://assets/ui/buttons/" + name)
+	var tex := AssetKit.tex(tex_path if tex_path != "" else "res://assets/ui/buttons/" + name)
 	if tex:
 		b.texture_normal  = tex
 		b.texture_hover   = tex
