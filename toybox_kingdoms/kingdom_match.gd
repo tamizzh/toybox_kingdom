@@ -57,7 +57,7 @@ const CELL := 0.6   # 384×288 grid at 0.6 wu/cell → world 230×172 wu, each i
 const HOME_R := 15  # cells; home blob ≈ 9 wu radius, same proportion of the 3× island
 const N_KINGDOMS := 8           # 1 human + 7 AI
 const HUMAN_INPUT_ID := 0
-const HUMAN_SPEED := 6.7          # human's base carve speed — tuned to local feel. Cells render the
+const HUMAN_SPEED := 7.37         # human's base carve speed — tuned to local feel. Cells render the
 								 # same on-screen size and the follow-cam shows the same local view, so
 								 # the speed matches the original good feel (3× was too fast locally).
 const BARRACKS_SPEED := 0.44      # each BARRACKS makes your king carve this much faster
@@ -227,7 +227,7 @@ const PU_BOMB_RADIUS   := 4
 const PU_MAGNET_RADIUS := 6
 const PU_SPAWN_INTERVAL := 25.0   # seconds between spawn waves
 const PU_PER_WAVE    := 3         # how many pickups appear per wave
-const PU_SPEED_BOOST := 3.5       # extra speed added on top of current avatar speed
+const PU_SPEED_BOOST := 3.85      # extra speed added on top of current avatar speed
 
 # Power-up models preloaded at parse time. Using load() inside _make_pu_node() blocks
 # the main thread on the first GLB parse (a few ms) — on a 25s spawn cadence that's
