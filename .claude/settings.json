@@ -52,7 +52,12 @@
       "Bash(\"/c/Users/rpandian/Downloads/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64.exe\" --path . res://toybox_kingdoms/tools/qshot.tscn)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(\"/c/Users/rpandian/Downloads/Godot_v4.6.2-stable_win64.exe/Godot_v4.6.2-stable_win64_console.exe\" --path . \"res://toybox_kingdoms/kingdom_match.tscn\" --quit-after 1200)",
+      "Bash(cp .claude/shot_kingdom.png .claude/shot_before_disable.png)",
+      "Bash(python3)",
+      "Read(//c/Users/rpandian/AppData/Roaming/Godot/export_templates//**)",
+      "Read(//c/Users/rpandian/AppData/Roaming/Godot/export_templates/4.6.2.stable//**)"
     ],
     "additionalDirectories": [
       "c:\\Users\\rpandian\\.claude\\projects\\c--Users-rpandian-Documents-toybox-kingdom\\memory"
