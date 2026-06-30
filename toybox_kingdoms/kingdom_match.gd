@@ -9,6 +9,7 @@ extends Node3D
 #
 # Run (desktop, WASD): godot --path "<project>" res://toybox_kingdoms/kingdom_match.tscn
 
+const UIKit := preload("res://ui/ui_kit.gd")
 const Grid := preload("res://toybox_kingdoms/grid/territory_grid.gd")
 const GridRenderer := preload("res://toybox_kingdoms/grid/grid_renderer.gd")
 const KingdomCamera := preload("res://toybox_kingdoms/camera/kingdom_camera.gd")
@@ -302,6 +303,7 @@ func _ready() -> void:
 			var cidx := clampi(_endless_island, 0, CountryMasks.COUNTRIES.size() - 1)
 			var entry: Dictionary = CountryMasks.COUNTRIES[cidx]
 			_land_mask = CountryMasks.decode_mask(entry["mask_hex"])
+			_land_mask = _sanitize_land_mask(_land_mask)
 			_land_bbox = CountryMasks.mask_bbox(_land_mask)
 			# Active clamping rect = land bbox with 2-cell outset so avatars walk to the shore.
 			_active_w = clampi(_land_bbox["x1"] - _land_bbox["x0"] + 4, 10, GW)
@@ -1125,10 +1127,10 @@ func _build_continue_panel() -> void:
 	btns.add_theme_constant_override("separation", 16)
 	vb.add_child(btns)
 	# Green = take the revive (primary), blue = give up — matches the results-screen CTAs.
-	var watch := _sprite_button("▶  CONTINUE  (Ad)", BTN_FRAME_GREEN)
+	var watch := UIKit.stone_btn("▶  CONTINUE  (Ad)", true, Callable(), 264)
 	watch.pressed.connect(_take_continue)
 	btns.add_child(watch)
-	var giveup := _sprite_button("GIVE UP", BTN_FRAME_BLUE)
+	var giveup := UIKit.stone_btn("GIVE UP", false, Callable(), 220)
 	giveup.pressed.connect(_decline_continue)
 	btns.add_child(giveup)
 
@@ -1276,13 +1278,13 @@ func _show_pause_panel() -> void:
 	btns.add_theme_constant_override("separation", 14)
 	vb.add_child(btns)
 
-	var menu_btn := _sprite_button("MAIN MENU", BTN_FRAME_BLUE)
+	var menu_btn := UIKit.stone_btn("MAIN MENU", false, Callable(), 220)
 	menu_btn.pressed.connect(func() -> void:
 		AudioManager.play("tap")
 		get_tree().change_scene_to_file("res://ui/main_menu.tscn"))
 	btns.add_child(menu_btn)
 
-	var resume_btn := _sprite_button("RESUME", BTN_FRAME_GREEN)
+	var resume_btn := UIKit.stone_btn("RESUME", true, Callable(), 220)
 	resume_btn.pressed.connect(_close_pause_panel)
 	btns.add_child(resume_btn)
 
@@ -1715,13 +1717,13 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	btns.add_theme_constant_override("separation", 16)
 	vb.add_child(btns)
 
-	var again := _sprite_button("PLAY AGAIN", BTN_FRAME_GREEN)
+	var again := UIKit.stone_btn("PLAY AGAIN", true, Callable(), 264)
 	again.pressed.connect(func() -> void:
 		AudioManager.play("tap")
 		get_tree().reload_current_scene())
 	btns.add_child(again)
 
-	var menu := _sprite_button("MAIN MENU", BTN_FRAME_BLUE)
+	var menu := UIKit.stone_btn("MAIN MENU", false, Callable(), 220)
 	menu.pressed.connect(func() -> void:
 		AudioManager.play("tap")
 		get_tree().change_scene_to_file("res://ui/main_menu.tscn"))
@@ -2325,6 +2327,55 @@ func _pick_home_cells(n: int) -> Array:
 
 	print("[HOME] placed %d/%d kingdoms (min_sep=%d) — cells: %s" % [all_chosen.size(), n, min_sep, str(all_chosen)])
 	return all_chosen
+
+# Remove invisible walls caused by isolated ocean holes and tight inlets in country masks.
+# Pass 1 (BFS from border): fills any ocean cell not reachable from the grid edge (enclosed lake).
+# Pass 2 (repeat until stable): fills any ocean cell with 3+ land neighbours (1-cell bays that
+# block movement because the avatar centre enters the cell from a neighbouring land cell).
+func _sanitize_land_mask(mask: PackedByteArray) -> PackedByteArray:
+	var w := GW; var h := GH; var n := w * h
+	# BFS seeds: all ocean cells on the grid border.
+	var visited := PackedByteArray(); visited.resize(n); visited.fill(0)
+	var q: Array = []
+	for cx in w:
+		for cy in [0, h - 1]:
+			var idx: int = cy * w + cx
+			if mask[idx] == 0 and visited[idx] == 0:
+				visited[idx] = 1; q.append(idx)
+	for cy in range(1, h - 1):
+		for cx in [0, w - 1]:
+			var idx: int = cy * w + cx
+			if mask[idx] == 0 and visited[idx] == 0:
+				visited[idx] = 1; q.append(idx)
+	var qi := 0
+	while qi < q.size():
+		var cur: int = q[qi]; qi += 1
+		var cx := cur % w; var cy := cur / w
+		for di in 4:
+			var nx: int = cx + [1,-1,0,0][di]; var ny: int = cy + [0,0,1,-1][di]
+			if nx >= 0 and ny >= 0 and nx < w and ny < h:
+				var nidx: int = ny * w + nx
+				if mask[nidx] == 0 and visited[nidx] == 0:
+					visited[nidx] = 1; q.append(nidx)
+	# Fill interior holes (unreachable ocean → land).
+	var result := mask.duplicate()
+	for i in n:
+		if result[i] == 0 and visited[i] == 0:
+			result[i] = 1
+	# Fill tight inlets: ocean cells with 3+ land neighbours, iterated until stable.
+	var changed := true
+	while changed:
+		changed = false
+		for cy in range(1, h - 1):
+			for cx in range(1, w - 1):
+				var idx := cy * w + cx
+				if result[idx] != 0:
+					continue
+				var land_n := int(result[(cy-1)*w+cx]) + int(result[(cy+1)*w+cx]) \
+						+ int(result[cy*w+cx-1]) + int(result[cy*w+cx+1])
+				if land_n >= 3:
+					result[idx] = 1; changed = true
+	return result
 
 # Grow every land cell outward by radius cells (morphological dilation).
 func _dilate_land_mask(mask: PackedByteArray, radius: int) -> PackedByteArray:

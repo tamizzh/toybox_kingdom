@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://shot_all_overlays"]
+
+[ext_resource type="Script" path="res://toybox_kingdoms/tools/shot_all_overlays.gd" id="1_overlays"]
+
+[node name="ShotAllOverlays" type="Node"]
+script = ExtResource("1_overlays")

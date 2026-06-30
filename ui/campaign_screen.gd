@@ -9,9 +9,12 @@ extends Control
 
 const Campaign := preload("res://toybox_kingdoms/data/campaign.gd")
 const KINGDOM_MATCH := "res://toybox_kingdoms/kingdom_match.tscn"
+const UIKit := preload("res://ui/ui_kit.gd")
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	z_index = 100
 	var dim := ColorRect.new()
 	dim.color = Color(0, 0, 0, 0.66)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -60,9 +63,11 @@ func _ready() -> void:
 	for idx in Campaign.count():
 		list.add_child(_stage_card(idx, cleared, active))
 
-	col.add_child(_btn("CLOSE", Palette.SAFE, func() -> void:
+	var close_btn := UIKit.stone_btn("CLOSE", false, func() -> void:
 		AudioManager.play("tap")
-		queue_free()))
+		queue_free(), 200)
+	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	col.add_child(close_btn)
 
 
 # One stage card: number badge · title + difficulty pips · status (✓ / CONQUER / 🔒).
@@ -124,10 +129,10 @@ func _stage_card(idx: int, cleared: int, active: int) -> Control:
 
 	# status / action on the right
 	if is_current:
-		row.add_child(_btn("REPLAY" if is_cleared else "CONQUER", Palette.WARN, func() -> void:
+		row.add_child(UIKit.stone_btn("REPLAY" if is_cleared else "CONQUER", true, func() -> void:
 			AudioManager.play("tap")
 			SaveManager.set_mode("campaign")   # PLAY may have left mode on "timed"
-			get_tree().change_scene_to_file(KINGDOM_MATCH), 150.0))
+			get_tree().change_scene_to_file(KINGDOM_MATCH), 200))
 	elif is_cleared:
 		row.add_child(_status("✓", Palette.SAFE))
 	else:
@@ -167,18 +172,6 @@ func _status(text: String, color: Color) -> Label:
 	return l
 
 
-func _btn(text: String, color: Color, cb: Callable, width: float = 150.0) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.add_theme_font_size_override("font_size", 20)
-	b.add_theme_color_override("font_color", Color.WHITE)
-	b.add_theme_stylebox_override("normal", _panel(Color(color, 0.22), color))
-	b.add_theme_stylebox_override("hover", _panel(Color(color, 0.40), color))
-	b.add_theme_stylebox_override("pressed", _panel(Color(color, 0.55), color))
-	b.custom_minimum_size = Vector2(width, 48)
-	b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	b.pressed.connect(cb)
-	return b
 
 
 func _panel(bg: Color, border: Color) -> StyleBoxFlat:

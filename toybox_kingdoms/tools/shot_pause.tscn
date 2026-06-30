@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://shot_pause"]
+
+[ext_resource type="Script" path="res://toybox_kingdoms/tools/shot_pause.gd" id="1_pause"]
+
+[node name="ShotPause" type="Node"]
+script = ExtResource("1_pause")

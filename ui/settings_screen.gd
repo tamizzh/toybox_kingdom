@@ -5,9 +5,12 @@ extends Control
 
 # TODO(store): host a real privacy policy and put its URL here before submission.
 const PRIVACY_URL := "https://example.com/toybox-kingdoms/privacy"
+const UIKit := preload("res://ui/ui_kit.gd")
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	z_index = 100
 
 	var dim := ColorRect.new()
 	dim.color = Color(0, 0, 0, 0.62)
@@ -31,10 +34,15 @@ func _ready() -> void:
 		func(v): SaveManager.set_sfx_volume(v); AudioManager.play("tap")))
 	col.add_child(_camera_row())
 
-	col.add_child(_btn("Restore Purchases", Palette.PLAYER_COLORS[1],
-		func(): MonetizationManager.restore()))
-	col.add_child(_btn("Privacy Policy", Palette.NEUTRAL,
-		func(): OS.shell_open(PRIVACY_URL)))
+	var restore_btn := UIKit.stone_btn("Restore Purchases", false,
+		func(): MonetizationManager.restore(), 200, 16)
+	restore_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	col.add_child(restore_btn)
+
+	var privacy_btn := UIKit.stone_btn("Privacy Policy", false,
+		func(): OS.shell_open(PRIVACY_URL), 200, 18)
+	privacy_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	col.add_child(privacy_btn)
 
 	var credits := Label.new()
 	credits.text = "Toybox Kingdoms\nMade with Godot. Music & SFX generated in-house."
@@ -43,7 +51,10 @@ func _ready() -> void:
 	credits.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(credits)
 
-	col.add_child(_btn("CLOSE", Palette.SAFE, func(): AudioManager.play("tap"); queue_free()))
+	var close_btn := UIKit.stone_btn("CLOSE", false,
+		func(): AudioManager.play("tap"); queue_free(), 200)
+	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	col.add_child(close_btn)
 
 func _title(text: String) -> Label:
 	var l := Label.new()
@@ -123,17 +134,6 @@ func _camera_row() -> Control:
 	row.add_child(hint)
 	return row
 
-func _btn(text: String, color: Color, cb: Callable) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.add_theme_font_size_override("font_size", 22)
-	b.add_theme_color_override("font_color", Color.WHITE)
-	b.add_theme_stylebox_override("normal", _panel(Color(color, 0.22), color))
-	b.add_theme_stylebox_override("hover", _panel(Color(color, 0.40), color))
-	b.add_theme_stylebox_override("pressed", _panel(Color(color, 0.55), color))
-	b.custom_minimum_size = Vector2(0, 52)
-	b.pressed.connect(cb)
-	return b
 
 func _panel(bg: Color, border: Color) -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()

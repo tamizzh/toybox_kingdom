@@ -4,6 +4,8 @@ extends Control
 # Added as a child of the main menu; frees itself on Close. Gives players a sense of
 # progress and a home for the earned-currency economy.
 
+const UIKit := preload("res://ui/ui_kit.gd")
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	var dim := ColorRect.new()
@@ -58,9 +60,11 @@ func _ready() -> void:
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	col.add_child(spacer)
 
-	col.add_child(_btn("CLOSE", Palette.SAFE, func() -> void:
+	var close_btn := UIKit.stone_btn("CLOSE", false, func() -> void:
 		AudioManager.play("tap")
-		queue_free()))
+		queue_free(), 200)
+	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	col.add_child(close_btn)
 
 
 func _heading(text: String, size: int, color: Color) -> Label:
@@ -91,17 +95,6 @@ func _stat_row(label: String, value: String, vcol: Color) -> Control:
 	return row
 
 
-func _btn(text: String, color: Color, cb: Callable) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.add_theme_font_size_override("font_size", 24)
-	b.add_theme_color_override("font_color", Color.WHITE)
-	b.add_theme_stylebox_override("normal", _panel(Color(color, 0.22), color))
-	b.add_theme_stylebox_override("hover", _panel(Color(color, 0.40), color))
-	b.add_theme_stylebox_override("pressed", _panel(Color(color, 0.55), color))
-	b.custom_minimum_size = Vector2(0, 56)
-	b.pressed.connect(cb)
-	return b
 
 
 func _panel(bg: Color, border: Color) -> StyleBoxFlat:

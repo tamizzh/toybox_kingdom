@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://shot_overlays_tbk"]
+
+[ext_resource type="Script" path="res://tools/shot_overlays.gd" id="1_overlays"]
+
+[node name="ShotOverlays" type="Node"]
+script = ExtResource("1_overlays")

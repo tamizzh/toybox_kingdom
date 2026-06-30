@@ -1,0 +1,8 @@
+[gd_scene format=3 uid="uid://btn_preview"]
+
+[ext_resource type="Script" path="res://ui/buttons_preview.gd" id="1_preview"]
+
+[node name="ButtonsPreview" type="Control"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_preview")

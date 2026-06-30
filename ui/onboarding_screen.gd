@@ -4,6 +4,8 @@ extends Control
 # and controls. Shown once on first launch (gated by SaveManager.onboarding_done) and
 # replayable from the menu's HOW TO PLAY button. Marks onboarding done when finished.
 
+const UIKit := preload("res://ui/ui_kit.gd")
+
 const ILLO_SHOTS := [
 	"res://assets/onboarding/p0_kingdom.png",
 	"res://assets/screenshots/loop.png",
@@ -105,24 +107,22 @@ func _rebuild() -> void:
 
 	# Next / Let's Play
 	var last := _page == PAGES.size() - 1
-	var next := _btn("LET'S PLAY" if last else "NEXT", Palette.SAFE, func() -> void:
+	var next := UIKit.stone_btn("LET'S PLAY" if last else "NEXT", true, func() -> void:
 		AudioManager.play("tap")
 		if last:
 			_finish()
 		else:
 			_page += 1
-			_rebuild())
-	next.custom_minimum_size = Vector2(300, 70)
-	next.position = Vector2(Palette.CENTER_X - 150, 620)
+			_rebuild(), 200, 24)
+	next.position = Vector2(Palette.CENTER_X - 100, 620)
 	add_child(next)
 
 	# Skip (top-right) — hidden on the last page
 	if not last:
-		var skip := _btn("SKIP", Palette.NEUTRAL, func() -> void:
+		var skip := UIKit.stone_btn("SKIP", false, func() -> void:
 			AudioManager.play("tap")
-			_finish())
-		skip.custom_minimum_size = Vector2(110, 46)
-		skip.position = Vector2(Palette.DESIGN_W - 150, 28)
+			_finish(), 200, 18)
+		skip.position = Vector2(Palette.DESIGN_W - 216, 28)  # 200px wide + 16px margin from right
 		add_child(skip)
 
 	# "tap anywhere" hint — pulsing below the dots, hidden on last page
@@ -157,23 +157,6 @@ func _finish() -> void:
 	queue_free()
 
 
-func _btn(text: String, color: Color, cb: Callable) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_size_override("font_size", 26)
-	b.add_theme_color_override("font_color", Color.WHITE)
-	var alphas := {"normal": 0.85, "hover": 1.0, "pressed": 0.7}
-	for state in ["normal", "hover", "pressed"]:
-		var a: float = alphas[state]
-		var s := StyleBoxFlat.new()
-		s.bg_color = Color(color, a)
-		s.set_corner_radius_all(20)
-		s.content_margin_left = 16; s.content_margin_right = 16
-		s.content_margin_top = 8; s.content_margin_bottom = 8
-		b.add_theme_stylebox_override(state, s)
-	b.pressed.connect(cb)
-	return b
 
 
 # ── drawn pieces ─────────────────────────────────────────────────────────────────

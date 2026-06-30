@@ -17,8 +17,9 @@ New-Item -ItemType Directory -Force -Path "assets\islands" | Out-Null
 for ($i = 0; $i -lt $total; $i++) {
     Write-Host "Island $($i + 1) / $total ..." -NoNewline
 
-    $env:TBK_ENDLESS = "1"
-    $env:TBK_ISLAND  = "$i"
+    $env:TBK_ENDLESS      = "1"
+    $env:TBK_ISLAND       = "$i"
+    $env:TBK_AUTOCONTINUE = "1"  # prevent 6-s block if player is eliminated early
 
     # Start-Process (without -NoNewWindow) lets Godot open its own window,
     # which is required for the GPU renderer to work on Windows/D3D12.

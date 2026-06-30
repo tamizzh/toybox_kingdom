@@ -8,9 +8,12 @@ extends Control
 # Added as a child of the main menu, frees itself on Close (mirrors campaign_screen).
 
 const CountryMasks := preload("res://toybox_kingdoms/data/country_masks.gd")
+const UIKit := preload("res://ui/ui_kit.gd")
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	z_index = 100
 	var dim := ColorRect.new()
 	dim.color = Color(0, 0, 0, 0.66)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -79,9 +82,11 @@ func _ready() -> void:
 		var entry: Dictionary = CountryMasks.COUNTRIES[idx]
 		grid.add_child(_country_tile(idx, entry, conquered, current))
 
-	col.add_child(_btn("CLOSE", Palette.SAFE, func() -> void:
+	var close_btn := UIKit.stone_btn("CLOSE", false, func() -> void:
 		AudioManager.play("tap")
-		queue_free()))
+		queue_free(), 200)
+	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	col.add_child(close_btn)
 
 
 # One country tile: island screenshot preview tinted by status, plus a number badge
@@ -98,32 +103,40 @@ func _country_tile(idx: int, _entry: Dictionary, conquered: int, current: int) -
 		accent = Palette.SAFE
 
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel",
-		_panel(Color(accent, 0.18 if is_current else 0.08), Color(accent, 0.9 if is_current else 0.4)))
+	# Zero content margins so the screenshot fills the full card area; rounded
+	# corners + border are still drawn, and clip_children crops the image to match.
+	var card_style := StyleBoxFlat.new()
+	card_style.bg_color = Color(accent, 0.10 if is_current else 0.06)
+	card_style.border_color = Color(accent, 0.9 if is_current else 0.45)
+	card_style.border_width_left = 2; card_style.border_width_right = 2
+	card_style.border_width_top = 2; card_style.border_width_bottom = 2
+	card_style.corner_radius_top_left = 10; card_style.corner_radius_top_right = 10
+	card_style.corner_radius_bottom_left = 10; card_style.corner_radius_bottom_right = 10
+	card.add_theme_stylebox_override("panel", card_style)
 	card.custom_minimum_size = Vector2(180, 150)
 	card.clip_children = CanvasItem.CLIP_CHILDREN_ONLY
 
 	# A free-form layer so the badge + status mark can overlap the screenshot.
 	var layer := Control.new()
-	layer.custom_minimum_size = Vector2(180, 150)
+	layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	card.add_child(layer)
 
 	# Island screenshot — fills the tile, cover-cropped.
+	# modulate > 1 compensates for the dark UI background making the image look dim.
 	var shot := TextureRect.new()
 	shot.texture = _island_texture(idx)
 	shot.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	shot.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	shot.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	shot.modulate = Color(1.6, 1.6, 1.6, 1.0)
 	shot.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	shot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(shot)
 
-	# Status tint overlay: dim for locked, subtle tint for conquered/current.
+	# Status tint overlay: colour tint for conquered only; locked/current get none.
 	var tint := ColorRect.new()
-	if is_locked:
-		tint.color = Color(0.04, 0.06, 0.12, 0.68)
-	elif is_conquered:
-		tint.color = Color(Palette.SAFE, 0.18)
+	if is_conquered:
+		tint.color = Color(Palette.SAFE, 0.15)
 	else:
 		tint.color = Color(0, 0, 0, 0)
 	tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -167,19 +180,6 @@ func _island_texture(idx: int) -> Texture2D:
 	return load(path) as Texture2D
 
 
-func _btn(text: String, color: Color, cb: Callable, width: float = 150.0) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.add_theme_font_size_override("font_size", 20)
-	b.add_theme_color_override("font_color", Color.WHITE)
-	b.add_theme_stylebox_override("normal", _panel(Color(color, 0.22), color))
-	b.add_theme_stylebox_override("hover", _panel(Color(color, 0.40), color))
-	b.add_theme_stylebox_override("pressed", _panel(Color(color, 0.55), color))
-	b.custom_minimum_size = Vector2(width, 48)
-	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	b.pressed.connect(cb)
-	return b
 
 
 func _panel(bg: Color, border: Color) -> StyleBoxFlat:

@@ -5,6 +5,7 @@ extends Control
 # date-seeded daily run. Added as a child of the main menu; frees itself on Close.
 
 const KINGDOM_MATCH := "res://toybox_kingdoms/kingdom_match.tscn"
+const UIKit := preload("res://ui/ui_kit.gd")
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -17,17 +18,14 @@ func _ready() -> void:
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(dim)
 
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(center)
-
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", _panel(Color("141a28"), Color("3f4d69")))
-	center.add_child(panel)
+	panel.custom_minimum_size = Vector2(600, 400)
+	panel.position = Vector2(Palette.CENTER_X - 300, 80)
+	add_child(panel)
 
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 12)
-	vb.custom_minimum_size = Vector2(520, 0)
 	panel.add_child(vb)
 
 	var done := SaveManager.daily_done_today()
@@ -54,18 +52,15 @@ func _ready() -> void:
 	btns.add_theme_constant_override("separation", 16)
 	vb.add_child(btns)
 
-	var play := _btn(("REPLAY TODAY" if done else "PLAY  ·  CLAIM"), Palette.SAFE, func() -> void:
+	var play_btn := UIKit.stone_btn("REPLAY TODAY" if done else "PLAY TODAY", true, func() -> void:
 		AudioManager.play("tap")
 		SaveManager.set_mode("daily")
-		get_tree().change_scene_to_file(KINGDOM_MATCH))
-	play.custom_minimum_size = Vector2(260, 64)
-	btns.add_child(play)
+		get_tree().change_scene_to_file(KINGDOM_MATCH), 200)
+	btns.add_child(play_btn)
 
-	var close := _btn("CLOSE", Palette.NEUTRAL, func() -> void:
+	btns.add_child(UIKit.stone_btn("CLOSE", false, func() -> void:
 		AudioManager.play("tap")
-		queue_free())
-	close.custom_minimum_size = Vector2(150, 64)
-	btns.add_child(close)
+		queue_free(), 200))
 
 const HUD_GOLD := Color("ffd34d")
 
@@ -85,22 +80,6 @@ func _rule(parent: Node) -> void:
 	r.custom_minimum_size = Vector2(0, 2)
 	parent.add_child(r)
 
-func _btn(text: String, color: Color, cb: Callable) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_size_override("font_size", 24)
-	b.add_theme_color_override("font_color", Color.WHITE)
-	for state in ["normal", "hover", "pressed"]:
-		var a: float = {"normal": 0.85, "hover": 1.0, "pressed": 0.7}[state]
-		var s := StyleBoxFlat.new()
-		s.bg_color = Color(color, a)
-		s.set_corner_radius_all(16)
-		s.content_margin_left = 14; s.content_margin_right = 14
-		s.content_margin_top = 8; s.content_margin_bottom = 8
-		b.add_theme_stylebox_override(state, s)
-	b.pressed.connect(cb)
-	return b
 
 func _panel(bg: Color, border: Color) -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()

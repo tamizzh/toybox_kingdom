@@ -14,11 +14,14 @@ func _ready() -> void:
 	var m: Node = load("res://toybox_kingdoms/kingdom_match.gd").new()
 	add_child(m)
 
-	# process_always=true so timer fires even if _offer_continue pauses the tree.
-	await get_tree().create_timer(4.0, true).timeout
-
+	# Disable the camera's own process so the intro animation can't override
+	# the overhead position we set directly below.
 	if m.camera:
-		m.camera.snap_overview(Vector3.ZERO)
+		m.camera.set_process(false)
+		m.camera.set_physics_process(false)
+		m.camera.global_position = Vector3(0.0, 171.0, 21.0)
+		m.camera.look_at(Vector3.ZERO, Vector3.UP)
+		m.camera.fov = 55.0
 
 	if m._ui_layer:
 		m._ui_layer.visible = false
@@ -30,9 +33,13 @@ func _ready() -> void:
 			if child is CanvasItem:
 				(child as CanvasItem).visible = false
 
-	# Wait for the renderer to finish the current frame before grabbing pixels.
-	# Forward Mobile / D3D12 requires this — get_image() can block if the GPU is
-	# mid-frame when called directly after process_frame signals.
+	# Run physics for 2.5 s so kingdoms spread small coloured territory patches
+	# (adds vibrancy). Power-ups spawn at 10 s, so none appear in this window.
+	# process_always=true fires the timer even if _offer_continue pauses the tree.
+	await get_tree().create_timer(2.5, true).timeout
+
+	# Wait for the renderer to finish the current frame (Forward Mobile / D3D12
+	# requires this — get_image() can stall mid-frame otherwise).
 	await RenderingServer.frame_post_draw
 
 	var img := get_viewport().get_texture().get_image()
