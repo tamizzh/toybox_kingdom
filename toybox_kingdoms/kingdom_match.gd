@@ -265,8 +265,9 @@ var _rival_diffs: Array = []     # per-rival AI difficulty for this stage
 var _stage_msg := ""             # results banner ("Stage cleared!" / "Campaign complete!")
 
 func _ready() -> void:
-	_make_dbg_overlay()
 	_dbg = OS.get_environment("TBK_DEBUG") == "1"
+	if _dbg:
+		_make_dbg_overlay()
 	var fast := OS.get_environment("TBK_FASTMATCH")
 	if fast != "":
 		_match_t = float(fast)
