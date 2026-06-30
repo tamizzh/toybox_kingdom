@@ -135,13 +135,17 @@ func _country_tile(idx: int, _entry: Dictionary, conquered: int, current: int) -
 	shot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(shot)
 
-	# Conquered tint overlay (green wash).
-	if is_conquered:
-		var tint := ColorRect.new()
+	# Status tint overlay: dark dim for locked, green wash for conquered.
+	var tint := ColorRect.new()
+	if is_locked:
+		tint.color = Color(0, 0, 0, 0.40)
+	elif is_conquered:
 		tint.color = Color(Palette.SAFE, 0.15)
-		tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		card.add_child(tint)
+	else:
+		tint.color = Color(0, 0, 0, 0)
+	tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(tint)
 
 	# Border drawn on top so it overlaps the image edge cleanly.
 	var border := Panel.new()
