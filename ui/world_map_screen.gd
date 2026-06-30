@@ -102,9 +102,16 @@ func _country_tile(idx: int, _entry: Dictionary, conquered: int, current: int) -
 	elif is_conquered:
 		accent = Palette.SAFE
 
-	var card := PanelContainer.new()
-	# Zero content margins so the screenshot fills the full card area; rounded
-	# corners + border are still drawn, and clip_children crops the image to match.
+	# Use a plain Control (not PanelContainer) so children use normal anchor layout
+	# without the container trying to manage their sizes. clip_children is intentionally
+	# NOT set — PanelContainer + CLIP_CHILDREN_ONLY causes intermediate-buffer compositing
+	# that darkens TextureRect children in Godot 4.6.
+	var card := Control.new()
+	card.custom_minimum_size = Vector2(180, 150)
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	# Background panel drawn first (behind everything else).
+	var bg := Panel.new()
 	var card_style := StyleBoxFlat.new()
 	card_style.bg_color = Color(accent, 0.10 if is_current else 0.06)
 	card_style.border_color = Color(accent, 0.9 if is_current else 0.45)
@@ -112,36 +119,43 @@ func _country_tile(idx: int, _entry: Dictionary, conquered: int, current: int) -
 	card_style.border_width_top = 2; card_style.border_width_bottom = 2
 	card_style.corner_radius_top_left = 10; card_style.corner_radius_top_right = 10
 	card_style.corner_radius_bottom_left = 10; card_style.corner_radius_bottom_right = 10
-	card.add_theme_stylebox_override("panel", card_style)
-	card.custom_minimum_size = Vector2(180, 150)
-	card.clip_children = CanvasItem.CLIP_CHILDREN_ONLY
+	bg.add_theme_stylebox_override("panel", card_style)
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(bg)
 
-	# A free-form layer so the badge + status mark can overlap the screenshot.
-	var layer := Control.new()
-	layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	card.add_child(layer)
-
-	# Island screenshot — fills the tile, cover-cropped.
-	# modulate > 1 compensates for the dark UI background making the image look dim.
+	# Island screenshot — fills the tile, cover-cropped. Siblings of bg so no
+	# intermediate clip buffer is introduced.
 	var shot := TextureRect.new()
 	shot.texture = _island_texture(idx)
 	shot.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	shot.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	shot.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
-	shot.modulate = Color(1.6, 1.6, 1.6, 1.0)
 	shot.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	shot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(shot)
+	card.add_child(shot)
 
-	# Status tint overlay: colour tint for conquered only; locked/current get none.
-	var tint := ColorRect.new()
+	# Conquered tint overlay (green wash).
 	if is_conquered:
+		var tint := ColorRect.new()
 		tint.color = Color(Palette.SAFE, 0.15)
-	else:
-		tint.color = Color(0, 0, 0, 0)
-	tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(tint)
+		tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card.add_child(tint)
+
+	# Border drawn on top so it overlaps the image edge cleanly.
+	var border := Panel.new()
+	var border_style := StyleBoxFlat.new()
+	border_style.bg_color = Color(0, 0, 0, 0)
+	border_style.border_color = card_style.border_color
+	border_style.border_width_left = 2; border_style.border_width_right = 2
+	border_style.border_width_top = 2; border_style.border_width_bottom = 2
+	border_style.corner_radius_top_left = 10; border_style.corner_radius_top_right = 10
+	border_style.corner_radius_bottom_left = 10; border_style.corner_radius_bottom_right = 10
+	border.add_theme_stylebox_override("panel", border_style)
+	border.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	border.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(border)
 
 	# Order badge, top-left.
 	var badge := Label.new()
@@ -152,7 +166,7 @@ func _country_tile(idx: int, _entry: Dictionary, conquered: int, current: int) -
 	badge.add_theme_constant_override("outline_size", 6)
 	badge.position = Vector2(8, 2)
 	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(badge)
+	card.add_child(badge)
 
 	# Status mark, top-right.
 	var mark := Label.new()
@@ -167,7 +181,7 @@ func _country_tile(idx: int, _entry: Dictionary, conquered: int, current: int) -
 	mark.add_theme_constant_override("outline_size", 6)
 	mark.position = Vector2(146, 2)
 	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(mark)
+	card.add_child(mark)
 	return card
 
 
