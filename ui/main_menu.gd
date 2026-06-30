@@ -611,3 +611,8 @@ class _PlayButton extends TextureButton:
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 		tw.tween_property(self, "scale", Vector2.ONE, 0.8) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+	func _gui_input(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			pivot_offset = size * 0.5
+			scale = Vector2(0.93, 0.93) if event.pressed else Vector2.ONE
