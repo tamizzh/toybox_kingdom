@@ -7,6 +7,7 @@ extends CharacterBody3D
 @export var speed: float = 6.0
 @export var momentum: float = 0.0
 @export var acceleration: float = 40.0
+var freeze_mult: float = 1.0   # set by match when a freeze powerup is active
 var auto_input: bool = true
 var data: PlayerData
 var player_id: int = 0
@@ -237,7 +238,7 @@ func _physics_process(_dt: float) -> void:
 	if dead:
 		return
 	var mv     := InputManager.get_move(player_id)
-	var target := Vector3(mv.x, 0.0, mv.y) * speed
+	var target := Vector3(mv.x, 0.0, mv.y) * speed * freeze_mult
 	if momentum > 0.0:
 		velocity = velocity.move_toward(target, acceleration * _dt)
 	else:

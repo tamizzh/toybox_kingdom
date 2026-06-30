@@ -173,7 +173,7 @@ var _daily_first := false
 # Endless is NOT instant-death: you get LIVES_PER_ISLAND free respawns per island. Each
 # pop costs a life and respawns you at your castle. Only when lives run out does the
 # rewarded-ad revive offer (then game over) kick in. Refilled on each island + on revive.
-const LIVES_PER_ISLAND := 3
+const LIVES_PER_ISLAND := 2
 var _lives := 0
 var _life_dots: Array = []      # HUD heart/dot nodes
 # ── continue-on-death (rewarded-ad revive) ──
@@ -205,6 +205,10 @@ var _farms := 0
 var _barracks := 0
 var _coins_label: Label
 var _coins_chip: Control        # the top-right coins pill (pops when you earn land)
+var _pu_hud_panel: Control = null   # bottom-centre powerup timer pill (hidden when idle)
+var _pu_hud_label: Label = null     # e.g. "SPEED BURST"
+var _pu_hud_bar: ColorRect = null   # shrinking fill that shows remaining time
+var _pu_hud_bar_bg: ColorRect = null  # fixed-width background track
 var _fx                         # CaptureFX node (confetti + coin bursts)
 var _fx_cooldown := 0.0         # rate-limit player capture bursts
 var _timer_panel: PanelContainer
@@ -225,8 +229,8 @@ const PU_GHOST_DUR   := 6.0
 const PU_FREEZE_DUR  := 5.0
 const PU_BOMB_RADIUS   := 4
 const PU_MAGNET_RADIUS := 6
-const PU_SPAWN_INTERVAL := 25.0   # seconds between spawn waves
-const PU_PER_WAVE    := 3         # how many pickups appear per wave
+const PU_SPAWN_INTERVAL_BASE := 25.0  # starting seconds between waves
+const PU_PER_WAVE_BASE       := 3    # starting pickups per wave
 const PU_SPEED_BOOST := 3.85      # extra speed added on top of current avatar speed
 
 # Power-up models preloaded at parse time. Using load() inside _make_pu_node() blocks
@@ -497,7 +501,10 @@ func _spawn_kingdom(i: int) -> void:
 		var diff: int = int(info["diff"])
 		if i - 1 < _rival_diffs.size():
 			diff = int(_rival_diffs[i - 1])
-		a.ai.setup(diff, 1000 + i * 7)
+		# Pass level so the brain scales knobs continuously with progression.
+		# Campaign uses the stage index; endless uses the island number (clamped in setup).
+		var ai_level: int = _stage if _mode == "campaign" else _endless_island
+		a.ai.setup(diff, 1000 + i * 7, ai_level)
 	else:
 		_player = pdata
 		av.auto_input = true                # human reads InputManager id 0
@@ -635,8 +642,7 @@ func _physics_process(delta: float) -> void:
 			if (_frame + a.kid) % _ai_decide_every == 0:
 				a.cached_dir = a.ai.decide(a, self)
 			var dir: Vector2 = a.cached_dir
-			var freeze_mult := 0.4 if (_freeze_t > 0.0 and a.kid != _freeze_by) else 1.0
-			a.avatar.velocity = Vector3(dir.x, 0.0, dir.y) * AI_SPEED * freeze_mult
+			a.avatar.velocity = Vector3(dir.x, 0.0, dir.y) * AI_SPEED * a.ai.speed_mult * a.avatar.freeze_mult
 			a.avatar.move_and_slide()
 			if dir.length() > 0.1:
 				a.avatar.face(dir)
@@ -672,7 +678,7 @@ func _physics_process(delta: float) -> void:
 	# actually changed (extend / capture / death) instead of every frame.
 	if grid.trail_version != _last_trail_version:
 		_last_trail_version = grid.trail_version
-		renderer.update_trails(_kids)
+		renderer.update_trails(_kids, grid.ghost_kids)
 
 	var _t3 := Time.get_ticks_usec()
 
@@ -707,7 +713,7 @@ func _physics_process(delta: float) -> void:
 	_tick_powerups(delta)
 	_pu_spawn_t -= delta
 	if _pu_spawn_t <= 0.0:
-		_pu_spawn_t = PU_SPAWN_INTERVAL
+		_pu_spawn_t = _pu_spawn_interval()
 		_spawn_powerup_wave()
 	_hud_tick(delta)
 
@@ -1065,7 +1071,7 @@ func _revive_human() -> void:
 	human.avatar.collision_mask = 0
 	human.avatar.auto_input = true
 	human.last_cell = spawn
-	_lives = LIVES_PER_ISLAND          # the ad-revive grants a fresh set of lives
+	_lives = 1                         # ad-revive grants only one life
 	_update_lives_hud()
 	_ring(_c2w(spawn.x, spawn.y, 0.0), _kid_color[human.kid])
 	if is_instance_valid(camera):
@@ -1611,7 +1617,7 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	center.add_child(panel)
 
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 10)
+	vb.add_theme_constant_override("separation", 5)
 	panel.add_child(vb)
 
 	# Headline banner sliced from VictoryDefeat.png (replaces the old text title).
@@ -1622,7 +1628,7 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	banner.texture = atlas
 	banner.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	banner.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	banner.custom_minimum_size = Vector2(440, 440.0 * atlas.region.size.y / atlas.region.size.x)
+	banner.custom_minimum_size = Vector2(360, 360.0 * atlas.region.size.y / atlas.region.size.x)
 	banner.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	vb.add_child(banner)
 
@@ -1642,7 +1648,7 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 
 	# Run modes: the score chase is the headline. Big score, best/NEW BEST, islands cleared.
 	if _mode in ["endless", "timed"]:
-		_result_label(vb, "SCORE  %s" % _comma(_endless_score), 46, Palette.WARN)
+		_result_label(vb, "SCORE  %s" % _comma(_endless_score), 40, Palette.WARN)
 		if _endless_is_best:
 			_result_label(vb, "★  NEW BEST!  ★", 28, Palette.SAFE)
 		else:
@@ -1667,7 +1673,7 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	# enough for the 720px-tall landscape screen.
 	var midrow := HBoxContainer.new()
 	midrow.alignment = BoxContainer.ALIGNMENT_CENTER
-	midrow.add_theme_constant_override("separation", 24)
+	midrow.add_theme_constant_override("separation", 14)
 	midrow.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	vb.add_child(midrow)
 
@@ -1679,12 +1685,12 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 		king.texture = king_atlas
 		king.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		king.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		king.custom_minimum_size = Vector2(210, 210.0 * SAD_KING_RECT.size.y / SAD_KING_RECT.size.x)
+		king.custom_minimum_size = Vector2(160, 160.0 * SAD_KING_RECT.size.y / SAD_KING_RECT.size.x)
 		king.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		midrow.add_child(king)
 
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 6)
+	col.add_theme_constant_override("separation", 3)
 	col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	midrow.add_child(col)
 
@@ -1696,11 +1702,11 @@ func _show_results(win: bool, reason: String, rank: int, pct: float, coins: int)
 	var total := float(GW * GH)
 	for r in standings.size():
 		var e: Dictionary = standings[r]
-		_result_label(col, "%d.   %s   %.1f%%" % [r + 1, _kid_name[e["kid"]], 100.0 * e["n"] / total], 24,
+		_result_label(col, "%d.   %s   %.1f%%" % [r + 1, _kid_name[e["kid"]], 100.0 * e["n"] / total], 20,
 			_kid_color[e["kid"]])
 
 	var coin_lbl := _result_label(vb, "+%d coins   (total %d)" % [coins, SaveManager.coins()],
-		28, Palette.WARN)
+		22, Palette.WARN)
 	coin_lbl.add_theme_constant_override("line_spacing", 12)
 
 	var btns := HBoxContainer.new()
@@ -2207,7 +2213,7 @@ func _pick_home_cells(n: int) -> Array:
 	# ── Build candidates from the real mask ───────────────────────────────────
 	# 7 cells at 0.6 wu/cell = 4.2 wu buffer. At 0.2 wu/cell, same 4.2 wu = 21 cells.
 	# This guarantees the castle and 6+ cells around it all sit on green land.
-	const MIN_INLAND := 21
+	const MIN_INLAND := 26   # HOME_R + 11: keeps home blob clearly inland; safety net handles narrow maps
 	var comp_candidates: Array = []
 	var total_eligible_land := 0
 	for comp in comps:
@@ -2261,8 +2267,8 @@ func _pick_home_cells(n: int) -> Array:
 		return all_chosen
 
 	# ── Dilation pass: make the map "larger" ──────────────────────────────────
-	# Narrow islands (Java, Sulawesi) have inland_sdf < 7 on the real mask.
-	# Grow land by DILATE_R cells → fat islands wide enough for MIN_INLAND=7 depth.
+	# Narrow islands (Java, Sulawesi) have inland_sdf < MIN_INLAND on the real mask.
+	# Grow land by DILATE_R cells → fat islands wide enough for MIN_INLAND depth.
 	# Find deep positions on the fat mask, snap each back to the nearest real land cell.
 	const DILATE_R := 4
 	var fat_mask := _dilate_land_mask(_land_mask, DILATE_R)
@@ -2288,24 +2294,32 @@ func _pick_home_cells(n: int) -> Array:
 		all_chosen.append(real_cell)
 
 	# ── Safety net: any real land cell, sorted by inland depth ────────────────
-	# Progressively relax min_sep until we have n distinct cells.
-	# The relaxed sep values still respect the HOME territory radius (HOME_R ≈ 4)
-	# so starting blobs don't immediately overlap.
+	# Two tiers: first try cells where inland_sdf >= HOME_R (home blob stays on land);
+	# only fall back to shallower cells if the map is genuinely too narrow to satisfy
+	# that constraint. Progressively relax min_sep until we have n distinct cells.
 	if all_chosen.size() < n:
-		var any_land: Array = []
+		var deep_land: Array = []   # inland_sdf >= HOME_R: blob won't spill into ocean
+		var any_land:  Array = []   # last resort — map too narrow for HOME_R buffer
 		for idx in GW * GH:
-			if mainland_set[idx] == 1:   # mainland only — islands render but never host a castle
-				any_land.append([_inland_sdf[idx], idx])
+			if mainland_set[idx] == 0:
+				continue
+			var entry := [_inland_sdf[idx], idx]
+			if _inland_sdf[idx] >= HOME_R:
+				deep_land.append(entry)
+			any_land.append(entry)
+		deep_land.sort_custom(func(a, b): return a[0] > b[0])
 		any_land.sort_custom(func(a, b): return a[0] > b[0])
 		for snet_sep in [min_sep, maxi(min_sep / 2, 2 * HOME_R + 2), 2 * HOME_R + 2, 2 * HOME_R]:
-			for entry in any_land:
+			for pool in [deep_land, any_land]:
+				for entry in pool:
+					if all_chosen.size() >= n: break
+					var cell := Vector2i(entry[1] % GW, entry[1] / GW)
+					var ok := true
+					for h: Vector2i in all_chosen:
+						var dx := cell.x - h.x; var dy := cell.y - h.y
+						if dx * dx + dy * dy < snet_sep * snet_sep: ok = false; break
+					if ok: all_chosen.append(cell)
 				if all_chosen.size() >= n: break
-				var cell := Vector2i(entry[1] % GW, entry[1] / GW)
-				var ok := true
-				for h: Vector2i in all_chosen:
-					var dx := cell.x - h.x; var dy := cell.y - h.y
-					if dx * dx + dy * dy < snet_sep * snet_sep: ok = false; break
-				if ok: all_chosen.append(cell)
 			if all_chosen.size() >= n: break
 
 	print("[HOME] placed %d/%d kingdoms (min_sep=%d) — cells: %s" % [all_chosen.size(), n, min_sep, str(all_chosen)])
@@ -2734,6 +2748,52 @@ func _build_hud(ui: CanvasLayer) -> void:
 	gear.pressed.connect(_show_pause_panel)
 	_hover_lift(gear)
 	ui.add_child(gear)
+
+	# ── bottom-centre: active powerup timer pill ──
+	const PU_PILL_W := 220.0
+	const PU_PILL_H := 52.0
+	_pu_hud_panel = _hud_panel(Vector2.ZERO, Vector2(PU_PILL_W, PU_PILL_H), 16)
+	ui.add_child(_pu_hud_panel)
+	_pu_hud_panel.set_anchor(SIDE_LEFT, 0.5)
+	_pu_hud_panel.set_anchor(SIDE_RIGHT, 0.5)
+	_pu_hud_panel.set_anchor(SIDE_BOTTOM, 1.0)
+	_pu_hud_panel.set_anchor(SIDE_TOP, 1.0)
+	_pu_hud_panel.set_offset(SIDE_LEFT, -PU_PILL_W * 0.5)
+	_pu_hud_panel.set_offset(SIDE_RIGHT, PU_PILL_W * 0.5)
+	_pu_hud_panel.set_offset(SIDE_TOP, -PU_PILL_H - 18)
+	_pu_hud_panel.set_offset(SIDE_BOTTOM, -18)
+	var pu_vb := VBoxContainer.new()
+	pu_vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pu_vb.add_theme_constant_override("separation", 4)
+	_pu_hud_panel.add_child(pu_vb)
+	_pu_hud_label = _hud_text("", 17, Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, true)
+	_pu_hud_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_pu_hud_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pu_vb.add_child(_pu_hud_label)
+	# Progress bar: dark track + coloured fill
+	var bar_wrap := Control.new()
+	bar_wrap.custom_minimum_size = Vector2(0, 8)
+	bar_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pu_vb.add_child(bar_wrap)
+	_pu_hud_bar_bg = ColorRect.new()
+	_pu_hud_bar_bg.color = Color(1, 1, 1, 0.15)
+	_pu_hud_bar_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_pu_hud_bar_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar_wrap.add_child(_pu_hud_bar_bg)
+	_pu_hud_bar = ColorRect.new()
+	_pu_hud_bar.color = Color.WHITE
+	_pu_hud_bar.set_anchor(SIDE_LEFT, 0.0)
+	_pu_hud_bar.set_anchor(SIDE_RIGHT, 1.0)
+	_pu_hud_bar.set_anchor(SIDE_TOP, 0.0)
+	_pu_hud_bar.set_anchor(SIDE_BOTTOM, 1.0)
+	_pu_hud_bar.set_offset(SIDE_LEFT, 0)
+	_pu_hud_bar.set_offset(SIDE_RIGHT, 0)
+	_pu_hud_bar.set_offset(SIDE_TOP, 0)
+	_pu_hud_bar.set_offset(SIDE_BOTTOM, 0)
+	_pu_hud_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar_wrap.add_child(_pu_hud_bar)
+	_pu_hud_panel.visible = false
 
 	# ── right: live leaderboard (9-slice signboard) ──
 	# The frame is a NinePatchRect: the banner + gold borders stay fixed while only the
@@ -3426,6 +3486,26 @@ func _hud_tick(delta: float) -> void:
 		_coins += gained
 		_coin_accum -= float(gained)
 
+	# Powerup timer pill — updated every frame so the bar drains smoothly.
+	if _pu_hud_panel != null and is_instance_valid(_pu_hud_panel):
+		var player = _rulers[0]
+		var pt: float = player.powerup_t
+		if pt > 0.0:
+			_pu_hud_panel.visible = true
+			var dur := 1.0
+			match player.powerup_type:
+				PU_SPEED:  dur = PU_SPEED_DUR;  _pu_hud_label.text = "SPEED BURST"
+				PU_GHOST:  dur = PU_GHOST_DUR;  _pu_hud_label.text = "GHOST TRAIL"
+				PU_FREEZE: dur = PU_FREEZE_DUR; _pu_hud_label.text = "ENEMIES FROZEN"
+				_:          _pu_hud_label.text = player.powerup_type.to_upper()
+			var frac := clampf(pt / dur, 0.0, 1.0)
+			_pu_hud_bar.anchor_right = frac
+			var col := _pu_color(player.powerup_type)
+			_pu_hud_bar.color = col
+			_pu_hud_label.add_theme_color_override("font_color", col.lightened(0.3))
+		else:
+			_pu_hud_panel.visible = false
+
 	_hud_t -= delta
 	if _hud_t > 0.0:
 		return
@@ -3561,18 +3641,51 @@ func _pu_is_land(cx: int, cy: int) -> bool:
 		return _land_mask[cy * GW + cx] == 1
 	return cx >= 0 and cx < GW and cy >= 0 and cy < GH
 
+func _pu_wave_size() -> int:
+	# Ramps from PU_PER_WAVE_BASE up to 7 over 3 minutes, plus +1 per campaign stage.
+	var time_bonus: int = int(_elapsed / 60.0)          # +1 per minute elapsed
+	var stage_bonus: int = _stage / 2                   # +1 every 2 campaign stages
+	return mini(PU_PER_WAVE_BASE + time_bonus + stage_bonus, 7)
+
+func _pu_spawn_interval() -> float:
+	# Shrinks from base down to 12s over 3 minutes, faster at higher stages.
+	var t_factor := clampf(_elapsed / 180.0, 0.0, 1.0)  # 0..1 over first 3 min
+	var s_factor := clampf(_stage * 0.05, 0.0, 0.35)    # up to 35% faster at high stage
+	return PU_SPAWN_INTERVAL_BASE * (1.0 - t_factor * 0.5 - s_factor)  # 25s → ~12s
+
 func _spawn_powerup_wave() -> void:
 	var types := [PU_SPEED, PU_GHOST, PU_BOMB, PU_CLEAR, PU_FREEZE, PU_MAGNET]
+	types.shuffle()
+	var wave_size := _pu_wave_size()
 	var placed := 0
 	var attempts := 0
-	while placed < PU_PER_WAVE and attempts < 400:
+	while placed < wave_size and attempts < 800:
 		attempts += 1
-		var cx := randi_range(4, GW - 5)
-		var cy := randi_range(4, GH - 5)
+		var cx := randi_range(6, GW - 7)
+		var cy := randi_range(6, GH - 7)
 		var cell := Vector2i(cx, cy)
 		if _powerup_cells.has(cell):
 			continue
 		if not _pu_is_land(cx, cy):
+			continue
+		# Strongly prefer neutral land — occupied cells rarely reachable mid-sortie.
+		if grid.get_owner(cx, cy) != grid.NEUTRAL and randf() < 0.85:
+			continue
+		# Keep clear of home castles so AIs and human aren't handed freebies at spawn.
+		var too_close := false
+		for a in _rulers:
+			if not a.eliminated and absi(cx - a.home.x) < 10 and absi(cy - a.home.y) < 10:
+				too_close = true
+				break
+		if too_close:
+			continue
+		# Space pickups at least 10 cells apart from each other.
+		var near_other := false
+		for pc in _powerup_cells.keys():
+			if absi(cx - pc.x) < 10 and absi(cy - pc.y) < 10:
+				near_other = true
+				break
+		if near_other:
 			continue
 		var t: String = types[placed % types.size()]
 		_powerup_cells[cell] = t
@@ -3583,7 +3696,7 @@ func _spawn_powerup_wave() -> void:
 
 func _pu_color(type: String) -> Color:
 	match type:
-		PU_SPEED:  return Color(0.01, 0.40, 0.04)
+		PU_SPEED:  return Color(0.1,  1.0,  0.1)   # bright lime — was near-black
 		PU_GHOST:  return Color(1.0,  0.85, 0.0)
 		PU_BOMB:   return Color(1.0,  0.08, 0.05)
 		PU_CLEAR:  return Color(0.85, 0.95, 1.0)
@@ -3614,10 +3727,10 @@ func _make_pu_node(type: String, cx: int, cy: int) -> Node3D:
 	# ── ground glow disc (shared mesh + cached material per type) ────────────
 	if _pu_disc_mesh == null:
 		_pu_disc_mesh = CylinderMesh.new()
-		_pu_disc_mesh.top_radius      = 0.50
-		_pu_disc_mesh.bottom_radius   = 0.50
-		_pu_disc_mesh.height          = 0.02
-		_pu_disc_mesh.radial_segments = 16
+		_pu_disc_mesh.top_radius      = 0.90
+		_pu_disc_mesh.bottom_radius   = 0.90
+		_pu_disc_mesh.height          = 0.03
+		_pu_disc_mesh.radial_segments = 20
 	var disc := MeshInstance3D.new()
 	disc.mesh = _pu_disc_mesh
 	disc.set_surface_override_material(0, _pu_disc_mat(type))
@@ -3626,8 +3739,34 @@ func _make_pu_node(type: String, cx: int, cy: int) -> Node3D:
 
 	var pulse := disc.create_tween()
 	pulse.set_loops()
-	pulse.tween_property(disc, "scale", Vector3(1.25, 1.0, 1.25), 0.55).set_trans(Tween.TRANS_SINE)
-	pulse.tween_property(disc, "scale", Vector3(0.85, 1.0, 0.85), 0.55).set_trans(Tween.TRANS_SINE)
+	pulse.tween_property(disc, "scale", Vector3(1.3, 1.0, 1.3), 0.55).set_trans(Tween.TRANS_SINE)
+	pulse.tween_property(disc, "scale", Vector3(0.8, 1.0, 0.8), 0.55).set_trans(Tween.TRANS_SINE)
+
+	# ── vertical beacon beam ─────────────────────────────────────────────────
+	var beam_mesh := CylinderMesh.new()
+	beam_mesh.top_radius      = 0.0
+	beam_mesh.bottom_radius   = 0.28
+	beam_mesh.height          = 4.5
+	beam_mesh.radial_segments = 8
+	var beam := MeshInstance3D.new()
+	beam.mesh = beam_mesh
+	var beam_mat := StandardMaterial3D.new()
+	beam_mat.shading_mode             = BaseMaterial3D.SHADING_MODE_UNSHADED
+	beam_mat.albedo_color             = Color(col.r, col.g, col.b, 0.55)
+	beam_mat.emission_enabled         = true
+	beam_mat.emission                 = col
+	beam_mat.emission_energy_multiplier = 2.5
+	beam_mat.transparency             = BaseMaterial3D.TRANSPARENCY_ALPHA
+	beam_mat.blend_mode               = BaseMaterial3D.BLEND_MODE_ADD
+	beam_mat.cull_mode                = BaseMaterial3D.CULL_DISABLED
+	beam.set_surface_override_material(0, beam_mat)
+	beam.position.y = 2.25 - (CLAIMED_LIFT + 0.44)   # base sits at ground, tip points up
+	root.add_child(beam)
+
+	var beam_pulse := beam.create_tween()
+	beam_pulse.set_loops()
+	beam_pulse.tween_property(beam_mat, "emission_energy_multiplier", 1.2, 0.7).set_trans(Tween.TRANS_SINE)
+	beam_pulse.tween_property(beam_mat, "emission_energy_multiplier", 3.2, 0.7).set_trans(Tween.TRANS_SINE)
 
 	# ── 3D model ─────────────────────────────────────────────────────────────
 	var scene: PackedScene = PU_SCENES.get(type)
@@ -3640,7 +3779,7 @@ func _make_pu_node(type: String, cx: int, cy: int) -> Node3D:
 		sph.radius = 0.36; sph.height = 0.72
 		fallback.mesh = sph
 		model = fallback
-	model.scale = Vector3.ONE * 3.0
+	model.scale = Vector3.ONE * 3.8
 	root.add_child(model)
 
 	# ── beacon light ─────────────────────────────────────────────────────────
@@ -3681,6 +3820,10 @@ func _check_powerup_pickup(a, cell: Vector2i) -> void:
 			return   # one pickup per step
 
 func _apply_powerup(a, type: String) -> void:
+	# Always expire any active timed powerup before applying a new one so
+	# side-effects (speed boost, ghost flag) are properly cleaned up.
+	if a.powerup_t > 0.0:
+		_expire_powerup(a)
 	match type:
 		PU_SPEED:
 			if a.base_speed == 0.0:
@@ -3703,6 +3846,9 @@ func _apply_powerup(a, type: String) -> void:
 			_freeze_by = a.kid
 			a.powerup_type = PU_FREEZE
 			a.powerup_t    = PU_FREEZE_DUR
+			for r in _rulers:
+				if r.alive and r.kid != a.kid:
+					r.avatar.freeze_mult = 0.4
 		PU_MAGNET:
 			_apply_magnet(a)
 			return
@@ -3771,6 +3917,9 @@ func _expire_powerup(a) -> void:
 		PU_FREEZE:
 			_freeze_t  = 0.0
 			_freeze_by = 0
+			for r in _rulers:
+				if r.alive:
+					r.avatar.freeze_mult = 1.0
 	a.powerup_type = ""
 
 func _dbg_tick(delta: float) -> void:

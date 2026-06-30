@@ -43,9 +43,26 @@ void fragment() {
 }
 """
 
+# Ghost trail: wireframe lines drawn additive so the trail is visible but clearly
+# "intangible" — the kingdom colour glows without a solid fill.
+const GHOST_TRAIL_SHADER := """
+shader_type spatial;
+render_mode wireframe, cull_disabled, blend_add, unshaded;
+vec3 to_lin(vec3 c){
+	return mix(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, step(c, vec3(0.04045)));
+}
+void fragment() {
+	vec3 lin = to_lin(COLOR.rgb);
+	ALBEDO = vec3(0.0);
+	EMISSION = lin * 5.0;
+	ALPHA = 1.0;
+}
+"""
+
 var _neutral: MultiMeshInstance3D
 var _terr: MultiMeshInstance3D
 var _trail: MultiMeshInstance3D
+var _trail_ghost: MultiMeshInstance3D
 var _border: MultiMeshInstance3D
 var _border_cells := {}           # cell index -> wall Color, only for owned border cells
 
@@ -63,6 +80,8 @@ func setup(p_grid, p_cell: float, p_colors: Dictionary) -> void:
 	add_child(_terr)
 	_trail = _make_trail_batch()
 	add_child(_trail)
+	_trail_ghost = _make_ghost_trail_batch()
+	add_child(_trail_ghost)
 	_border = _make_wall_batch()
 	add_child(_border)
 
@@ -74,6 +93,24 @@ func _make_trail_batch() -> MultiMeshInstance3D:
 	inst.free()
 	var sh := Shader.new()
 	sh.code = TRAIL_SHADER
+	var sm := ShaderMaterial.new()
+	sm.shader = sh
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = mesh
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.material_override = sm
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mmi
+
+func _make_ghost_trail_batch() -> MultiMeshInstance3D:
+	var inst := (load("res://assets/models/trail.glb") as PackedScene).instantiate()
+	var mesh := _extract_mesh(inst)
+	inst.free()
+	var sh := Shader.new()
+	sh.code = GHOST_TRAIL_SHADER
 	var sm := ShaderMaterial.new()
 	sm.shader = sh
 	var mm := MultiMesh.new()
@@ -279,21 +316,35 @@ func flash_cells(min_c: Vector2i, max_c: Vector2i, color: Color) -> void:
 	tw.tween_callback(mi.queue_free)
 
 # Rebuild the live-trail batch (every frame — trails are tens of cells at most).
-func update_trails(ids: Array) -> void:
-	# Runs every physics frame — no per-frame array allocs and no per-instance Basis
-	# rebuild (the footprint is constant, cached as _trail_basis in setup()).
-	var mm := _trail.multimesh
+# ghost_ids: Dictionary{kid -> true} for rulers currently under ghost power-up;
+# their trail cells go into the wireframe ghost batch instead of the solid one.
+func update_trails(ids: Array, ghost_ids: Dictionary = {}) -> void:
+	var mm   := _trail.multimesh
+	var mm_g := _trail_ghost.multimesh
 	var total := 0
+	var ghost_total := 0
 	for id in ids:
-		total += grid.trail_cells(id).size()
-	mm.instance_count = total
+		var n: int = grid.trail_cells(id).size()
+		if ghost_ids.has(id):
+			ghost_total += n
+		else:
+			total += n
+	mm.instance_count   = total
+	mm_g.instance_count = ghost_total
 	var k := 0
+	var kg := 0
 	for id in ids:
-		var col: Color = colors.get(id, Color.WHITE)   # raw kingdom colour; shader sRGB->linear
+		var col: Color = colors.get(id, Color.WHITE)
+		var is_ghost: bool = ghost_ids.has(id)
 		for c in grid.trail_cells(id):
 			var cx: int = c % grid.w
 			var cy: int = c / grid.w
-			# beveled unit cube scaled to the slim trail footprint + short height
-			mm.set_instance_transform(k, Transform3D(_trail_basis, _c2w(cx, cy, TRAIL_H * 0.5)))
-			mm.set_instance_color(k, col)
-			k += 1
+			var xform := Transform3D(_trail_basis, _c2w(cx, cy, TRAIL_H * 0.5))
+			if is_ghost:
+				mm_g.set_instance_transform(kg, xform)
+				mm_g.set_instance_color(kg, col)
+				kg += 1
+			else:
+				mm.set_instance_transform(k, xform)
+				mm.set_instance_color(k, col)
+				k += 1

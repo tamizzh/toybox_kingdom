@@ -26,6 +26,7 @@ var _session_num := 0
 var _seq := 0
 var _session_start_ms := 0
 var _enabled := true                 # master kill-switch (e.g. dev opt-out)
+var _dbg    := false                 # set true to print events to console
 
 func _ready() -> void:
 	if OS.get_environment("TBK_NO_ANALYTICS") == "1":
@@ -83,7 +84,7 @@ func event(name: String, params: Dictionary = {}) -> void:
 		"params":  params,
 	}
 	_log_local(e)
-	if OS.is_debug_build():
+	if _dbg and OS.is_debug_build():
 		print("[analytics] %s %s" % [name, JSON.stringify(params)])
 
 	# Route to GameAnalytics as a design event: "name:key1=val1:key2=val2"

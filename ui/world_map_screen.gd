@@ -1,10 +1,11 @@
 extends Control
 
 # World-conquest progress overlay: the 20 real-world countries you fight across,
-# shown as their actual map SILHOUETTES in play order. Conquered countries glow
-# green with a check; the current frontier is gold; later ones are dim + locked.
-# Each shape is rasterised from the country's land mask. Added as a child of the
-# main menu, frees itself on Close (mirrors campaign_screen).
+# shown as island screenshot previews in play order. Conquered countries glow
+# green with a check; the current frontier is gold; later ones are dimmed + locked.
+# Screenshots are pre-generated assets (assets/islands/island_N.png) produced by
+# running tools/shot_islands.tscn once in the editor.
+# Added as a child of the main menu, frees itself on Close (mirrors campaign_screen).
 
 const CountryMasks := preload("res://toybox_kingdoms/data/country_masks.gd")
 
@@ -61,7 +62,7 @@ func _ready() -> void:
 	prog.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(prog)
 
-	# Four-column scrolling grid of country silhouettes.
+	# Four-column scrolling grid of island screenshot previews.
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(760, 462)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -83,52 +84,59 @@ func _ready() -> void:
 		queue_free()))
 
 
-# One country tile: the map silhouette tinted by status, a corner order-badge, and a
-# status mark (✓ conquered / ▶ current / 🔒 locked).
-func _country_tile(idx: int, entry: Dictionary, conquered: int, current: int) -> Control:
+# One country tile: island screenshot preview tinted by status, plus a number badge
+# and status mark (✓ conquered / ▶ current / 🔒 locked).
+func _country_tile(idx: int, _entry: Dictionary, conquered: int, current: int) -> Control:
 	var is_conquered := idx < conquered
 	var is_current := idx == current and conquered < CountryMasks.COUNTRIES.size()
 	var is_locked := idx > current
 
 	var accent := Palette.NEUTRAL
-	var shape_col := Color(0.45, 0.5, 0.58)   # dim slate for locked silhouettes
 	if is_current:
 		accent = Palette.WARN
-		shape_col = Palette.WARN
 	elif is_conquered:
 		accent = Palette.SAFE
-		shape_col = Palette.SAFE
 
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel",
 		_panel(Color(accent, 0.18 if is_current else 0.08), Color(accent, 0.9 if is_current else 0.4)))
 	card.custom_minimum_size = Vector2(180, 150)
+	card.clip_children = CanvasItem.CLIP_CHILDREN_ONLY
 
-	# A free-form layer so the badge + status mark can overlap the shape.
+	# A free-form layer so the badge + status mark can overlap the screenshot.
 	var layer := Control.new()
 	layer.custom_minimum_size = Vector2(180, 150)
 	card.add_child(layer)
 
-	# Silhouette — fills the tile, centred, aspect-preserved.
-	var shape := TextureRect.new()
-	shape.texture = _shape_texture(String(entry.get("mask_hex", "")), shape_col)
-	shape.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	shape.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	# Linear filter melts the chunky mask cells into smooth toy-paper edges on upscale.
-	shape.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
-	shape.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	shape.offset_left = 8; shape.offset_top = 22
-	shape.offset_right = -8; shape.offset_bottom = -8
-	shape.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(shape)
+	# Island screenshot — fills the tile, cover-cropped.
+	var shot := TextureRect.new()
+	shot.texture = _island_texture(idx)
+	shot.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	shot.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	shot.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	shot.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	shot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(shot)
+
+	# Status tint overlay: dim for locked, subtle tint for conquered/current.
+	var tint := ColorRect.new()
+	if is_locked:
+		tint.color = Color(0.04, 0.06, 0.12, 0.68)
+	elif is_conquered:
+		tint.color = Color(Palette.SAFE, 0.18)
+	else:
+		tint.color = Color(0, 0, 0, 0)
+	tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(tint)
 
 	# Order badge, top-left.
 	var badge := Label.new()
 	badge.text = "%d" % (idx + 1)
 	badge.add_theme_font_size_override("font_size", 20)
-	badge.add_theme_color_override("font_color", Color.WHITE if not is_locked else Color(1, 1, 1, 0.45))
-	badge.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
-	badge.add_theme_constant_override("outline_size", 5)
+	badge.add_theme_color_override("font_color", Color.WHITE if not is_locked else Color(1, 1, 1, 0.55))
+	badge.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	badge.add_theme_constant_override("outline_size", 6)
 	badge.position = Vector2(8, 2)
 	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(badge)
@@ -140,68 +148,23 @@ func _country_tile(idx: int, entry: Dictionary, conquered: int, current: int) ->
 	elif is_conquered:
 		mark.text = "✓"; mark.add_theme_color_override("font_color", Palette.SAFE)
 	else:
-		mark.text = "🔒"; mark.add_theme_color_override("font_color", Palette.NEUTRAL)
+		mark.text = "🔒"; mark.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
 	mark.add_theme_font_size_override("font_size", 22)
-	mark.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
-	mark.add_theme_constant_override("outline_size", 5)
+	mark.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	mark.add_theme_constant_override("outline_size", 6)
 	mark.position = Vector2(146, 2)
 	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(mark)
 	return card
 
 
-# Rasterise a country's land mask (cropped to its bounding box) into a toy-paper
-# cut-out: a soft drop shadow, a darker edge stroke, then the tinted fill. Padded
-# so the shadow/stroke have room; ocean stays transparent.
-func _shape_texture(mask_hex: String, col: Color) -> ImageTexture:
-	if mask_hex == "":
+# Load the pre-rendered island thumbnail (generated by tools/shot_islands.tscn).
+# Returns null if the asset hasn't been generated yet (tile shows a plain colour).
+func _island_texture(idx: int) -> Texture2D:
+	var path := "res://assets/islands/island_%d.png" % idx
+	if not ResourceLoader.exists(path):
 		return null
-	var mask := CountryMasks.decode_mask(mask_hex)
-	var bb := CountryMasks.mask_bbox(mask)
-	var gw: int = CountryMasks.GRID_W
-	var mw: int = bb["x1"] - bb["x0"] + 1
-	var mh: int = bb["y1"] - bb["y0"] + 1
-	if mw <= 0 or mh <= 0:
-		return null
-	var pad := 4          # border room for the stroke + shadow
-	var sh := 3           # drop-shadow offset (down-right)
-	var w := mw + pad * 2
-	var h := mh + pad * 2
-	# Copy the cropped land into a padded local grid for O(1) neighbour lookups.
-	var land := PackedByteArray(); land.resize(w * h)
-	for y in mh:
-		for x in mw:
-			if mask[(bb["y0"] + y) * gw + (bb["x0"] + x)] == 1:
-				land[(y + pad) * w + (x + pad)] = 1
-	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
-	img.fill(Color(0, 0, 0, 0))
-	var shadow := Color(0, 0, 0, 0.30)
-	var edge := col.darkened(0.42)
-	# 1) drop shadow — the silhouette shifted down-right.
-	for y in h:
-		for x in w:
-			var sx := x - sh; var sy := y - sh
-			if sx >= 0 and sy >= 0 and land[sy * w + sx] == 1:
-				img.set_pixel(x, y, shadow)
-	# 2) edge stroke — empty cells touching land (8-neighbour) become the paper rim.
-	for y in h:
-		for x in w:
-			if land[y * w + x] == 1:
-				continue
-			var near := false
-			for dy in range(-1, 2):
-				for dx in range(-1, 2):
-					var nx := x + dx; var ny := y + dy
-					if nx >= 0 and nx < w and ny >= 0 and ny < h and land[ny * w + nx] == 1:
-						near = true
-			if near:
-				img.set_pixel(x, y, edge)
-	# 3) fill — the land itself, on top.
-	for y in h:
-		for x in w:
-			if land[y * w + x] == 1:
-				img.set_pixel(x, y, col)
-	return ImageTexture.create_from_image(img)
+	return load(path) as Texture2D
 
 
 func _btn(text: String, color: Color, cb: Callable, width: float = 150.0) -> Button:

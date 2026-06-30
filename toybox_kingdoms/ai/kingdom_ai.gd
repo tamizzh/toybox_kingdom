@@ -28,34 +28,95 @@ var _depth_hi := 14.0
 var _width := 6.0
 var _danger := 5.0      # flee rivals within this world distance while exposed
 var _aggr := 0.30       # chance a planned sortie is a CONQUER instead of EXPAND
+var _established_min := 120  # territory required before attempting a conquest
+var _castle_guard := 0.0     # >0: retreat when any rival enters this radius of our home
+var speed_mult := 1.0        # applied to AI_SPEED in kingdom_match; >1 = faster bot
 
-func setup(diff: int, seed_val: int) -> void:
+# Stuck detection: if position barely changes over 60 decide() calls (~4 s), force replan.
+var _stuck_calls := 0
+var _stuck_pos := Vector3.ZERO
+
+# diff 0/1/2 sets the personality base; level (campaign stage 0-9 or endless island 0-19)
+# applies a continuous multiplier so bots genuinely escalate each level — not just at tier
+# boundaries. At level 9 even a "timid" bot performs like a mid-level "normal" bot would,
+# and a "bold" bot becomes very aggressive (high aggr, small danger radius, deep bites).
+func setup(diff: int, seed_val: int, level: int = 0) -> void:
 	difficulty = diff
 	rng.seed = seed_val
 	heading = rng.randf() * TAU
 	match diff:
-		0:  # timid — small bites, spooks easily, rarely attacks
-			_depth_lo = 5.0; _depth_hi = 9.0;  _width = 5.0; _danger = 7.0; _aggr = 0.15
-		2:  # bold — big greedy bites, hard to scare, presses the attack
-			_depth_lo = 10.0; _depth_hi = 18.0; _width = 7.0; _danger = 3.5; _aggr = 0.55
-		_:  # normal
-			_depth_lo = 8.0; _depth_hi = 14.0; _width = 6.0; _danger = 5.0; _aggr = 0.32
+		0:  # timid — was cautious; now plays like old "normal"
+			_depth_lo = 9.0;  _depth_hi = 15.0; _width = 6.0; _danger = 5.0; _aggr = 0.32
+		2:  # bold — very greedy, almost fearless, presses hard
+			_depth_lo = 16.0; _depth_hi = 28.0; _width = 11.0; _danger = 1.8; _aggr = 0.82
+		_:  # normal — plays like old "bold"
+			_depth_lo = 13.0; _depth_hi = 22.0; _width = 9.0;  _danger = 3.0; _aggr = 0.58
+	# Continuous level scaling: s goes 0→1 over levels 0→9. Endless levels 0-19 are clamped.
+	var s: float = clampf(float(level) / 9.0, 0.0, 1.0)
+	_aggr            = minf(_aggr + s * 0.25, 0.92)
+	_danger          = maxf(_danger - s * 2.5, 1.0)
+	_depth_lo       += s * 5.0
+	_depth_hi       += s * 8.0
+	_width           = minf(_width + s * 3.0, 13.0)
+	_established_min = int(120.0 - s * 80.0)  # floor = 40 territory
+	_castle_guard    = s * 10.0                # high-level bots aggressively guard home
+	speed_mult       = 1.0 + s * 0.30         # up to 30% faster at max level
 
 func reset() -> void:
 	_wps.clear()
 	_wi = 0
 	_attacking = false
+	_stuck_calls = 0
 
 # Desired move direction in XZ (as Vector2); ZERO = idle.
 func decide(agent, m) -> Vector2:
 	var pos: Vector3 = agent.avatar.global_position
 
+	# Stuck detector: every 60 calls (~4 s) check if we've moved at least 2 units.
+	# If not, the bot is trapped in a degenerate loop — force a fresh plan.
+	_stuck_calls += 1
+	if _stuck_calls >= 60:
+		if pos.distance_to(_stuck_pos) < 2.0:
+			_wps.clear()
+			_wi = 0
+			_attacking = false
+			heading += PI * 0.75  # jump to a very different direction
+		_stuck_calls = 0
+		_stuck_pos = pos
+
 	# Exposed + threatened -> run home to bank what we have. When COMMITTED to a
 	# conquest we tolerate much closer rivals (the target ruler is right there) so
 	# the attack can actually close instead of aborting the moment they're nearby.
 	var flee_at: float = _danger * (0.35 if _attacking else 1.0)
-	if m.grid.trail_length(agent.kid) > 0 and m.nearest_enemy_dist_sq(agent) < flee_at * flee_at:
-		return _steer(pos, m._c2w(agent.home.x, agent.home.y, 0.0))
+	var trail_len: int = m.grid.trail_length(agent.kid)
+	var home_w: Vector3 = m._c2w(agent.home.x, agent.home.y, 0.0)
+	if trail_len > 0 and m.nearest_enemy_dist_sq(agent) < flee_at * flee_at:
+		return _steer(pos, home_w)
+	# Castle defense: at higher levels, if ANY rival enters our home zone while we're
+	# exposed, abort the sortie and rush back to protect the castle.
+	if _castle_guard > 0.0 and trail_len > 0 and not _attacking:
+		for o in m._rulers:
+			if o == agent or o.eliminated or not o.alive:
+				continue
+			var op: Vector3 = o.avatar.global_position
+			if Vector2(op.x - home_w.x, op.z - home_w.z).length_squared() < _castle_guard * _castle_guard:
+				_wps.clear()
+				_wi = 0
+				return _steer(pos, home_w)
+
+	# Powerup opportunism: divert toward a nearby pickup when the trail is short
+	# (safe to detour) and we're not mid-conquest. Difficulty scales detour radius.
+	if not _attacking and trail_len < 6 and m._powerup_cells.size() > 0:
+		var best_pos := Vector3.ZERO
+		var best_d := _depth_hi * 0.9   # only grab what's roughly "on the way"
+		for pc in m._powerup_cells.keys():
+			var pw: Vector3 = m._c2w(pc.x, pc.y, 0.0)
+			var d := Vector2(pw.x - pos.x, pw.z - pos.z).length()
+			if d < best_d:
+				best_d = d
+				best_pos = pw
+		if best_pos != Vector3.ZERO:
+			return _steer(pos, best_pos)
 
 	if _wi >= _wps.size():
 		_plan(agent, m)
@@ -77,7 +138,8 @@ func _steer(pos: Vector3, tgt: Vector3) -> Vector2:
 func _plan(agent, m) -> void:
 	_attacking = false
 	# Only attack once we have a real base to anchor the loop and respawn from.
-	var established: bool = m.grid.territory_count(agent.kid) > 120
+	# _established_min shrinks with level so high-level bots press the attack sooner.
+	var established: bool = m.grid.territory_count(agent.kid) > _established_min
 	if established and rng.randf() < _aggr:
 		var target = _pick_target(agent, m)
 		if target != null:
@@ -86,7 +148,9 @@ func _plan(agent, m) -> void:
 	_plan_expand(agent, m)
 
 # Lay out the next rectangular EXPAND sortie off the home blob's edge.
-func _plan_expand(agent, m) -> void:
+# Retries up to 4 times with rotated headings if world_clamp collapses all
+# waypoints near home (narrow island peninsula — the real stuck cause).
+func _plan_expand(agent, m, _retry: int = 0) -> void:
 	var H: Vector3 = m._c2w(agent.home.x, agent.home.y, 0.0)
 
 	# Rotate heading, then bias it toward the land interior so the AI doesn't
@@ -110,6 +174,17 @@ func _plan_expand(agent, m) -> void:
 	var c1: Vector3 = m.world_clamp(H + dW * depth)
 	var c2: Vector3 = m.world_clamp(c1 + pW * _width)
 	var c3: Vector3 = m.world_clamp(H + pW * _width)
+
+	# Guard: if the farthest waypoint is still very close to home, the island is
+	# too narrow in this direction. Rotate 90° and retry (up to 4 times).
+	var max_d := maxf(Vector2(c1.x - H.x, c1.z - H.z).length(),
+		maxf(Vector2(c2.x - H.x, c2.z - H.z).length(),
+			 Vector2(c3.x - H.x, c3.z - H.z).length()))
+	if max_d < 2.5 and _retry < 4:
+		heading += PI * 0.5
+		_plan_expand(agent, m, _retry + 1)
+		return
+
 	_wps = [c1, c2, c3, H]
 	_wi = 0
 
@@ -162,9 +237,11 @@ func _pick_target(agent, m):
 			if d < best_any_d:
 				best_any_d = d
 				best_any = {"pos": wpos, "cell": cell, "tier": c_tier}
-			# prefer takeable castles; score = distance, lighter for weaker keeps
+			# prefer takeable castles; score = distance, lighter for weaker keeps.
+			# Also discount rivals currently mid-trail (exposed = easier to kill).
 			if my_tier >= c_tier:
-				var score := d + float(c_tier) * 2.0
+				var trail_bonus: float = float(m.grid.trail_length(o.kid)) * 0.8
+				var score := d + float(c_tier) * 2.0 - trail_bonus
 				if score < best_score:
 					best_score = score
 					best = {"pos": wpos, "cell": cell, "tier": c_tier}

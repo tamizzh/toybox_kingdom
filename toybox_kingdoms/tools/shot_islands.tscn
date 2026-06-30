@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://shot_islands"]
+
+[ext_resource type="Script" path="res://toybox_kingdoms/tools/shot_islands.gd" id="1_islands"]
+
+[node name="ShotIslands" type="Node"]
+script = ExtResource("1_islands")

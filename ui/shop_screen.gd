@@ -22,6 +22,11 @@ const COIN_PACKS := [
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Controls inside a CanvasLayer don't get their size computed until the next
+	# layout pass.  Force it now so _rebuild()'s anchor math (panel at 0.5±380)
+	# resolves against the real viewport size, not (0, 0).
+	size = get_viewport_rect().size
+	mouse_filter = Control.MOUSE_FILTER_STOP
 	var dim := ColorRect.new()
 	dim.color = Color(0, 0, 0, 0.68)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
